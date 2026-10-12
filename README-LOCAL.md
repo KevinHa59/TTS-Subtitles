@@ -1,6 +1,6 @@
 # Hướng Dẫn Cài Đặt & Sử Dụng Hoài My Piper TTS Trên Windows
 
-Ứng dụng chuyển đổi phụ đề SRT/TXT thành Audio TTS tiếng Việt chất lượng cao với giọng đọc **Hoài My** (`hub:hoaimy-vietnamese-vi-medium-ljkjhi`), tự động điều chỉnh tốc độ đọc theo timestamp, ghép nối timeline âm thanh và dọn dẹp bộ nhớ tạm.
+Ứng dụng chuyển đổi phụ đề SRT/TXT thành Audio TTS tiếng Việt chất lượng cao với giọng đọc **Hoài My** (`hub:hoaimy-vietnamese-vi-medium-ljkjhi`), tự động điều chỉnh tốc độ đọc theo timestamp, ghép nối timeline âm thanh, giữ lại audio từng câu và dọn dữ liệu khi người dùng yêu cầu.
 
 ---
 
@@ -60,10 +60,9 @@ Bạn **không cần** mở VS Code, không cần gõ lệnh dòng lệnh phức
 4. **Ghép Timeline (Master Assembly)**:
    - Ghép nối tất cả câu thoại vào đúng mốc thời gian (sample-accurate PCM assembly) kèm khoảng lặng giữa các câu.
    - Xuất file hoàn chỉnh định dạng MP3 (hoặc WAV).
-5. **Tự động dọn dẹp sạch dữ liệu tạm**:
-   - **Ngay sau khi file hoàn chỉnh được tạo thành công**, hệ thống tự động xóa toàn bộ file WAV từng câu trung gian (`item_*_orig.wav`, `item_*_adjusted.wav`) để tránh tiêu tốn dung lượng ổ đĩa.
-   - Bạn chỉ cần tải file master về máy tính.
-   - Nút **"Bắt Đầu Mới / Dọn Dẹp"** trên giao diện cho phép đặt lại trạng thái và xóa sạch mọi dữ liệu làm việc để bắt đầu một file mới từ đầu.
+5. **Phát lại audio từng câu và dọn dẹp dữ liệu**:
+   - File WAV từng câu (`item_*_orig.wav`, `item_*_adjusted.wav`) và WAV master được giữ lại sau khi hoàn tất để có thể phát lại hoặc kiểm tra từng bước.
+   - Nút **"Dọn Dẹp & Làm Mới"** xóa các file của dự án hiện tại và đặt lại trạng thái để bắt đầu một file mới.
 
 ---
 

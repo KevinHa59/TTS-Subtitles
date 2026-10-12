@@ -9,6 +9,7 @@
     "start": "tsx server.ts",
     "preview": "vite preview",
     "clean": "node -e \"const fs=require('fs'); fs.rmSync('dist',{recursive:true,force:true}); fs.rmSync('jobs_storage',{recursive:true,force:true});\"",
+    "postinstall": "node scripts/patch-piper.js",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
@@ -31,7 +32,7 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "autoprefixer": "^10.4.21",
-    "esbuild": "^0.25.0",
+    "esbuild": "^0.28.0",
     "tailwindcss": "^4.3.3",
     "typescript": "^7.0.2"
   }

@@ -698,13 +698,17 @@ export default function App() {
                   <input
                     type="range"
                     min="1.1"
-                    max="2.0"
+                    max="3.0"
                     step="0.05"
                     value={maxSpeed}
-                    onChange={(e) => setMaxSpeed(parseFloat(e.target.value))}
+                    onChange={(e) => {
+                      const value = parseFloat(e.target.value);
+                      setMaxSpeed(value);
+                      setMinSpeed((current) => Math.min(current, value));
+                    }}
                     className="w-full accent-amber-500 h-1.5 bg-slate-800 rounded cursor-pointer"
                   />
-                  <span className="text-[10px] text-slate-400">Giới hạn tăng tốc tránh méo giọng (1.5x khuyên dùng)</span>
+                  <span className="text-[10px] text-slate-400">Giới hạn tăng tốc (tối đa 3x; tốc độ cao có thể làm méo giọng)</span>
                 </div>
 
                 {/* Min Speed */}
@@ -716,13 +720,17 @@ export default function App() {
                   <input
                     type="range"
                     min="0.6"
-                    max="1.0"
+                    max="1.5"
                     step="0.05"
                     value={minSpeed}
-                    onChange={(e) => setMinSpeed(parseFloat(e.target.value))}
+                    onChange={(e) => {
+                      const value = parseFloat(e.target.value);
+                      setMinSpeed(value);
+                      setMaxSpeed((current) => Math.max(current, value));
+                    }}
                     className="w-full accent-amber-500 h-1.5 bg-slate-800 rounded cursor-pointer"
                   />
-                  <span className="text-[10px] text-slate-400">Tốc độ chậm nhất khi câu ngắn</span>
+                  <span className="text-[10px] text-slate-400">Tốc độ tối thiểu có thể đặt đến 1.5x</span>
                 </div>
 
                 {/* Priority */}
@@ -734,7 +742,7 @@ export default function App() {
                     className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-slate-200"
                   >
                     <option value="balanced">Cân bằng (Khuyên dùng)</option>
-                    <option value="natural">Ưu tiên Giọng Tự Nhiên (Max 1.15x)</option>
+                    <option value="natural">Ưu tiên Giọng Tự Nhiên (Max 1.15x, trừ Min Speed)</option>
                     <option value="strict">Ưu tiên Khớp Timeline</option>
                   </select>
                   <span className="text-[10px] text-slate-400">Chiến lược xử lý khi câu vượt thời lượng</span>
@@ -1073,7 +1081,7 @@ export default function App() {
                 <div className="flex items-center gap-2 px-3 py-1.5 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-[11px] text-emerald-400">
                   <CheckCircle2 className="w-3.5 h-3.5 shrink-0 text-emerald-400" />
                   <span>
-                    Toàn bộ audio câu trung gian và dữ liệu tạm đã được tự động dọn dẹp khỏi ổ đĩa. File hoàn chỉnh đã sẵn sàng để lưu trữ.
+                    Audio từng câu được giữ lại để phát và kiểm tra. Nhấn “Dọn Dẹp & Làm Mới” để xóa toàn bộ dữ liệu dự án.
                   </span>
                 </div>
 
