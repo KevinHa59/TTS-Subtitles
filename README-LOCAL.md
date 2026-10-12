@@ -7,6 +7,7 @@
 ## 1. Yêu cầu hệ thống
 
 - **Hệ điều hành**: Windows 10 hoặc Windows 11 (64-bit).
+- **espeak-ng**: Tải và cài đặt espeak-ng.
 - **Node.js**: Phiên bản LTS 18.x, 20.x hoặc mới hơn.
   - Tải tại: [https://nodejs.org/](https://nodejs.org/) (Chọn bản LTS và cài đặt mặc định).
 - **FFmpeg** (Khuyến nghị để nén MP3 và tăng tốc đọc `atempo`):
@@ -23,6 +24,7 @@
 Bạn **không cần** mở VS Code, không cần gõ lệnh dòng lệnh phức tạp. Mọi thao tác đều được tự động hóa qua 3 file script:
 
 ### Bước 1: Thiết lập lần đầu (Chỉ chạy 1 lần duy nhất)
+
 - Nhấp đúp vào file **`Setup.bat`**.
 - File sẽ tự động:
   1. Kiểm tra môi trường Node.js & FFmpeg.
@@ -31,6 +33,7 @@ Bạn **không cần** mở VS Code, không cần gõ lệnh dòng lệnh phức
 - Khi màn hình hiện **"THIẾT LẬP THÀNH CÔNG!"**, bạn có thể bấm phím bất kỳ để đóng cửa sổ.
 
 ### Bước 2: Khởi động hằng ngày
+
 - Nhấp đúp vào file **`Start-App.bat`**.
 - Ứng dụng sẽ:
   1. Khởi chạy máy chủ local production.
@@ -38,6 +41,7 @@ Bạn **không cần** mở VS Code, không cần gõ lệnh dòng lệnh phức
   3. Tự động nạp sẵn mô hình PiperTTS Hoài My vào bộ nhớ để tổng hợp giọng đọc tức thì.
 
 ### Bước 3: Dừng ứng dụng khi dùng xong
+
 - Nhấp đúp vào file **`Stop-App.bat`** (hoặc chỉ cần đóng cửa sổ máy chủ `Start-App.bat`).
 - Ứng dụng sẽ dừng đúng tiến trình và giải phóng cổng 3000 hoàn toàn.
 
@@ -68,16 +72,16 @@ Bạn **không cần** mở VS Code, không cần gõ lệnh dòng lệnh phức
 
 ## 4. Các file chính trong dự án
 
-| Tên file / Thư mục | Mục đích |
-|---|---|
-| `Setup.bat` | Script cài đặt thư viện và build frontend lần đầu trên Windows |
-| `Start-App.bat` | Script khởi chạy máy chủ production local và tự mở trình duyệt |
-| `Stop-App.bat` | Script dừng an toàn tiến trình ứng dụng trên cổng 3000 |
-| `server.ts` | Máy chủ Express tích hợp PiperNativeTTS, FFmpeg spawning, timeline assembly |
-| `models/` | Thư mục chứa mô hình giọng đọc Hoài My ONNX được tải tự động |
-| `jobs_storage/` | Thư mục tạm dùng trong lúc ghép nối timeline (tự xóa sau khi xong) |
-| `dist/` | Bản build sản phẩm của frontend React + Vite |
-| `package.json` | Cấu hình phụ thuộc và lệnh chạy |
+| Tên file / Thư mục | Mục đích                                                                    |
+| ------------------ | --------------------------------------------------------------------------- |
+| `Setup.bat`        | Script cài đặt thư viện và build frontend lần đầu trên Windows              |
+| `Start-App.bat`    | Script khởi chạy máy chủ production local và tự mở trình duyệt              |
+| `Stop-App.bat`     | Script dừng an toàn tiến trình ứng dụng trên cổng 3000                      |
+| `server.ts`        | Máy chủ Express tích hợp PiperNativeTTS, FFmpeg spawning, timeline assembly |
+| `models/`          | Thư mục chứa mô hình giọng đọc Hoài My ONNX được tải tự động                |
+| `jobs_storage/`    | Thư mục tạm dùng trong lúc ghép nối timeline (tự xóa sau khi xong)          |
+| `dist/`            | Bản build sản phẩm của frontend React + Vite                                |
+| `package.json`     | Cấu hình phụ thuộc và lệnh chạy                                             |
 
 ---
 
