@@ -1,0 +1,6 @@
+{
+  "name": "Hoài My Piper TTS - Giọng Đọc Tiếng Việt",
+  "description": "Chuyển đổi văn bản tiếng Việt thành giọng nói tự nhiên với Piper TTS giọng Hoài My, tùy chỉnh tốc độ, ngữ điệu và tải xuống file MP3.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
