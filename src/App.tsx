@@ -331,6 +331,20 @@ export default function App() {
     await fetch(`/api/subtitles/job/${activeJob.id}/retry-failed`, { method: 'POST' });
   };
 
+  const handleResetJob = async () => {
+    if (activeJob) {
+      try {
+        await fetch(`/api/subtitles/job/${activeJob.id}/cleanup`, { method: 'POST' });
+      } catch {}
+    }
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+    }
+    setActiveJob(null);
+    setMasterPlaying(false);
+    setMasterCurrentTime(0);
+  };
+
   const handleRegenerateSingle = async (index: number) => {
     if (!activeJob) return;
     await fetch(`/api/subtitles/job/${activeJob.id}/single/${index}`, { method: 'POST' });
@@ -860,6 +874,18 @@ export default function App() {
                       <span>Thử Lại Câu Lỗi ({activeJob.overallProgress.failed})</span>
                     </button>
                   )}
+
+                  {activeJob && (
+                    <button
+                      type="button"
+                      onClick={handleResetJob}
+                      className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white font-medium text-xs rounded-xl border border-slate-700 flex items-center gap-1.5 transition-colors"
+                      title="Xóa dữ liệu tạm và bắt đầu lại từ đầu"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                      <span>Bắt Đầu Mới / Dọn Dẹp</span>
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -1015,7 +1041,7 @@ export default function App() {
                   </div>
 
                   {/* Master Download Buttons */}
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <a
                       href={`/api/subtitles/job/${activeJob.id}/master-audio?download=1&format=mp3`}
                       className="px-4 py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-xl shadow-lg shadow-amber-500/20 flex items-center gap-1.5 transition-transform active:scale-95"
@@ -1031,7 +1057,24 @@ export default function App() {
                       <Download className="w-3.5 h-3.5 text-slate-400" />
                       <span>WAV</span>
                     </a>
+                    <button
+                      type="button"
+                      onClick={handleResetJob}
+                      className="px-3 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white font-medium text-xs rounded-xl border border-slate-700 flex items-center gap-1.5 transition-colors"
+                      title="Dọn dẹp tệp tạm và làm mới"
+                    >
+                      <Trash2 className="w-3.5 h-3.5 text-slate-400" />
+                      <span>Dọn Dẹp & Làm Mới</span>
+                    </button>
                   </div>
+                </div>
+
+                {/* Cleanup Confirmation Banner */}
+                <div className="flex items-center gap-2 px-3 py-1.5 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-[11px] text-emerald-400">
+                  <CheckCircle2 className="w-3.5 h-3.5 shrink-0 text-emerald-400" />
+                  <span>
+                    Toàn bộ audio câu trung gian và dữ liệu tạm đã được tự động dọn dẹp khỏi ổ đĩa. File hoàn chỉnh đã sẵn sàng để lưu trữ.
+                  </span>
                 </div>
 
                 {/* Master Audio Player Controls */}
@@ -1097,8 +1140,7 @@ export default function App() {
                       <th className="py-2.5 px-3 w-20 text-right">TTS gốc</th>
                       <th className="py-2.5 px-3 w-20 text-center">Tốc độ</th>
                       <th className="py-2.5 px-3 w-20 text-right">Độ dài cuối</th>
-                      <th className="py-2.5 px-3 w-28 text-center">Trạng thái</th>
-                      <th className="py-2.5 px-3 w-28 text-center">Thao tác</th>
+                      <th className="py-2.5 px-3 w-32 text-center">Trạng thái</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800/80">
@@ -1196,43 +1238,6 @@ export default function App() {
                           {item.status === 'pending' && (
                             <span className="text-[11px] text-slate-400">Chờ xử lý</span>
                           )}
-                        </td>
-
-                        {/* Actions */}
-                        <td className="py-2.5 px-3 text-center">
-                          <div className="flex items-center justify-center gap-1">
-                            {/* Preview Single */}
-                            {activeJob && item.status === 'completed' && (
-                              <button
-                                type="button"
-                                onClick={() => handlePlayItemAudio(item)}
-                                className={`p-1.5 rounded-lg text-xs transition-colors ${
-                                  playingItemIndex === item.index
-                                    ? 'bg-amber-500 text-slate-950'
-                                    : 'bg-slate-800 hover:bg-slate-700 text-slate-300'
-                                }`}
-                                title="Nghe thử câu này"
-                              >
-                                {playingItemIndex === item.index ? (
-                                  <Pause className="w-3 h-3 fill-current" />
-                                ) : (
-                                  <Play className="w-3 h-3 fill-current" />
-                                )}
-                              </button>
-                            )}
-
-                            {/* Regenerate Single */}
-                            {activeJob && (
-                              <button
-                                type="button"
-                                onClick={() => handleRegenerateSingle(item.index)}
-                                className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white rounded-lg text-xs transition-colors"
-                                title="Tạo lại riêng câu này"
-                              >
-                                <RotateCcw className="w-3 h-3" />
-                              </button>
-                            )}
-                          </div>
                         </td>
                       </tr>
                     ))}

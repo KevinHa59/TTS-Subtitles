@@ -7,15 +7,88 @@ import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
-import { exec, execSync } from 'child_process';
+import { exec, execSync, spawnSync } from 'child_process';
 import { PiperNativeTTS } from 'pipertts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 const isProd = process.env.NODE_ENV === 'production';
+
+// PID file for Windows Stop-App.bat process tracking
+const PID_FILE = path.resolve(__dirname, '.server.pid');
+try {
+  fs.writeFileSync(PID_FILE, process.pid.toString());
+} catch {}
+
+function cleanupPidFile() {
+  try {
+    if (fs.existsSync(PID_FILE)) fs.unlinkSync(PID_FILE);
+  } catch {}
+}
+
+process.on('SIGINT', () => { cleanupPidFile(); process.exit(0); });
+process.on('SIGTERM', () => { cleanupPidFile(); process.exit(0); });
+process.on('exit', () => { cleanupPidFile(); });
+
+// Windows & cross-platform FFmpeg / FFprobe path resolution
+function resolveFfmpegPath(): string {
+  if (process.env.FFMPEG_PATH && fs.existsSync(process.env.FFMPEG_PATH)) {
+    return process.env.FFMPEG_PATH;
+  }
+  const winCandidates = [
+    path.resolve(__dirname, 'ffmpeg.exe'),
+    path.resolve(__dirname, 'bin', 'ffmpeg.exe'),
+    path.resolve(__dirname, 'ffmpeg', 'bin', 'ffmpeg.exe'),
+  ];
+  for (const c of winCandidates) {
+    if (fs.existsSync(c)) return c;
+  }
+  return 'ffmpeg';
+}
+
+function resolveFfprobePath(): string {
+  if (process.env.FFPROBE_PATH && fs.existsSync(process.env.FFPROBE_PATH)) {
+    return process.env.FFPROBE_PATH;
+  }
+  const winCandidates = [
+    path.resolve(__dirname, 'ffprobe.exe'),
+    path.resolve(__dirname, 'bin', 'ffprobe.exe'),
+    path.resolve(__dirname, 'ffmpeg', 'bin', 'ffprobe.exe'),
+  ];
+  for (const c of winCandidates) {
+    if (fs.existsSync(c)) return c;
+  }
+  return 'ffprobe';
+}
+
+function checkFfmpegAvailable(): boolean {
+  try {
+    const res = spawnSync(resolveFfmpegPath(), ['-version'], { stdio: 'ignore' });
+    return res.status === 0;
+  } catch {
+    return false;
+  }
+}
+
+// Chained atempo filter for FFmpeg (atempo only accepts 0.5 to 2.0 per filter)
+function buildAtempoFilter(speed: number): string {
+  if (!speed || isNaN(speed) || speed <= 0) return 'atempo=1.0';
+  const filters: string[] = [];
+  let remaining = speed;
+  while (remaining > 2.0) {
+    filters.push('atempo=2.0');
+    remaining /= 2.0;
+  }
+  while (remaining < 0.5) {
+    filters.push('atempo=0.5');
+    remaining /= 0.5;
+  }
+  filters.push(`atempo=${Number(remaining.toFixed(3))}`);
+  return filters.join(',');
+}
 
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: true, limit: '20mb' }));
@@ -169,16 +242,47 @@ function createWavHeader(dataLength: number, sampleRate = 22050, channels = 1, b
   return buffer;
 }
 
-function getAudioDuration(filePath: string): number {
+function getWavDuration(filePath: string): number {
   try {
-    const out = execSync(`ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${filePath}"`, {
-      encoding: 'utf8',
-    });
-    return parseFloat(out.trim()) || 0;
+    const buf = fs.readFileSync(filePath);
+    if (buf.length >= 44 && buf.toString('ascii', 0, 4) === 'RIFF') {
+      const byteRate = buf.readUInt32LE(28);
+      let pos = 12;
+      while (pos + 8 <= buf.length) {
+        const chunkId = buf.toString('ascii', pos, pos + 4);
+        const chunkSize = buf.readUInt32LE(pos + 4);
+        if (chunkId === 'data') {
+          if (byteRate > 0) {
+            return chunkSize / byteRate;
+          }
+          break;
+        }
+        pos += 8 + chunkSize;
+      }
+    }
+  } catch {}
+  return 0;
+}
+
+function getAudioDuration(filePath: string): number {
+  if (filePath.toLowerCase().endsWith('.wav')) {
+    const wavDur = getWavDuration(filePath);
+    if (wavDur > 0) return wavDur;
+  }
+  try {
+    const ffprobeBin = resolveFfprobePath();
+    const res = spawnSync(
+      ffprobeBin,
+      ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', filePath],
+      { encoding: 'utf8' }
+    );
+    if (res.status === 0 && res.stdout) {
+      return parseFloat(res.stdout.trim()) || 0;
+    }
   } catch (e) {
     console.error('Error getting duration for:', filePath, e);
-    return 0;
   }
+  return 0;
 }
 
 // -------------------------------------------------------------
@@ -420,15 +524,64 @@ async function assembleJobTimeline(job: TimelineJob): Promise<{ wavPath: string;
   updateJobStage(job, 8, 'running', 'Đang mã hóa chuẩn MP3 (128 kbps) bằng FFmpeg...');
   addJobLog(job, 'INFO', 'Đang mã hóa file MP3 hoàn chỉnh với FFmpeg...');
 
-  execSync(`ffmpeg -y -i "${masterWavPath}" -codec:a libmp3lame -b:a 128k "${masterMp3Path}" 2>/dev/null`);
+  const ffmpegBin = resolveFfmpegPath();
+  let mp3Created = false;
+  try {
+    const res = spawnSync(ffmpegBin, [
+      '-y',
+      '-i', masterWavPath,
+      '-codec:a', 'libmp3lame',
+      '-b:a', '128k',
+      masterMp3Path
+    ], { stdio: 'ignore' });
+    mp3Created = res.status === 0 && fs.existsSync(masterMp3Path) && fs.statSync(masterMp3Path).size > 0;
+  } catch (encErr) {
+    console.warn('[FFmpeg] Không thể chuyển đổi sang MP3, fallback dùng WAV:', encErr);
+  }
 
-  const realDuration = getAudioDuration(masterMp3Path) || maxEndTime;
+  const finalFilePath = (job.options.outputFormat === 'mp3' && mp3Created) ? masterMp3Path : masterWavPath;
+  const realDuration = getAudioDuration(finalFilePath) || maxEndTime;
+
+  // Cleanup intermediate audio files (Requirement 2 & 3)
+  // Ensure intermediate files are deleted only AFTER master file has been successfully created
+  let cleanedCount = 0;
+  for (const item of job.items) {
+    const itemWavPath = path.join(jobDir, `item_${item.index}_adjusted.wav`);
+    const origWavPath = path.join(jobDir, `item_${item.index}_orig.wav`);
+    if (fs.existsSync(itemWavPath)) {
+      try {
+        fs.unlinkSync(itemWavPath);
+        cleanedCount++;
+      } catch {}
+    }
+    if (fs.existsSync(origWavPath)) {
+      try {
+        fs.unlinkSync(origWavPath);
+        cleanedCount++;
+      } catch {}
+    }
+  }
+
+  // If format is mp3 and mp3 file exists, clean up master.wav to save disk space
+  if (job.options.outputFormat === 'mp3' && mp3Created && fs.existsSync(masterWavPath)) {
+    try {
+      fs.unlinkSync(masterWavPath);
+      cleanedCount++;
+    } catch {}
+  }
+
+  addJobLog(job, 'SUCCESS', `Đã dọn dẹp ${cleanedCount} tệp audio trung gian và dữ liệu tạm, giải phóng hoàn toàn dung lượng đĩa.`);
+
   updateJobStage(job, 8, 'completed');
-  updateJobStage(job, 9, 'completed', 'File hoàn chỉnh đã sẵn sàng!');
+  updateJobStage(job, 9, 'completed', 'File hoàn chỉnh đã sẵn sàng tải xuống!');
 
   addJobLog(job, 'SUCCESS', `File audio hoàn chỉnh đã được tạo thành công! Thời lượng: ${realDuration.toFixed(2)}s`);
 
-  return { wavPath: masterWavPath, mp3Path: masterMp3Path, duration: realDuration };
+  return {
+    wavPath: masterWavPath,
+    mp3Path: mp3Created ? masterMp3Path : masterWavPath,
+    duration: realDuration
+  };
 }
 
 // Background Processor for a Timeline Job
@@ -538,7 +691,14 @@ async function runJobProcessor(job: TimelineJob) {
               }
 
               try {
-                execSync(`ffmpeg -y -i "${origWavPath}" -filter:a "atempo=${appliedSpeed}" "${adjustedWavPath}" 2>/dev/null`);
+                const ffmpegBin = resolveFfmpegPath();
+                const filterStr = buildAtempoFilter(appliedSpeed);
+                const res = spawnSync(ffmpegBin, ['-y', '-i', origWavPath, '-filter:a', filterStr, adjustedWavPath], {
+                  stdio: 'ignore',
+                });
+                if (res.status !== 0 || !fs.existsSync(adjustedWavPath)) {
+                  fs.copyFileSync(origWavPath, adjustedWavPath);
+                }
               } catch {
                 fs.copyFileSync(origWavPath, adjustedWavPath);
               }
@@ -621,6 +781,14 @@ app.post('/api/subtitles/job/create', (req: Request, res: Response) => {
   const jobId = `job_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
   const batchSize = Math.max(1, Math.min(32, Number(options.batchSize) || 4));
   const totalBatches = Math.ceil(items.length / batchSize);
+
+  // Clean up any old job directories to prevent disk bloat (Requirement 2)
+  try {
+    const existingDirs = fs.readdirSync(JOBS_DIR);
+    for (const d of existingDirs) {
+      fs.rmSync(path.join(JOBS_DIR, d), { recursive: true, force: true });
+    }
+  } catch {}
 
   const job: TimelineJob = {
     id: jobId,
@@ -812,7 +980,14 @@ app.post('/api/subtitles/job/:jobId/single/:index', async (req: Request, res: Re
       const maxSpeed = job.options.maxSpeed || 1.5;
       appliedSpeed = Math.min(maxSpeed, Math.max(0.5, neededSpeed));
       try {
-        execSync(`ffmpeg -y -i "${origWavPath}" -filter:a "atempo=${appliedSpeed}" "${adjustedWavPath}" 2>/dev/null`);
+        const ffmpegBin = resolveFfmpegPath();
+        const filterStr = buildAtempoFilter(appliedSpeed);
+        const res = spawnSync(ffmpegBin, ['-y', '-i', origWavPath, '-filter:a', filterStr, adjustedWavPath], {
+          stdio: 'ignore',
+        });
+        if (res.status !== 0 || !fs.existsSync(adjustedWavPath)) {
+          fs.copyFileSync(origWavPath, adjustedWavPath);
+        }
       } catch {
         fs.copyFileSync(origWavPath, adjustedWavPath);
       }
@@ -916,6 +1091,39 @@ app.get('/api/subtitles/job/:jobId/logs/download', (req: Request, res: Response)
   res.setHeader('Content-Type', 'text/plain; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="pipertts-logs-${job.id}.txt"`);
   res.send(logLines);
+});
+
+// Explicit cleanup endpoint for a specific job (Requirement 2)
+app.post('/api/subtitles/job/:jobId/cleanup', (req: Request, res: Response) => {
+  const jobId = req.params.jobId;
+  const jobDir = path.join(JOBS_DIR, jobId);
+  try {
+    if (fs.existsSync(jobDir)) {
+      fs.rmSync(jobDir, { recursive: true, force: true });
+    }
+    jobs.delete(jobId);
+    sseClients.delete(jobId);
+    res.json({ success: true, message: 'Đã xóa toàn bộ file tạm và giải phóng bộ nhớ.' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Explicit cleanup endpoint to reset all temporary jobs
+app.post('/api/subtitles/cleanup-all', (req: Request, res: Response) => {
+  try {
+    if (fs.existsSync(JOBS_DIR)) {
+      const files = fs.readdirSync(JOBS_DIR);
+      for (const f of files) {
+        fs.rmSync(path.join(JOBS_DIR, f), { recursive: true, force: true });
+      }
+    }
+    jobs.clear();
+    sseClients.clear();
+    res.json({ success: true, message: 'Đã dọn dẹp sạch toàn bộ file tạm trong hệ thống.' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // -------------------------------------------------------------
@@ -1044,14 +1252,45 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    app.use(express.static(path.resolve(__dirname, 'dist')));
-    app.get('*', (req: Request, res: Response) => {
-      res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
-    });
+    const distPath = path.resolve(__dirname, 'dist');
+    if (fs.existsSync(distPath)) {
+      app.use(express.static(distPath));
+      app.get('*', (req: Request, res: Response) => {
+        res.sendFile(path.resolve(distPath, 'index.html'));
+      });
+    } else {
+      console.warn('[Server] Thư mục dist chưa tồn tại. Đang fallback phục vụ Vite middleware...');
+      const vite = await createViteServer({
+        server: { middlewareMode: true },
+        appType: 'spa',
+      });
+      app.use(vite.middlewares);
+    }
   }
 
-  app.listen(PORT, () => {
-    console.log(`Server running at http://localhost:${PORT}`);
+  const server = app.listen(PORT, () => {
+    console.log(`\n==================================================================`);
+    console.log(`  HOÀI MY PIPER TTS - MÁY CHỦ SẴN SÀNG`);
+    console.log(`  Truy cập ứng dụng tại: http://localhost:${PORT}`);
+    if (checkFfmpegAvailable()) {
+      console.log(`  [FFmpeg] FFmpeg đã được kích hoạt thành công.`);
+    } else {
+      console.log(`  [FFmpeg] CẢNH BÁO: Chưa tìm thấy FFmpeg trong PATH hoặc thư mục gốc.`);
+      console.log(`  (Để nén sang MP3 và tăng tốc đọc atempo, vui lòng cài đặt FFmpeg)`);
+    }
+    console.log(`==================================================================\n`);
+
+    if (process.env.OPEN_BROWSER === '1' || process.env.AUTO_OPEN_BROWSER === '1') {
+      const url = `http://localhost:${PORT}`;
+      console.log(`[AutoBrowser] Đang mở trình duyệt: ${url}`);
+      const startCmd =
+        process.platform === 'win32'
+          ? `start "" "${url}"`
+          : process.platform === 'darwin'
+          ? `open "${url}"`
+          : `xdg-open "${url}"`;
+      exec(startCmd, () => {});
+    }
   });
 }
 
