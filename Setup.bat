@@ -43,12 +43,43 @@ echo Da tim thay FFmpeg trong PATH.
 
 :FFMPEG_DONE
 echo.
-echo [3/4] Cai dat cac thu vien npm...
+echo [3/5] Kiem tra eSpeak NG (Phat am tieng Viet co dau)...
+where espeak-ng >nul 2>&1
+if not errorlevel 1 goto ESPEAK_OK
+
+if exist "%ProgramFiles%\eSpeak NG\espeak-ng.exe" goto ESPEAK_OK
+if exist "%ProgramFiles(x86)%\eSpeak NG\espeak-ng.exe" goto ESPEAK_OK
+if exist "%~dp0espeak-ng.exe" goto ESPEAK_OK
+if exist "%~dp0bin\espeak-ng.exe" goto ESPEAK_OK
+
+echo [CANH BAO] Chua tim thay eSpeak NG tren he thong!
+echo PiperTTS Hoai My can eSpeak NG de phan tich ngu am tieng Viet CO DAU (thanh dieu).
+echo Neu thieu eSpeak NG, ung dung chi co the doc tieng Viet KHONG DAU.
+echo.
+echo Dang thu cai dat tu dong eSpeak NG bang winget...
+winget install --id eSpeak-NG.eSpeak-NG --silent --accept-package-agreements --accept-source-agreements >nul 2>&1
+where espeak-ng >nul 2>&1
+if not errorlevel 1 goto ESPEAK_OK
+if exist "%ProgramFiles%\eSpeak NG\espeak-ng.exe" goto ESPEAK_OK
+
+echo.
+echo [HUONG DAN CAI DAT ESPEAK NG]
+echo Hay tai file espeak-ng-X64.msi tu trang chinh thuc va cai dat:
+echo https://github.com/espeak-ng/espeak-ng/releases
+echo (Sau khi cai dat xong, eSpeak NG se tu dong duoc Start-App.bat nhan dien)
+goto ESPEAK_DONE
+
+:ESPEAK_OK
+echo Da tim thay eSpeak NG! PiperTTS se phat am chuan tieng Viet day du dau.
+
+:ESPEAK_DONE
+echo.
+echo [4/5] Cai dat cac thu vien npm...
 call npm install
 if errorlevel 1 goto NPM_ERROR
 
 echo.
-echo [4/4] Build frontend...
+echo [5/5] Build frontend...
 call npm run build
 if errorlevel 1 goto BUILD_ERROR
 

@@ -41,6 +41,24 @@ set PORT=3000
 set PIPER_ESPEAK_BRIDGE=0
 set OPEN_BROWSER=1
 
+:: Tự động nhận diện eSpeak NG để phát âm chuẩn tiếng Việt có dấu
+if exist "%ProgramFiles%\eSpeak NG\espeak-ng.exe" (
+    set "PATH=%ProgramFiles%\eSpeak NG;!PATH!"
+    if exist "%ProgramFiles%\eSpeak NG\espeak-ng-data" (
+        set "ESPEAK_DATA_PATH=%ProgramFiles%\eSpeak NG\espeak-ng-data"
+    )
+) else if exist "%ProgramFiles(x86)%\eSpeak NG\espeak-ng.exe" (
+    set "PATH=%ProgramFiles(x86)%\eSpeak NG;!PATH!"
+    if exist "%ProgramFiles(x86)%\eSpeak NG\espeak-ng-data" (
+        set "ESPEAK_DATA_PATH=%ProgramFiles(x86)%\eSpeak NG\espeak-ng-data"
+    )
+) else if exist "%~dp0espeak-ng\espeak-ng.exe" (
+    set "PATH=%~dp0espeak-ng;!PATH!"
+    if exist "%~dp0espeak-ng\espeak-ng-data" (
+        set "ESPEAK_DATA_PATH=%~dp0espeak-ng\espeak-ng-data"
+    )
+)
+
 echo Đang khởi động máy chủ local...
 echo Trình duyệt web sẽ tự động mở tại: http://localhost:3000
 echo.

@@ -7,12 +7,21 @@
 ## 1. Yêu cầu hệ thống
 
 - **Hệ điều hành**: Windows 10 hoặc Windows 11 (64-bit).
-- **espeak-ng**: Tải và cài đặt espeak-ng.
 - **Node.js**: Phiên bản LTS 18.x, 20.x hoặc mới hơn.
   - Tải tại: [https://nodejs.org/](https://nodejs.org/) (Chọn bản LTS và cài đặt mặc định).
-- **FFmpeg** (Khuyến nghị để nén MP3 và tăng tốc đọc `atempo`):
-  - **Cách 1 (Khuyên dùng - tự động)**: Mở PowerShell và chạy lệnh:
-    ```powershell
+- **eSpeak NG (BẮT BUỘC để phát âm tiếng Việt CÓ DẤU và thanh điệu chuẩn xác)**:
+  - *Tại sao cần eSpeak NG?* PiperTTS sử dụng eSpeak NG để phân tích ngữ âm tiếng Việt (các nguyên âm có dấu `á, à, ả, ã, ạ, ă, â, đ, ê, ô, ơ, ư` và 6 thanh điệu). Nếu thiếu eSpeak NG, mô hình sẽ không đọc được dấu hoặc chỉ đọc được chữ không dấu.
+  - **Cách cài đặt 1 (Khuyên dùng - 1 lệnh qua PowerShell/CMD)**:
+    ```cmd
+    winget install eSpeak-NG.eSpeak-NG
+    ```
+  - **Cách cài đặt 2 (Tải file MSI)**:
+    - Vào link Releases chính thức: [https://github.com/espeak-ng/espeak-ng/releases](https://github.com/espeak-ng/espeak-ng/releases)
+    - Tải file **`espeak-ng-X64.msi`** và cài đặt vào thư mục mặc định (`C:\Program Files\eSpeak NG`).
+    - `Start-App.bat` và máy chủ sẽ tự động phát hiện đường dẫn này mà không cần bạn cấu hình thủ công.
+- **FFmpeg (Khuyến nghị để nén MP3 và tăng tốc đọc `atempo`)**:
+  - **Cách 1 (Tự động qua winget)**:
+    ```cmd
     winget install Gyan.FFmpeg
     ```
   - **Cách 2**: Tải bản giải nén từ [gyan.dev/ffmpeg/builds](https://www.gyan.dev/ffmpeg/builds/) rồi chép trực tiếp file `ffmpeg.exe` (và `ffprobe.exe`) vào cùng thư mục với dự án này.
@@ -87,9 +96,19 @@ Bạn **không cần** mở VS Code, không cần gõ lệnh dòng lệnh phức
 
 ## 5. Khắc phục sự cố thường gặp
 
-1. **Trình duyệt báo không thể kết nối tới `http://localhost:3000`:**
+1. **Giọng đọc bị mất dấu hoặc chỉ đọc được tiếng Việt không dấu:**
+   - Nguyên nhân: Hệ thống chưa cài đặt hoặc chưa nhận diện được `eSpeak NG`.
+   - Khắc phục: Mở Command Prompt hoặc PowerShell, chạy lệnh:
+     ```cmd
+     winget install eSpeak-NG.eSpeak-NG
+     ```
+     Hoặc tải file `espeak-ng-X64.msi` từ GitHub eSpeak-NG và cài đặt. Sau đó chạy lại `Start-App.bat`.
+
+2. **Trình duyệt báo không thể kết nối tới `http://localhost:3000`:**
    - Hãy chắc chắn rằng cửa sổ `Start-App.bat` vẫn đang mở và báo `HOÀI MY PIPER TTS - MÁY CHỦ SẴN SÀNG`.
-2. **Cổng 3000 bị báo đang bận:**
+
+3. **Cổng 3000 bị báo đang bận:**
    - Nhấp đúp vào `Stop-App.bat` để quét và giải phóng cổng 3000, sau đó chạy lại `Start-App.bat`.
-3. **Cảnh báo chưa tìm thấy FFmpeg:**
+
+4. **Cảnh báo chưa tìm thấy FFmpeg:**
    - Ứng dụng vẫn có thể đọc và đo thời lượng file WAV. Tuy nhiên để nén sang MP3 và tăng tốc câu dài qua bộ lọc `atempo`, hãy chạy `winget install Gyan.FFmpeg` hoặc chép `ffmpeg.exe` vào thư mục dự án.

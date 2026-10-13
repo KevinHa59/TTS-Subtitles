@@ -85,6 +85,83 @@ function checkFfmpegAvailable(): boolean {
   }
 }
 
+// Windows & cross-platform eSpeak NG resolution (vital for Vietnamese diacritics / tones)
+function resolveEspeakPath(): string {
+  if (process.env.ESPEAK_PATH && fs.existsSync(process.env.ESPEAK_PATH)) {
+    return process.env.ESPEAK_PATH;
+  }
+  const programFiles = process.env.ProgramFiles || "C:\\Program Files";
+  const programFilesX86 =
+    process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)";
+  const localAppData = process.env.LOCALAPPDATA || "";
+
+  const winCandidates = [
+    path.resolve(__dirname, "espeak-ng.exe"),
+    path.resolve(__dirname, "bin", "espeak-ng.exe"),
+    path.resolve(__dirname, "espeak-ng", "espeak-ng.exe"),
+    path.resolve(__dirname, "espeak-ng", "bin", "espeak-ng.exe"),
+    path.join(programFiles, "eSpeak NG", "espeak-ng.exe"),
+    path.join(programFilesX86, "eSpeak NG", "espeak-ng.exe"),
+    path.join(localAppData, "Programs", "eSpeak NG", "espeak-ng.exe"),
+  ];
+  for (const c of winCandidates) {
+    if (fs.existsSync(c)) return c;
+  }
+  return "espeak-ng";
+}
+
+function setupEspeakEnvironment() {
+  const espeakBin = resolveEspeakPath();
+  if (espeakBin && espeakBin !== "espeak-ng" && fs.existsSync(espeakBin)) {
+    const espeakDir = path.dirname(espeakBin);
+    if (!process.env.PATH?.toLowerCase().includes(espeakDir.toLowerCase())) {
+      process.env.PATH = `${espeakDir}${path.delimiter}${process.env.PATH || ""}`;
+      console.log(`[PiperTTS] Đã thêm thư mục eSpeak NG vào PATH: ${espeakDir}`);
+    }
+  }
+
+  if (
+    process.env.ESPEAK_DATA_PATH &&
+    fs.existsSync(process.env.ESPEAK_DATA_PATH)
+  ) {
+    return;
+  }
+  const programFiles = process.env.ProgramFiles || "C:\\Program Files";
+  const programFilesX86 =
+    process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)";
+  const localAppData = process.env.LOCALAPPDATA || "";
+
+  const candidates = [
+    path.join(programFiles, "eSpeak NG", "espeak-ng-data"),
+    path.join(programFilesX86, "eSpeak NG", "espeak-ng-data"),
+    path.join(localAppData, "Programs", "eSpeak NG", "espeak-ng-data"),
+    path.resolve(__dirname, "espeak-ng-data"),
+    path.resolve(__dirname, "espeak-ng", "espeak-ng-data"),
+    "/usr/lib/x86_64-linux-gnu/espeak-ng-data",
+    "/usr/share/espeak-ng-data",
+    "/usr/local/share/espeak-ng-data",
+  ];
+  for (const c of candidates) {
+    if (fs.existsSync(c)) {
+      process.env.ESPEAK_DATA_PATH = c;
+      console.log(`[PiperTTS] Cấu hình ESPEAK_DATA_PATH: ${c}`);
+      break;
+    }
+  }
+}
+setupEspeakEnvironment();
+
+function checkEspeakAvailable(): boolean {
+  try {
+    const res = spawnSync(resolveEspeakPath(), ["--version"], {
+      stdio: "ignore",
+    });
+    return res.status === 0;
+  } catch {
+    return false;
+  }
+}
+
 // Chained atempo filter for FFmpeg (atempo only accepts 0.5 to 2.0 per filter)
 function buildAtempoFilter(speed: number): string {
   if (!speed || isNaN(speed) || speed <= 0) return "atempo=1.0";
@@ -200,12 +277,14 @@ async function getOrLoadModel(modelId: string) {
   const loadPromise = (async () => {
     console.log(`[PiperTTS] Loading model "${modelId}"...`);
     const startTime = Date.now();
+    const espeakBin = resolveEspeakPath();
     const tts = await PiperNativeTTS.load({
       model: modelId,
       modelsDir: MODELS_DIR,
+      espeakBinary: espeakBin,
     });
     console.log(
-      `[PiperTTS] Model "${modelId}" loaded successfully in ${Date.now() - startTime}ms.`,
+      `[PiperTTS] Model "${modelId}" loaded successfully in ${Date.now() - startTime}ms (espeakBinary: ${espeakBin}).`,
     );
     modelCache.set(modelId, tts);
     loadingPromises.delete(modelId);
@@ -230,7 +309,18 @@ async function getOrLoadModel(modelId: string) {
 })();
 
 function normalizeVietnameseText(input: string): string {
-  return input
+  if (!input) return "";
+  // 1. Chuẩn hóa NFC: Biến đổi toàn bộ ký tự Unicode tổ hợp (NFD) thành Unicode dựng sẵn (NFC).
+  // Điều này cực kỳ quan trọng để eSpeak-NG nhận dạng đúng nguyên âm tiếng Việt có dấu thanh điệu.
+  let text = input.normalize("NFC");
+
+  // 2. Loại bỏ ký tự BOM nếu file SRT được lưu dưới dạng UTF-8 with BOM
+  if (text.charCodeAt(0) === 0xfeff) {
+    text = text.slice(1);
+  }
+
+  // 3. Chuẩn hóa dấu câu và khoảng trắng
+  return text
     .replace(/，/g, ", ")
     .replace(/。/g, ". ")
     .replace(/！/g, "! ")
@@ -843,7 +933,13 @@ async function runJobProcessor(job: TimelineJob) {
             item.status = "completed";
             item.audioUrl = `/api/subtitles/job/${job.id}/item-audio/${item.index}`;
 
-            addJobLog(job, "SUCCESS", `Sentence ${item.index} completed`);
+            const completedCount = job.items.filter((it) => it.status === "completed").length;
+            const totalCount = job.items.length;
+            addJobLog(
+              job,
+              "SUCCESS",
+              `Sentence ${item.index} completed (${completedCount}/${totalCount})`,
+            );
             broadcastJobEvent(job.id, "sentence_complete", item);
           } catch (itemErr: any) {
             console.error(`Error on item ${item.index}:`, itemErr);
@@ -1341,6 +1437,8 @@ app.post("/api/subtitles/cleanup-all", (req: Request, res: Response) => {
 app.get("/api/voices", (req: Request, res: Response) => {
   res.json({
     defaultModel: DEFAULT_MODEL,
+    espeakAvailable: checkEspeakAvailable(),
+    espeakPath: resolveEspeakPath(),
     voices: AVAILABLE_MODELS.map((v) => ({
       ...v,
       isLoaded: modelCache.has(v.id),
@@ -1504,6 +1602,18 @@ async function startServer() {
       );
       console.log(
         `  (Để nén sang MP3 và tăng tốc đọc atempo, vui lòng cài đặt FFmpeg)`,
+      );
+    }
+    if (checkEspeakAvailable()) {
+      console.log(
+        `  [eSpeak NG] eSpeak NG đã sẵn sàng: Xử lý ngữ âm tiếng Việt đầy đủ thanh điệu và dấu câu.`,
+      );
+    } else {
+      console.log(
+        `  [eSpeak NG] CẢNH BÁO: Chưa tìm thấy eSpeak NG trong PATH hoặc Program Files.`,
+      );
+      console.log(
+        `  (Để PiperTTS Hoài My phát âm chuẩn tiếng Việt có dấu, vui lòng cài eSpeak NG)`,
       );
     }
     console.log(
