@@ -1,4 +1,3 @@
-```bat
 @echo off
 chcp 65001 >nul
 setlocal enabledelayedexpansion
@@ -124,4 +123,3 @@ goto MENU
 :EXIT
 echo Dang thoat...
 exit /b 0
-```
