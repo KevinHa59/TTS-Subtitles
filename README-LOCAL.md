@@ -1,6 +1,6 @@
 # Hướng Dẫn Cài Đặt & Sử Dụng Hoài My Piper TTS Trên Windows
 
-Ứng dụng chuyển đổi phụ đề SRT/TXT thành Audio TTS tiếng Việt chất lượng cao với giọng đọc **Hoài My** (`hub:hoaimy-vietnamese-vi-medium-ljkjhi`), tự động điều chỉnh tốc độ đọc theo timestamp, ghép nối timeline âm thanh, giữ lại audio từng câu và dọn dữ liệu khi người dùng yêu cầu.
+Ứng dụng chuyển đổi phụ đề SRT/TXT thành Audio TTS tiếng Việt chất lượng cao với nhiều giọng Piper, bao gồm **Hoài My** (`hub:hoaimy-vietnamese-vi-medium-ljkjhi`) và 5 giọng **CSA Voice v3**: Ngọc Lan, Minh Anh, Quang Huy, Thu Hà và Yến Nhi. Ứng dụng tự động điều chỉnh tốc độ đọc theo timestamp, ghép nối timeline âm thanh, giữ lại audio từng câu và dọn dữ liệu khi người dùng yêu cầu.
 
 ---
 
@@ -66,8 +66,9 @@ Bạn **không cần** mở VS Code, không cần gõ lệnh dòng lệnh phức
 2. **Xử lý Batch Concurrency**:
    - Chọn **Batch Size** mong muốn (1, 2, **4 mặc định**, 8, 16 hoặc Custom).
    - Tối ưu tốc độ xử lý song song trên CPU đa nhân.
-3. **TTS Hoài My & Căn chỉnh Timestamp**:
-   - Sinh giọng đọc tự nhiên bằng PiperTTS với model `hub:hoaimy-vietnamese-vi-medium-ljkjhi`.
+3. **TTS & Căn chỉnh Timestamp**:
+   - Chọn giọng đọc trong danh sách (Hoài My, các giọng Việt khác hoặc 5 giọng CSA Voice v3) để tổng hợp bằng PiperTTS.
+   - Với CSA Voice v3, lựa chọn tương ứng speaker ID `0–4` được dùng cho từng câu.
    - Đo thời lượng audio thực tế của từng câu.
    - Tự động điều chỉnh tốc độ đọc (`atempo`) để khớp chính xác timeline phụ đề mà vẫn giữ chất giọng tự nhiên, không méo tiếng.
 4. **Ghép Timeline (Master Assembly)**:
@@ -87,7 +88,7 @@ Bạn **không cần** mở VS Code, không cần gõ lệnh dòng lệnh phức
 | `Start-App.bat`    | Script khởi chạy máy chủ production local và tự mở trình duyệt              |
 | `Stop-App.bat`     | Script dừng an toàn tiến trình ứng dụng trên cổng 3000                      |
 | `server.ts`        | Máy chủ Express tích hợp PiperNativeTTS, FFmpeg spawning, timeline assembly |
-| `models/`          | Thư mục chứa mô hình giọng đọc Hoài My ONNX được tải tự động                |
+| `models/`          | Thư mục chứa các mô hình giọng đọc Piper ONNX và file cấu hình              |
 | `jobs_storage/`    | Thư mục tạm dùng trong lúc ghép nối timeline (tự xóa sau khi xong)          |
 | `dist/`            | Bản build sản phẩm của frontend React + Vite                                |
 | `package.json`     | Cấu hình phụ thuộc và lệnh chạy                                             |

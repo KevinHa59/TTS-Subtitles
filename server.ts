@@ -11,6 +11,11 @@ import path from "path";
 import { fileURLToPath } from "url";
 import fs from "fs";
 import { exec, execSync, spawnSync } from "child_process";
+import {
+  AVAILABLE_MODELS,
+  DEFAULT_MODEL,
+  LOCAL_MODEL_FILES,
+} from "./voice-catalog";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -196,75 +201,6 @@ if (!fs.existsSync(JOBS_DIR)) {
 const modelCache = new Map<string, any>();
 const loadingPromises = new Map<string, Promise<any>>();
 
-const DEFAULT_MODEL = "hub:hoaimy-vietnamese-vi-medium-ljkjhi";
-
-const AVAILABLE_MODELS = [
-  {
-    id: "hub:hoaimy-vietnamese-vi-medium-ljkjhi",
-    name: "Hoài My (Khuyên Dùng)",
-    tag: "Nữ · Miền Bắc · Chuẩn & Truyền cảm",
-    gender: "female",
-    description:
-      "Giọng đọc nữ tự nhiên, tròn vành rõ chữ, âm sắc ấm áp và biểu cảm tự nhiên.",
-    sampleText:
-      "Xin chào, tôi là Hoài My. Rất hân hạnh được đồng hành cùng bạn với công nghệ Piper TTS.",
-    recommended: true,
-  },
-  {
-    id: "hub:hoaimy-vietnamese-vi-congchualong",
-    name: "Hoài My (Phiên bản Dịu êm)",
-    tag: "Nữ · Miền Bắc · Thanh thoát, dịu dàng",
-    gender: "female",
-    description:
-      "Phong cách nhẹ nhàng, thư giãn, rất hợp với nội dung tản văn hoặc hướng dẫn thiền.",
-    sampleText: "Chào bạn, chúc bạn một buổi tối thật bình yên và thư thái.",
-    recommended: false,
-  },
-  {
-    id: "hub:hoaimy-vietnamese-vi-nmh19xx",
-    name: "Hoài My (Phiên bản Podcast)",
-    tag: "Nữ · Miền Bắc · Trầm ấm, sâu lắng",
-    gender: "female",
-    description:
-      "Tông giọng đầm và ấm, phù hợp đọc sách nói, tâm sự hoặc bản tin radio.",
-    sampleText:
-      "Chào mừng quý thính giả đang lắng nghe chương trình radio đêm muộn.",
-    recommended: false,
-  },
-  {
-    id: "hub:ban-mai-vietnamese-vi-medium",
-    name: "Ban Mai",
-    tag: "Nữ · Miền Bắc · Trong trẻo, năng động",
-    gender: "female",
-    description:
-      "Giọng nữ trẻ trung, tươi sáng, thích hợp cho video tin tức ngắn và thông báo công cộng.",
-    sampleText:
-      "Bản tin sáng nay xin gửi tới quý vị và các bạn những tin tức mới nhất.",
-    recommended: false,
-  },
-  {
-    id: "hub:thanh-nien-tu-tin-vietnamese-vi-medium",
-    name: "Thanh Niên Tự Tin",
-    tag: "Nam · Miền Bắc · Chững chạc, dõng dạc",
-    gender: "male",
-    description:
-      "Giọng nam dứt khoát, uy tín, phù hợp bài giảng điện tử và phóng sự tài liệu.",
-    sampleText:
-      "Kính chào quý vị khán giả, xin mời theo dõi nội dung chuyên đề khoa học công nghệ.",
-    recommended: false,
-  },
-  {
-    id: "hub:viet-thao-vietnamese-vi-medium",
-    name: "Việt Thảo",
-    tag: "Nam · Miền Nam · Hóm hỉnh, sống động",
-    gender: "male",
-    description: "Âm sắc miền Nam tự nhiên, gần gũi, cuốn hút người nghe.",
-    sampleText:
-      "Xin kính chào quý vị và các bạn đã quay trở lại với chương trình ngày hôm nay.",
-    recommended: false,
-  },
-];
-
 async function getOrLoadModel(modelId: string) {
   if (modelCache.has(modelId)) {
     return modelCache.get(modelId);
@@ -278,17 +214,22 @@ async function getOrLoadModel(modelId: string) {
     console.log(`[PiperTTS] Loading model "${modelId}"...`);
     const startTime = Date.now();
     const espeakBin = resolveEspeakPath();
-    const tts = await PiperNativeTTS.load({
-      model: modelId,
-      modelsDir: MODELS_DIR,
-      espeakBinary: espeakBin,
-    });
-    console.log(
-      `[PiperTTS] Model "${modelId}" loaded successfully in ${Date.now() - startTime}ms (espeakBinary: ${espeakBin}).`,
-    );
-    modelCache.set(modelId, tts);
-    loadingPromises.delete(modelId);
-    return tts;
+    const localModelFile = LOCAL_MODEL_FILES[modelId];
+    try {
+      const tts = await PiperNativeTTS.load({
+        ...(localModelFile
+          ? { modelPath: path.join(MODELS_DIR, localModelFile) }
+          : { model: modelId, modelsDir: MODELS_DIR }),
+        espeakBinary: espeakBin,
+      });
+      console.log(
+        `[PiperTTS] Model "${modelId}" loaded successfully in ${Date.now() - startTime}ms (espeakBinary: ${espeakBin}).`,
+      );
+      modelCache.set(modelId, tts);
+      return tts;
+    } finally {
+      loadingPromises.delete(modelId);
+    }
   })();
 
   loadingPromises.set(modelId, loadPromise);
@@ -468,6 +409,7 @@ interface TimelineJobOptions {
 interface TimelineJob {
   id: string;
   model: string;
+  speakerId?: number;
   items: SubtitleItem[];
   stages: ProcessingStage[];
   logs: LogEntry[];
@@ -842,6 +784,7 @@ async function runJobProcessor(job: TimelineJob) {
             const cleanedText = normalizeVietnameseText(item.text);
             const synthRes = await tts.synthesize(cleanedText, {
               outputFormat: "wav",
+              speakerId: job.speakerId,
             });
             const origWavPath = path.join(
               jobDir,
@@ -999,7 +942,12 @@ async function runJobProcessor(job: TimelineJob) {
 
 // Create a new timeline job
 app.post("/api/subtitles/job/create", (req: Request, res: Response) => {
-  const { items, options = {}, model = DEFAULT_MODEL } = req.body;
+  const {
+    items,
+    options = {},
+    model = DEFAULT_MODEL,
+    speakerId,
+  } = req.body;
 
   if (!items || !Array.isArray(items) || items.length === 0) {
     return res
@@ -1019,6 +967,7 @@ app.post("/api/subtitles/job/create", (req: Request, res: Response) => {
   const job: TimelineJob = {
     id: jobId,
     model,
+    speakerId,
     items: items.map((it: any, idx: number) => ({
       id: it.id || `sub_${idx + 1}`,
       index: it.index || idx + 1,
@@ -1211,6 +1160,7 @@ app.post(
       const cleanedText = normalizeVietnameseText(item.text);
       const synthRes = await tts.synthesize(cleanedText, {
         outputFormat: "wav",
+        speakerId: job.speakerId,
       });
       const origWavPath = path.join(jobDir, `item_${item.index}_orig.wav`);
       fs.writeFileSync(origWavPath, synthRes.audio);
@@ -1441,7 +1391,7 @@ app.get("/api/voices", (req: Request, res: Response) => {
     espeakPath: resolveEspeakPath(),
     voices: AVAILABLE_MODELS.map((v) => ({
       ...v,
-      isLoaded: modelCache.has(v.id),
+      isLoaded: modelCache.has(v.modelId),
     })),
   });
 });
@@ -1451,6 +1401,7 @@ app.post("/api/tts", async (req: Request, res: Response) => {
     const {
       text,
       model = DEFAULT_MODEL,
+      speakerId,
       speed = 1.0,
       sentenceSilence = 0.2,
       noiseScale = 0.667,
@@ -1478,6 +1429,7 @@ app.post("/api/tts", async (req: Request, res: Response) => {
     const startTime = Date.now();
     const synthResult = await tts.synthesize(cleanedText, {
       lengthScale,
+      speakerId,
       sentenceSilence: Math.max(
         0.0,
         Math.min(2.0, Number(sentenceSilence) || 0.2),
@@ -1515,6 +1467,7 @@ app.post("/api/tts/download", async (req: Request, res: Response) => {
     const {
       text,
       model = DEFAULT_MODEL,
+      speakerId,
       speed = 1.0,
       sentenceSilence = 0.2,
       noiseScale = 0.667,
@@ -1535,6 +1488,7 @@ app.post("/api/tts/download", async (req: Request, res: Response) => {
     const cleanedText = normalizeVietnameseText(text);
     const synthResult = await tts.synthesize(cleanedText, {
       lengthScale,
+      speakerId,
       sentenceSilence: Math.max(
         0.0,
         Math.min(2.0, Number(sentenceSilence) || 0.2),

@@ -44,6 +44,7 @@ export interface TimelineJobOptions {
 export interface TimelineJob {
   id: string;
   model: string;
+  speakerId?: number;
   items: SubtitleItem[];
   stages: ProcessingStage[];
   logs: LogEntry[];

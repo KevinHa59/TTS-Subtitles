@@ -54,9 +54,11 @@ import {
 
 interface VoiceOption {
   id: string;
+  modelId: string;
+  speakerId?: number;
   name: string;
   tag: string;
-  gender: 'female' | 'male';
+  gender: 'female' | 'male' | 'neutral';
   description: string;
   sampleText: string;
   recommended: boolean;
@@ -308,7 +310,8 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           items: subtitles,
-          model: selectedVoiceId,
+          model: selectedVoice.modelId,
+          speakerId: selectedVoice.speakerId,
           options: {
             batchSize: effectiveBatchSize,
             maxSpeed,
@@ -483,7 +486,8 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           text: singleText.trim(),
-          model: selectedVoiceId,
+          model: selectedVoice.modelId,
+          speakerId: selectedVoice.speakerId,
           speed: singleSpeed,
           sentenceSilence: singleSilence,
           format: singleFormat,
@@ -534,6 +538,7 @@ export default function App() {
     voices.find((v) => v.id === selectedVoiceId) ||
     voices[0] || {
       id: 'hub:hoaimy-vietnamese-vi-medium-ljkjhi',
+      modelId: 'hub:hoaimy-vietnamese-vi-medium-ljkjhi',
       name: 'Hoài My',
       tag: 'Nữ · Miền Bắc',
     };
@@ -659,7 +664,7 @@ export default function App() {
                       Giọng đọc chính thức
                     </span>
                     <span className="text-[11px] text-amber-400 font-medium bg-amber-400/10 px-2 py-0.5 rounded border border-amber-400/20">
-                      VITS Hoài My
+                      Piper TTS
                     </span>
                   </div>
 
