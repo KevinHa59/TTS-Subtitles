@@ -14,14 +14,16 @@ echo.
 echo   [1] Start App       - Khoi dong ung dung
 echo   [2] Build           - Build giao dien moi va khoi dong
 echo   [3] Exit            - Thoat
+echo   [4] GitHub Pull     - Cap nhat code tu GitHub
 echo.
 echo ====================================================================
 echo.
 echo Tu dong chon Start App sau 3 giay neu khong co thao tac...
 echo.
 
-choice /c 123 /n /t 3 /d 1 /m "Chon 1, 2 hoac 3: "
+choice /c 1234 /n /t 6 /d 1 /m "Chon 1, 2, 3 hoac 4: "
 
+if errorlevel 4 goto PULL
 if errorlevel 3 goto EXIT
 if errorlevel 2 goto BUILD
 if errorlevel 1 goto START
@@ -124,4 +126,35 @@ goto MENU
 :EXIT
 echo Dang thoat...
 exit /b 0
+
+:PULL
+echo.
+echo ====================================================================
+echo Dang cap nhat code tu GitHub...
+echo ====================================================================
+echo.
+
+git rev-parse --is-inside-work-tree >nul 2>&1
+if errorlevel 1 (
+    echo [LOI] Thu muc hien tai khong phai Git repository!
+    pause
+    goto MENU
+)
+
+git pull --ff-only
+
+if errorlevel 1 (
+    echo.
+    echo [LOI] Git Pull that bai!
+    echo Kiem tra ket noi mang, nhanh Git va cac thay doi local.
+    echo Ban co the can xu ly xung dot hoac commit thay doi local.
+    pause
+    goto MENU
+)
+
+echo.
+echo [THANH CONG] Da cap nhat code tu GitHub!
+echo Chon Option 2 de build giao dien moi.
+pause
+goto MENU
 ```

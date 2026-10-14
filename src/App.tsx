@@ -37,7 +37,11 @@ import {
   PanelLeftOpen,
   Eye,
   EyeOff,
-  UploadCloud
+  UploadCloud,
+  Search,
+  X,
+  User,
+  UserCheck
 } from 'lucide-react';
 
 import { SubtitleItem, TimelineJob, TimelineJobOptions, LogEntry } from './types/subtitles';
@@ -74,6 +78,15 @@ export default function App() {
   const [selectedVoiceId, setSelectedVoiceId] = useState<string>(
     'hub:hoaimy-vietnamese-vi-medium-ljkjhi'
   );
+
+  // Voice Selection Panel (Modal Table) & Preview States
+  const [showVoiceModal, setShowVoiceModal] = useState<boolean>(false);
+  const [voiceSearchQuery, setVoiceSearchQuery] = useState<string>('');
+  const [voiceGenderFilter, setVoiceGenderFilter] = useState<'all' | 'female' | 'male' | 'recommended'>('all');
+  const [previewVoiceId, setPreviewVoiceId] = useState<string | null>(null);
+  const [previewLoadingVoiceId, setPreviewLoadingVoiceId] = useState<string | null>(null);
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+  const previewAudioCacheRef = useRef<Map<string, string>>(new Map());
 
   // -------------------------------------------------------------
   // SUBTITLE TIMELINE STATE
@@ -473,6 +486,96 @@ export default function App() {
     }
   };
 
+  // Preview Voice Sample Text in Voice Selection Panel
+  const handlePreviewVoice = async (voice: VoiceOption) => {
+    // If currently playing this voice, stop it
+    if (previewVoiceId === voice.id) {
+      if (previewAudioRef.current) previewAudioRef.current.pause();
+      setPreviewVoiceId(null);
+      return;
+    }
+
+    // Stop master audio or item audio if playing
+    if (masterAudioRef.current && masterPlaying) {
+      masterAudioRef.current.pause();
+      setMasterPlaying(false);
+    }
+    if (itemAudioRef.current && playingItemIndex !== null) {
+      itemAudioRef.current.pause();
+      setPlayingItemIndex(null);
+    }
+
+    // Check cache
+    const cachedUrl = previewAudioCacheRef.current.get(voice.id);
+    if (cachedUrl) {
+      if (!previewAudioRef.current) previewAudioRef.current = new Audio();
+      const audio = previewAudioRef.current;
+      audio.pause();
+      audio.src = cachedUrl;
+      audio.onended = () => setPreviewVoiceId(null);
+      audio.onerror = () => setPreviewVoiceId(null);
+      await audio.play().catch((err) => console.error('Audio play error:', err));
+      setPreviewVoiceId(voice.id);
+      return;
+    }
+
+    // Synthesize sampleText via /api/tts
+    setPreviewLoadingVoiceId(voice.id);
+    try {
+      const res = await fetch('/api/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: voice.sampleText || `Xin chào, tôi là ${voice.name}. Rất hân hạnh được đồng hành cùng bạn.`,
+          model: voice.modelId,
+          speakerId: voice.speakerId,
+          speed: 1.0,
+          format: 'mp3',
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Lỗi tạo âm thanh mẫu');
+
+      const byteCharacters = atob(data.audioBase64);
+      const byteNumbers = new Array(byteCharacters.length);
+      for (let i = 0; i < byteCharacters.length; i++) {
+        byteNumbers[i] = byteCharacters.charCodeAt(i);
+      }
+      const blob = new Blob([new Uint8Array(byteNumbers)], { type: data.mimeType || 'audio/mpeg' });
+      const url = URL.createObjectURL(blob);
+      previewAudioCacheRef.current.set(voice.id, url);
+
+      if (!previewAudioRef.current) previewAudioRef.current = new Audio();
+      const audio = previewAudioRef.current;
+      audio.pause();
+      audio.src = url;
+      audio.onended = () => setPreviewVoiceId(null);
+      audio.onerror = () => setPreviewVoiceId(null);
+      await audio.play().catch((err) => console.error('Audio play error:', err));
+      setPreviewVoiceId(voice.id);
+    } catch (e: any) {
+      console.error('Failed to preview voice:', e);
+    } finally {
+      setPreviewLoadingVoiceId(null);
+    }
+  };
+
+  const handleCloseVoiceModal = () => {
+    if (previewAudioRef.current) {
+      previewAudioRef.current.pause();
+    }
+    setPreviewVoiceId(null);
+    setShowVoiceModal(false);
+  };
+
+  const handleSelectVoice = (voiceId: string) => {
+    setSelectedVoiceId(voiceId);
+    if (previewAudioRef.current) {
+      previewAudioRef.current.pause();
+    }
+    setPreviewVoiceId(null);
+  };
+
   const processSubtitleFile = (file: File) => {
     if (!file) return;
     const name = file.name.toLowerCase();
@@ -643,7 +746,31 @@ export default function App() {
       modelId: 'hub:hoaimy-vietnamese-vi-medium-ljkjhi',
       name: 'Hoài My',
       tag: 'Nữ · Miền Bắc',
+      gender: 'female',
+      description: 'Giọng đọc nữ tự nhiên chuẩn miền Bắc.',
+      sampleText: 'Xin chào, tôi là Hoài My.',
+      recommended: true,
     };
+
+  const femaleVoicesCount = voices.filter((v) => v.gender === 'female').length;
+  const maleVoicesCount = voices.filter((v) => v.gender === 'male').length;
+  const recommendedVoicesCount = voices.filter((v) => v.recommended).length;
+
+  const filteredVoices = voices.filter((v) => {
+    if (voiceGenderFilter === 'recommended' && !v.recommended) return false;
+    if (voiceGenderFilter === 'female' && v.gender !== 'female') return false;
+    if (voiceGenderFilter === 'male' && v.gender !== 'male') return false;
+    if (voiceSearchQuery.trim()) {
+      const q = voiceSearchQuery.toLowerCase();
+      return (
+        v.name.toLowerCase().includes(q) ||
+        v.tag.toLowerCase().includes(q) ||
+        v.description.toLowerCase().includes(q) ||
+        (v.sampleText && v.sampleText.toLowerCase().includes(q))
+      );
+    }
+    return true;
+  });
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-amber-500/30 selection:text-amber-200">
@@ -758,42 +885,98 @@ export default function App() {
                   </button>
                 </div>
 
-                {/* 1. Voice Selection Card */}
-                <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 shadow-xl space-y-3">
+                {/* 1. Voice Selection Card (Mở Panel Bảng Chọn Giọng Đọc) */}
+                <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 shadow-xl space-y-3.5">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
                       <Radio className="w-4 h-4 text-amber-400" />
                       Giọng đọc chính thức
                     </span>
-                    <span className="text-[11px] text-amber-400 font-medium bg-amber-400/10 px-2 py-0.5 rounded border border-amber-400/20">
-                      Piper TTS
+                    <span className="text-[11px] text-amber-400 font-medium bg-amber-400/10 px-2 py-0.5 rounded border border-amber-400/20 font-mono">
+                      {voices.length} giọng có sẵn
                     </span>
                   </div>
 
-                  <div className="relative">
-                    <select
-                      value={selectedVoiceId}
-                      onChange={(e) => setSelectedVoiceId(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-amber-500/50 appearance-none font-medium cursor-pointer"
-                    >
-                      {voices.map((v) => (
-                        <option key={v.id} value={v.id}>
-                          {v.name} ({v.tag})
-                        </option>
-                      ))}
-                    </select>
-                    <ChevronDown className="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-                  </div>
-
-                  <div className="text-xs text-slate-400 bg-slate-950/60 p-2.5 rounded-xl border border-slate-800/80 space-y-1">
-                    <div className="text-slate-300 font-medium flex items-center justify-between">
-                      <span>{selectedVoice.name}</span>
-                      <span className="text-amber-400 text-[10px] font-mono">22.05 kHz · mono</span>
+                  {/* Selected Voice Showcase Box */}
+                  <div className="p-3 bg-gradient-to-br from-slate-950 via-slate-950 to-amber-950/20 border border-slate-800/90 rounded-xl space-y-2.5">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-2.5">
+                        <div
+                          className={`w-9 h-9 rounded-xl flex items-center justify-center font-bold text-xs shrink-0 shadow-md ${
+                            selectedVoice.gender === 'female'
+                              ? 'bg-rose-500/15 text-rose-300 border border-rose-500/30'
+                              : 'bg-sky-500/15 text-sky-300 border border-sky-500/30'
+                          }`}
+                        >
+                          {selectedVoice.gender === 'female' ? 'Nữ' : 'Nam'}
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="text-sm font-bold text-white tracking-tight">
+                              {selectedVoice.name}
+                            </span>
+                            {selectedVoice.recommended && (
+                              <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                                Khuyên dùng
+                              </span>
+                            )}
+                          </div>
+                          <span className="text-[11px] text-slate-400 block font-mono">
+                            {selectedVoice.tag}
+                          </span>
+                        </div>
+                      </div>
                     </div>
-                    <p className="text-[11px] text-slate-400 leading-relaxed">
+
+                    <p className="text-[11px] text-slate-400 leading-relaxed border-t border-slate-800/80 pt-2 line-clamp-2">
                       {selectedVoice.description}
                     </p>
+
+                    {/* Quick Preview Audio of Selected Voice */}
+                    <button
+                      type="button"
+                      onClick={() => handlePreviewVoice(selectedVoice)}
+                      disabled={previewLoadingVoiceId === selectedVoice.id}
+                      className={`w-full py-2 px-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer border ${
+                        previewVoiceId === selectedVoice.id
+                          ? 'bg-amber-500 text-slate-950 font-bold border-amber-400 shadow-md shadow-amber-500/25'
+                          : 'bg-slate-950/80 hover:bg-slate-800 text-slate-300 hover:text-white border-slate-800 hover:border-slate-700'
+                      }`}
+                      title="Nghe câu thoại mẫu của giọng đọc này"
+                    >
+                      {previewLoadingVoiceId === selectedVoice.id ? (
+                        <>
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-400" />
+                          <span>Đang nạp âm mẫu...</span>
+                        </>
+                      ) : previewVoiceId === selectedVoice.id ? (
+                        <>
+                          <Pause className="w-3.5 h-3.5 fill-current" />
+                          <span>Dừng nghe thử</span>
+                          <span className="flex items-center gap-0.5 ml-1">
+                            <span className="w-1 h-3 bg-slate-950 animate-pulse" />
+                            <span className="w-1 h-2 bg-slate-950 animate-pulse delay-75" />
+                            <span className="w-1 h-3.5 bg-slate-950 animate-pulse delay-150" />
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          <Play className="w-3.5 h-3.5 fill-current text-amber-400" />
+                          <span>Nghe thử giọng này</span>
+                        </>
+                      )}
+                    </button>
                   </div>
+
+                  {/* Primary Action Button: Open Voice Selection Table Panel */}
+                  <button
+                    type="button"
+                    onClick={() => setShowVoiceModal(true)}
+                    className="w-full py-2.5 px-4 bg-gradient-to-r from-amber-500 via-amber-400 to-amber-500 hover:from-amber-400 hover:to-amber-300 text-slate-950 font-black rounded-xl text-xs shadow-lg shadow-amber-500/20 active:scale-95 flex items-center justify-center gap-2 transition-all cursor-pointer"
+                  >
+                    <UserCheck className="w-4 h-4 text-slate-950" />
+                    <span>Mở Bảng Chọn Giọng Đọc ({voices.length} giọng)</span>
+                  </button>
 
                   {/* eSpeak-NG Vietnamese Accent Health Status */}
                   {espeakStatus?.available ? (
@@ -1192,9 +1375,16 @@ export default function App() {
                   <span className="bg-slate-950 px-2.5 py-1 rounded-lg border border-slate-800">
                     Phụ đề: <strong className="text-amber-400">{subtitles.length}</strong> câu
                   </span>
-                  <span className="bg-slate-950 px-2.5 py-1 rounded-lg border border-slate-800 hidden sm:inline">
-                    Giọng: <strong className="text-slate-200">{selectedVoice.name}</strong>
-                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setShowVoiceModal(true)}
+                    className="bg-slate-950 hover:bg-slate-800 px-2.5 py-1 rounded-lg border border-slate-800 hover:border-amber-500/40 hidden sm:inline-flex items-center gap-1.5 transition-colors cursor-pointer group"
+                    title="Bấm để mở bảng chọn giọng đọc"
+                  >
+                    <span className="text-slate-400">Giọng:</span>
+                    <strong className="text-slate-200 group-hover:text-amber-300 transition-colors">{selectedVoice.name}</strong>
+                    <span className="text-[10px] text-amber-400 bg-amber-500/15 px-1.5 py-0.2 rounded border border-amber-500/30">Đổi</span>
+                  </button>
                 </div>
               </div>
 
@@ -1884,6 +2074,301 @@ export default function App() {
         )}
       </main>
 
+      {/* ========================================================= */}
+      {/* MODAL: BẢNG DANH SÁCH GIỌNG ĐỌC (VOICE SELECTION TABLE)   */}
+      {/* Các cột: Tên, Giới tính, Tag, Nghe thử, Chọn dùng         */}
+      {/* ========================================================= */}
+      {showVoiceModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-6 animate-in fade-in duration-200">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-5xl w-full max-h-[92vh] flex flex-col shadow-2xl overflow-hidden relative">
+            {/* Modal Header */}
+            <div className="flex items-start justify-between gap-4 p-5 sm:p-6 border-b border-slate-800/90 bg-slate-950/60">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-2xl bg-amber-500 text-slate-950 flex items-center justify-center font-black shadow-lg shadow-amber-500/25 shrink-0">
+                  <Radio className="w-6 h-6" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h2 className="text-base sm:text-lg font-bold text-white tracking-tight">
+                      Bảng Danh Sách Giọng Đọc Tiếng Việt
+                    </h2>
+                    <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                      Piper TTS ({voices.length} giọng)
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Nghe thử giọng mẫu trực tiếp và chọn giọng đọc chuẩn ngữ điệu phù hợp nhất cho video của bạn.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleCloseVoiceModal}
+                className="w-9 h-9 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white flex items-center justify-center transition-colors cursor-pointer shrink-0 border border-slate-700/60"
+                title="Đóng bảng chọn giọng đọc (ESC)"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Toolbar: Search input & Filter pills */}
+            <div className="p-4 sm:px-6 bg-slate-900/95 border-b border-slate-800 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+              {/* Search input */}
+              <div className="relative flex-1 max-w-md">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="text"
+                  value={voiceSearchQuery}
+                  onChange={(e) => setVoiceSearchQuery(e.target.value)}
+                  placeholder="Tìm theo tên (Hoài My, Ban Mai...), vùng miền (Bắc/Nam), CSA..."
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-8 py-2 text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-amber-500/50 focus:border-amber-500/60 transition-all font-medium"
+                />
+                {voiceSearchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setVoiceSearchQuery('')}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white text-xs cursor-pointer p-0.5"
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+
+              {/* Gender / Filter pills */}
+              <div className="flex items-center gap-1.5 overflow-x-auto text-xs pb-1 sm:pb-0">
+                <button
+                  type="button"
+                  onClick={() => setVoiceGenderFilter('all')}
+                  className={`px-3 py-1.5 rounded-xl font-semibold transition-all cursor-pointer ${
+                    voiceGenderFilter === 'all'
+                      ? 'bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/20'
+                      : 'bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700 border border-slate-700/60'
+                  }`}
+                >
+                  Tất cả ({voices.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setVoiceGenderFilter('female')}
+                  className={`px-3 py-1.5 rounded-xl font-semibold transition-all cursor-pointer flex items-center gap-1.5 ${
+                    voiceGenderFilter === 'female'
+                      ? 'bg-rose-500 text-white font-bold shadow-md shadow-rose-500/20'
+                      : 'bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700 border border-slate-700/60'
+                  }`}
+                >
+                  <span className="w-2 h-2 rounded-full bg-rose-400" />
+                  <span>Nữ ({femaleVoicesCount})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setVoiceGenderFilter('male')}
+                  className={`px-3 py-1.5 rounded-xl font-semibold transition-all cursor-pointer flex items-center gap-1.5 ${
+                    voiceGenderFilter === 'male'
+                      ? 'bg-sky-500 text-slate-950 font-bold shadow-md shadow-sky-500/20'
+                      : 'bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700 border border-slate-700/60'
+                  }`}
+                >
+                  <span className="w-2 h-2 rounded-full bg-sky-400" />
+                  <span>Nam ({maleVoicesCount})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setVoiceGenderFilter('recommended')}
+                  className={`px-3 py-1.5 rounded-xl font-semibold transition-all cursor-pointer flex items-center gap-1.5 ${
+                    voiceGenderFilter === 'recommended'
+                      ? 'bg-amber-400 text-slate-950 font-bold shadow-md shadow-amber-400/20'
+                      : 'bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700 border border-slate-700/60'
+                  }`}
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Khuyên dùng ({recommendedVoicesCount})</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Table Area (Scrollable with sticky header) */}
+            <div className="flex-1 overflow-x-auto overflow-y-auto max-h-[50vh] p-3 sm:p-6 bg-slate-950/40 scrollbar-thin">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead className="sticky top-0 z-20 bg-slate-950 shadow-md">
+                  <tr className="bg-slate-950 text-slate-400 border-b border-slate-800 text-[11px] font-mono">
+                    <th className="py-3 px-3.5 w-64">Tên</th>
+                    <th className="py-3 px-3 w-28 text-center">Giới tính</th>
+                    <th className="py-3 px-3.5 min-w-[200px]">Tag / Phân loại</th>
+                    <th className="py-3 px-3.5 min-w-[240px]">Nghe thử</th>
+                    <th className="py-3 px-3.5 w-32 text-center">Chọn dùng</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/80">
+                  {filteredVoices.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="py-12 text-center text-slate-500 italic">
+                        Không tìm thấy giọng đọc nào phù hợp với bộ lọc tìm kiếm.
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredVoices.map((v) => {
+                      const isCurrent = v.id === selectedVoiceId;
+                      const isPreviewing = previewVoiceId === v.id;
+                      const isLoadingPreview = previewLoadingVoiceId === v.id;
+
+                      return (
+                        <tr
+                          key={v.id}
+                          className={`hover:bg-slate-800/40 transition-colors ${
+                            isCurrent ? 'bg-amber-500/10' : ''
+                          }`}
+                        >
+                          {/* 1. Cột Tên */}
+                          <td className="py-3.5 px-3.5">
+                            <div className="flex items-start gap-2.5">
+                              <div
+                                className={`w-8 h-8 rounded-xl flex items-center justify-center font-bold text-xs shrink-0 mt-0.5 shadow-sm ${
+                                  v.gender === 'female'
+                                    ? 'bg-rose-500/15 text-rose-300 border border-rose-500/30'
+                                    : 'bg-sky-500/15 text-sky-300 border border-sky-500/30'
+                                }`}
+                              >
+                                {v.gender === 'female' ? 'Nữ' : 'Nam'}
+                              </div>
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span className="font-bold text-white text-xs sm:text-sm">
+                                    {v.name}
+                                  </span>
+                                  {v.recommended && (
+                                    <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                                      Khuyên dùng
+                                    </span>
+                                  )}
+                                  {isCurrent && (
+                                    <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1">
+                                      <Check className="w-2.5 h-2.5" />
+                                      Đang chọn
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-[11px] text-slate-400 mt-0.5 leading-relaxed">
+                                  {v.description}
+                                </p>
+                              </div>
+                            </div>
+                          </td>
+
+                          {/* 2. Cột Giới tính */}
+                          <td className="py-3.5 px-3 text-center">
+                            <span
+                              className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold ${
+                                v.gender === 'female'
+                                  ? 'bg-rose-500/15 text-rose-300 border border-rose-500/25'
+                                  : 'bg-sky-500/15 text-sky-300 border border-sky-500/25'
+                              }`}
+                            >
+                              <User className="w-3 h-3" />
+                              <span>{v.gender === 'female' ? 'Nữ' : 'Nam'}</span>
+                            </span>
+                          </td>
+
+                          {/* 3. Cột Tag */}
+                          <td className="py-3.5 px-3.5">
+                            <div className="space-y-1">
+                              <span className="inline-block px-2 py-0.5 rounded-lg text-[11px] font-mono font-medium bg-slate-900 text-slate-300 border border-slate-800">
+                                {v.tag}
+                              </span>
+                              <div className="text-[10px] text-slate-500 font-mono">
+                                ID: {v.modelId} {v.speakerId !== undefined ? `· spk:${v.speakerId}` : ''}
+                              </div>
+                            </div>
+                          </td>
+
+                          {/* 4. Cột Nghe thử */}
+                          <td className="py-3.5 px-3.5">
+                            <div className="space-y-1.5">
+                              <button
+                                type="button"
+                                onClick={() => handlePreviewVoice(v)}
+                                disabled={isLoadingPreview}
+                                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+                                  isPreviewing
+                                    ? 'bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/30 scale-105 ring-2 ring-amber-400/50'
+                                    : 'bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700 hover:border-amber-500/40'
+                                }`}
+                                title={isPreviewing ? 'Dừng phát mẫu' : 'Nghe thử câu thoại mẫu'}
+                              >
+                                {isLoadingPreview ? (
+                                  <>
+                                    <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-400" />
+                                    <span>Đang tạo âm...</span>
+                                  </>
+                                ) : isPreviewing ? (
+                                  <>
+                                    <Pause className="w-3.5 h-3.5 fill-current text-slate-950" />
+                                    <span>Dừng nghe</span>
+                                    <span className="flex items-center gap-0.5 ml-1">
+                                      <span className="w-1 h-3 bg-slate-950 animate-pulse" />
+                                      <span className="w-1 h-2 bg-slate-950 animate-pulse delay-75" />
+                                      <span className="w-1 h-3.5 bg-slate-950 animate-pulse delay-150" />
+                                    </span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Play className="w-3.5 h-3.5 fill-current text-amber-400 ml-0.5" />
+                                    <span>Nghe thử</span>
+                                  </>
+                                )}
+                              </button>
+                              <p className="text-[10px] text-slate-400 italic line-clamp-1 max-w-[280px]">
+                                "{v.sampleText}"
+                              </p>
+                            </div>
+                          </td>
+
+                          {/* 5. Cột Chọn dùng */}
+                          <td className="py-3.5 px-3.5 text-center">
+                            {isCurrent ? (
+                              <span className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shadow-sm">
+                                <Check className="w-3.5 h-3.5" />
+                                <span>Đang Dùng</span>
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => handleSelectVoice(v.id)}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-amber-500 hover:bg-amber-400 text-slate-950 transition-all cursor-pointer shadow-md shadow-amber-500/20 active:scale-95"
+                              >
+                                <UserCheck className="w-3.5 h-3.5" />
+                                <span>Chọn dùng</span>
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-4 sm:px-6 bg-slate-950/80 border-t border-slate-800">
+              <div className="flex items-center gap-2 text-xs">
+                <span className="text-slate-400">Giọng đang chọn:</span>
+                <span className="font-bold text-amber-400">{selectedVoice.name}</span>
+                <span className="text-slate-500 font-mono">({selectedVoice.tag})</span>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleCloseVoiceModal}
+                className="px-5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-xl transition-colors cursor-pointer border border-slate-700"
+              >
+                Xác nhận & Đóng
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Code Snippet Modal */}
       {showApiModal && (
         <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
@@ -2034,9 +2519,14 @@ const { audio, sampleRate } = await tts.synthesize("Ca ca, lớn quá, thật nh
                   </div>
                   <div className="leading-tight">
                     <div className="flex items-center gap-2">
-                      <span className="text-xs font-bold text-white truncate max-w-[140px] sm:max-w-[180px]">
-                        {selectedVoice.name}
-                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setShowVoiceModal(true)}
+                        className="text-xs font-bold text-white hover:text-amber-300 truncate max-w-[140px] sm:max-w-[180px] transition-colors cursor-pointer text-left underline decoration-dotted decoration-amber-400/40 underline-offset-2 flex items-center gap-1"
+                        title="Bấm để mở bảng chọn giọng đọc"
+                      >
+                        <span>{selectedVoice.name}</span>
+                      </button>
                       <span
                         className={`px-2 py-0.5 rounded text-[10px] font-bold ${
                           activeJob?.status === 'running'
