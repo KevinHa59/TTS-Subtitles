@@ -1,47 +1,97 @@
+```bat
 @echo off
 chcp 65001 >nul
 setlocal enabledelayedexpansion
+cd /d "%~dp0"
 title Hoài My Piper TTS Server
 
+:MENU
+cls
 echo ====================================================================
-echo             KHỞI ĐỘNG HOÀI MY PIPER TTS (LOCAL PRODUCTION)
+echo                  HOAI MY PIPER TTS SERVER
 echo ====================================================================
 echo.
+echo   [1] Start App       - Khoi dong ung dung
+echo   [2] Build           - Build giao dien moi va khoi dong
+echo   [3] Exit            - Thoat
+echo.
+echo ====================================================================
+echo.
+echo Tu dong chon Start App sau 3 giay neu khong co thao tac...
+echo.
 
-:: 1. Kiểm tra node_modules
-if not exist "%~dp0node_modules" (
-    echo [CẢNH BÁO] Chưa tìm thấy thư mục node_modules.
-    echo Đang tự động chạy Setup.bat để chuẩn bị môi trường...
+choice /c 123 /n /t 3 /d 1 /m "Chon 1, 2 hoac 3: "
+
+if errorlevel 3 goto EXIT
+if errorlevel 2 goto BUILD
+if errorlevel 1 goto START
+
+:BUILD
+echo.
+echo ====================================================================
+echo Dang build frontend...
+echo ====================================================================
+call npm run build
+
+if errorlevel 1 (
     echo.
+    echo [LOI] Build that bai! Ung dung chua duoc khoi dong.
+    pause
+    goto MENU
+)
+
+echo.
+echo [THANH CONG] Build hoan tat!
+goto START
+
+:START
+echo.
+echo ====================================================================
+echo Dang chuan bi khoi dong ung dung...
+echo ====================================================================
+
+if not exist "node_modules" (
+    echo [CANH BAO] Chua co node_modules.
+    echo Dang chay Setup.bat...
     call "%~dp0Setup.bat"
+
+    if errorlevel 1 (
+        echo [LOI] Setup that bai!
+        pause
+        goto MENU
+    )
 )
 
-:: 2. Kiểm tra dist
-if not exist "%~dp0dist" (
-    echo [CẢNH BÁO] Chưa tìm thấy bản build frontend trong thư mục dist.
-    echo Đang thực hiện build frontend...
-    echo.
+if not exist "dist" (
+    echo [CANH BAO] Chua co thu muc dist.
+    echo Tu dong build frontend...
     call npm run build
+
+    if errorlevel 1 (
+        echo [LOI] Build that bai!
+        pause
+        goto MENU
+    )
 )
 
-:: 3. Kiểm tra xem cổng 3000 có đang bị chiếm dụng không
+echo.
+echo Dang kiem tra cong 3000...
+
 for /f "tokens=5" %%a in ('netstat -aon 2^>nul ^| findstr ":3000" ^| findstr "LISTENING"') do (
-    set OCCUPIED_PID=%%a
+    set "OCCUPIED_PID=%%a"
     if defined OCCUPIED_PID (
-        echo [THÔNG BÁO] Phát hiện tiến trình PID !OCCUPIED_PID! đang chạy trên cổng 3000.
-        echo Đang tự động giải phóng cổng 3000 để khởi động lại...
+        echo Phat hien PID !OCCUPIED_PID! dang su dung cong 3000.
+        echo Dang dong tien trinh nay...
         taskkill /f /pid !OCCUPIED_PID! >nul 2>nul
         timeout /t 1 >nul
     )
 )
 
-:: 4. Thiết lập biến môi trường
-set NODE_ENV=production
-set PORT=3000
-set PIPER_ESPEAK_BRIDGE=0
-set OPEN_BROWSER=1
+set "NODE_ENV=production"
+set "PORT=3000"
+set "PIPER_ESPEAK_BRIDGE=0"
+set "OPEN_BROWSER=1"
 
-:: Tự động nhận diện eSpeak NG để phát âm chuẩn tiếng Việt có dấu
 if exist "%ProgramFiles%\eSpeak NG\espeak-ng.exe" (
     set "PATH=%ProgramFiles%\eSpeak NG;!PATH!"
     if exist "%ProgramFiles%\eSpeak NG\espeak-ng-data" (
@@ -59,17 +109,19 @@ if exist "%ProgramFiles%\eSpeak NG\espeak-ng.exe" (
     )
 )
 
-echo Đang khởi động máy chủ local...
-echo Trình duyệt web sẽ tự động mở tại: http://localhost:3000
 echo.
-echo (Nhấp đúp "Stop-App.bat" hoặc đóng cửa sổ này khi muốn dừng ứng dụng)
+echo Server: http://localhost:3000
+echo Nhan Ctrl+C hoac dong cua so nay de dung ung dung.
 echo.
 
-:: 5. Chạy ứng dụng production
 call npm start
 
-if %errorlevel% neq 0 (
-    echo.
-    echo [LỖI] Máy chủ đã dừng hoặc gặp lỗi trong quá trình thực thi!
-    pause
-)
+echo.
+echo [THONG BAO] May chu da dung.
+pause
+goto MENU
+
+:EXIT
+echo Dang thoat...
+exit /b 0
+```

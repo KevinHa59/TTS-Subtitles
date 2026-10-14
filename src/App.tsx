@@ -36,7 +36,8 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Eye,
-  EyeOff
+  EyeOff,
+  UploadCloud
 } from 'lucide-react';
 
 import { SubtitleItem, TimelineJob, TimelineJobOptions, LogEntry } from './types/subtitles';
@@ -102,6 +103,13 @@ export default function App() {
     available: boolean;
     path?: string;
   } | null>(null);
+
+  // Drag & drop state for subtitles (Requirement 1)
+  const [isDragging, setIsDragging] = useState<boolean>(false);
+  const [isWindowDragging, setIsWindowDragging] = useState<boolean>(false);
+  const [dragFeedback, setDragFeedback] = useState<string | null>(null);
+  const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const effectiveBatchSize =
     batchSizeChoice === 'custom'
@@ -348,6 +356,15 @@ export default function App() {
     await fetch(`/api/subtitles/job/${activeJob.id}/start`, { method: 'POST' });
   };
 
+  const handlePauseResume = async () => {
+    if (!activeJob) return;
+    if (activeJob.status === 'running') {
+      await handlePauseJob();
+    } else if (activeJob.status === 'paused') {
+      await handleResumeJob();
+    }
+  };
+
   const handleCancelJob = async () => {
     if (!activeJob) return;
     await fetch(`/api/subtitles/job/${activeJob.id}/cancel`, { method: 'POST' });
@@ -456,9 +473,15 @@ export default function App() {
     }
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+  const processSubtitleFile = (file: File) => {
     if (!file) return;
+    const name = file.name.toLowerCase();
+    if (!name.endsWith('.srt') && !name.endsWith('.txt')) {
+      setDragFeedback('Vui lòng chọn hoặc kéo thả file phụ đề có đuôi .srt hoặc .txt');
+      setTimeout(() => setDragFeedback(null), 4000);
+      return;
+    }
+
     const reader = new FileReader();
     reader.onload = (evt) => {
       let content = evt.target?.result as string;
@@ -471,9 +494,88 @@ export default function App() {
         content = content.normalize('NFC');
         setSrtRawText(content);
         setActiveJob(null);
+        setUploadedFileName(file.name);
+        setDragFeedback(`Đã nạp file: ${file.name}`);
+        setTimeout(() => setDragFeedback(null), 3500);
       }
     };
     reader.readAsText(file, 'utf-8');
+  };
+
+  // Window-level drag & drop listener for smooth UX
+  useEffect(() => {
+    let dragCounter = 0;
+    const handleWindowDragEnter = (e: DragEvent) => {
+      e.preventDefault();
+      dragCounter++;
+      if (e.dataTransfer?.types?.includes('Files')) {
+        setIsWindowDragging(true);
+      }
+    };
+    const handleWindowDragOver = (e: DragEvent) => {
+      e.preventDefault();
+      if (e.dataTransfer) {
+        e.dataTransfer.dropEffect = 'copy';
+      }
+    };
+    const handleWindowDragLeave = (e: DragEvent) => {
+      e.preventDefault();
+      dragCounter--;
+      if (dragCounter <= 0) {
+        dragCounter = 0;
+        setIsWindowDragging(false);
+      }
+    };
+    const handleWindowDrop = (e: DragEvent) => {
+      e.preventDefault();
+      dragCounter = 0;
+      setIsWindowDragging(false);
+      const files = e.dataTransfer?.files;
+      if (files && files.length > 0) {
+        processSubtitleFile(files[0]);
+      }
+    };
+
+    window.addEventListener('dragenter', handleWindowDragEnter);
+    window.addEventListener('dragover', handleWindowDragOver);
+    window.addEventListener('dragleave', handleWindowDragLeave);
+    window.addEventListener('drop', handleWindowDrop);
+    return () => {
+      window.removeEventListener('dragenter', handleWindowDragEnter);
+      window.removeEventListener('dragover', handleWindowDragOver);
+      window.removeEventListener('dragleave', handleWindowDragLeave);
+      window.removeEventListener('drop', handleWindowDrop);
+    };
+  }, []);
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      processSubtitleFile(file);
+      e.target.value = '';
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+    const files = e.dataTransfer.files;
+    if (files && files.length > 0) {
+      processSubtitleFile(files[0]);
+    }
   };
 
   // Single TTS synthesis (Tab 2)
@@ -622,7 +724,7 @@ export default function App() {
       </header>
 
       {/* Main Container */}
-      <main className="flex-1 max-w-[1680px] w-full mx-auto px-3 sm:px-6 py-6 space-y-6">
+      <main className="flex-1 max-w-[1680px] w-full mx-auto px-3 sm:px-6 py-6 pb-36 sm:pb-44 space-y-6">
         {/* ========================================================= */}
         {/* TAB 1: SUBTITLE TIMELINE SYNCHRONIZATION STUDIO */}
         {/* ========================================================= */}
@@ -712,24 +814,78 @@ export default function App() {
                   )}
                 </div>
 
-                {/* 2. Upload Subtitle & Presets Card */}
+                {/* 2. Upload Subtitle & Presets Card (Requirement 1: Kéo thả phụ đề) */}
                 <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 shadow-xl space-y-3">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
                       <FileText className="w-4 h-4 text-amber-400" />
                       Tải tệp phụ đề & Mẫu
                     </span>
-                    <label className="cursor-pointer inline-flex items-center gap-1.5 px-3 py-1 bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold rounded-lg shadow transition-colors">
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="cursor-pointer inline-flex items-center gap-1.5 px-3 py-1 bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold rounded-lg shadow transition-colors"
+                    >
                       <Upload className="w-3.5 h-3.5" />
-                      <span>Chọn file .SRT</span>
-                      <input
-                        type="file"
-                        accept=".srt,.txt"
-                        onChange={handleFileUpload}
-                        className="hidden"
-                      />
-                    </label>
+                      <span>Chọn file</span>
+                    </button>
                   </div>
+
+                  {/* Drag and Drop Zone */}
+                  <div
+                    onDragOver={handleDragOver}
+                    onDragLeave={handleDragLeave}
+                    onDrop={handleDrop}
+                    onClick={() => fileInputRef.current?.click()}
+                    className={`relative border-2 border-dashed rounded-xl p-4 text-center transition-all cursor-pointer select-none group ${
+                      isDragging
+                        ? 'border-amber-400 bg-amber-500/15 scale-[1.01] shadow-lg shadow-amber-500/20 ring-2 ring-amber-400/40'
+                        : 'border-slate-700 hover:border-amber-500/60 hover:bg-slate-950/70 bg-slate-950/40'
+                    }`}
+                  >
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept=".srt,.txt"
+                      onChange={handleFileUpload}
+                      className="hidden"
+                    />
+                    <div className="flex flex-col items-center gap-1.5">
+                      <div
+                        className={`w-9 h-9 rounded-xl flex items-center justify-center transition-transform ${
+                          isDragging
+                            ? 'bg-amber-500 text-slate-950 scale-110'
+                            : 'bg-slate-800/80 text-amber-400 group-hover:scale-105'
+                        }`}
+                      >
+                        <UploadCloud className="w-5 h-5" />
+                      </div>
+                      <div className="text-xs font-semibold text-white">
+                        {isDragging ? 'Thả file phụ đề vào đây...' : 'Kéo thả file .SRT hoặc .TXT vào đây'}
+                      </div>
+                      <div className="text-[11px] text-slate-400">
+                        hoặc <span className="text-amber-400 underline font-medium">bấm để duyệt file từ máy</span>
+                      </div>
+                      {dragFeedback && (
+                        <div className="mt-1 text-[11px] text-emerald-300 font-medium px-2.5 py-0.5 bg-emerald-500/15 rounded-lg border border-emerald-500/30 animate-pulse">
+                          ✓ {dragFeedback}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* File status badge if loaded */}
+                  {uploadedFileName && (
+                    <div className="flex items-center justify-between p-2.5 bg-amber-500/10 border border-amber-500/25 rounded-xl text-xs">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <FileText className="w-4 h-4 text-amber-400 shrink-0" />
+                        <span className="truncate text-slate-200 font-medium text-xs">{uploadedFileName}</span>
+                      </div>
+                      <span className="text-[11px] text-amber-300 font-mono font-bold bg-amber-500/20 px-2 py-0.5 rounded border border-amber-500/30 shrink-0">
+                        {subtitles.length} câu
+                      </span>
+                    </div>
+                  )}
 
                   {/* Preset chips */}
                   <div className="space-y-1.5">
@@ -739,9 +895,10 @@ export default function App() {
                         type="button"
                         onClick={() => {
                           setSrtRawText(SAMPLE_PROMPT_SRT);
+                          setUploadedFileName('Mẫu Prompt (2 câu)');
                           setActiveJob(null);
                         }}
-                        className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs transition-colors border border-slate-700/60"
+                        className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs transition-colors border border-slate-700/60 cursor-pointer"
                       >
                         Prompt (2 câu)
                       </button>
@@ -749,9 +906,10 @@ export default function App() {
                         type="button"
                         onClick={() => {
                           setSrtRawText(SAMPLE_DIALOGUE_SRT);
+                          setUploadedFileName('Hội thoại Phim (8 câu)');
                           setActiveJob(null);
                         }}
-                        className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs transition-colors border border-slate-700/60"
+                        className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs transition-colors border border-slate-700/60 cursor-pointer"
                       >
                         Hội thoại Phim (8 câu)
                       </button>
@@ -759,9 +917,10 @@ export default function App() {
                         type="button"
                         onClick={() => {
                           setSrtRawText(SAMPLE_TEST_50_SRT);
+                          setUploadedFileName('Bài giảng Test (50 câu)');
                           setActiveJob(null);
                         }}
-                        className="px-2.5 py-1 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 rounded-lg text-xs transition-colors border border-amber-500/30 font-medium"
+                        className="px-2.5 py-1 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 rounded-lg text-xs transition-colors border border-amber-500/30 font-medium cursor-pointer"
                         title="Kiểm thử tải lớn 50 câu"
                       >
                         Bài giảng (50 câu)
@@ -1040,110 +1199,40 @@ export default function App() {
               </div>
 
               {/* ------------------------------------------------------- */}
-              {/* 1. TIẾN ĐỘ XỬ LÝ TỔNG THỂ                               */}
+              {/* 1. CHI TIẾT TIẾN TRÌNH XỬ LÝ & 9 GIAI ĐOẠN              */}
+              {/* (Tiến độ tổng thể, % và nút xử lý đã tách vào thanh dock đáy) */}
               {/* ------------------------------------------------------- */}
-              <div className="bg-slate-900/95 border border-slate-800 rounded-2xl p-5 shadow-2xl space-y-5">
-                {/* Overall Progress Header */}
-                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+              <div className="bg-slate-900/95 border border-slate-800 rounded-2xl p-5 shadow-2xl space-y-4">
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-slate-800/80 pb-3">
                   <div>
-                    <div className="flex items-center gap-2 flex-wrap">
+                    <div className="flex items-center gap-2">
                       <h2 className="text-base font-semibold text-white">
-                        Tiến độ xử lý tổng thể:
+                        Chi Tiết Xử Lý & Đo Lường Timeline
                       </h2>
-                      <span className="text-xl font-bold font-mono text-amber-400">
-                        {activeJob?.overallProgress.percent ?? 0}%
-                      </span>
-                      <span className="text-xs text-slate-400 font-mono">
-                        ({activeJob?.overallProgress.completed ?? 0}/{subtitles.length} câu hoàn tất)
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                        activeJob?.status === 'running'
+                          ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30 animate-pulse'
+                          : activeJob?.status === 'completed'
+                          ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                          : activeJob?.status === 'paused'
+                          ? 'bg-sky-500/20 text-sky-300 border border-sky-500/30'
+                          : 'bg-slate-800 text-slate-300 border border-slate-700'
+                      }`}>
+                        {activeJob?.status === 'running' && 'Đang chạy song song'}
+                        {activeJob?.status === 'completed' && 'Đã hoàn thành'}
+                        {activeJob?.status === 'paused' && 'Đang tạm dừng'}
+                        {(!activeJob || activeJob?.status === 'idle') && 'Chờ bắt đầu'}
                       </span>
                     </div>
                     <p className="text-xs text-slate-400 mt-0.5">
-                      {activeJob?.status === 'running' && 'Đang đồng bộ giọng đọc Hoài My theo timeline...'}
-                      {activeJob?.status === 'completed' && 'Hoàn thành tất cả các câu và đã ghép file master!'}
-                      {activeJob?.status === 'paused' && 'Đang tạm dừng.'}
-                      {activeJob?.status === 'idle' && 'Sẵn sàng bắt đầu xử lý.'}
+                      Thanh tiến độ, % hoàn thành và nút bắt đầu xử lý được ghim cố định ở thanh đáy màn hình (Sticky Bottom Bar).
                     </p>
                   </div>
 
-                  {/* Control Action Buttons */}
-                  <div className="flex items-center gap-2 flex-wrap">
-                    {(!activeJob || activeJob.status === 'idle' || activeJob.status === 'completed') && (
-                      <button
-                        type="button"
-                        onClick={handleStartProcessing}
-                        disabled={subtitles.length === 0}
-                        className="px-4 py-2 bg-gradient-to-r from-amber-500 to-rose-600 hover:from-amber-400 hover:to-rose-500 text-slate-950 font-bold text-xs rounded-xl shadow-lg shadow-amber-500/20 flex items-center gap-1.5 transition-transform active:scale-95 disabled:opacity-50 cursor-pointer"
-                      >
-                        <Sparkles className="w-4 h-4 text-slate-950" />
-                        <span>{activeJob?.status === 'completed' ? 'Chạy Lại Toàn Bộ' : 'Bắt Đầu Xử Lý'}</span>
-                      </button>
-                    )}
-
-                    {activeJob?.status === 'running' && (
-                      <>
-                        <button
-                          type="button"
-                          onClick={handlePauseJob}
-                          className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-amber-400 font-semibold text-xs rounded-xl border border-slate-700 flex items-center gap-1.5 cursor-pointer"
-                        >
-                          <Pause className="w-3.5 h-3.5" />
-                          <span>Tạm Dừng</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={handleCancelJob}
-                          className="px-3 py-2 bg-slate-800 hover:bg-rose-950 text-rose-400 font-semibold text-xs rounded-xl border border-slate-700 flex items-center gap-1.5 cursor-pointer"
-                        >
-                          <Square className="w-3.5 h-3.5" />
-                          <span>Hủy Bỏ</span>
-                        </button>
-                      </>
-                    )}
-
-                    {activeJob?.status === 'paused' && (
-                      <button
-                        type="button"
-                        onClick={handleResumeJob}
-                        className="px-4 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-xl flex items-center gap-1.5 shadow-md cursor-pointer"
-                      >
-                        <Play className="w-3.5 h-3.5 fill-current" />
-                        <span>Tiếp Tục</span>
-                      </button>
-                    )}
-
-                    {activeJob && (activeJob.overallProgress.failed > 0 || activeJob.items.some((i) => i.status === 'failed')) && (
-                      <button
-                        type="button"
-                        onClick={handleRetryFailed}
-                        className="px-3 py-2 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 font-medium text-xs rounded-xl border border-rose-500/40 flex items-center gap-1.5 cursor-pointer"
-                      >
-                        <RotateCcw className="w-3.5 h-3.5" />
-                        <span>Thử Lại Câu Lỗi ({activeJob.overallProgress.failed})</span>
-                      </button>
-                    )}
-
-                    {activeJob && (
-                      <button
-                        type="button"
-                        onClick={handleResetJob}
-                        className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white font-medium text-xs rounded-xl border border-slate-700 flex items-center gap-1.5 transition-colors cursor-pointer"
-                        title="Xóa dữ liệu tạm và bắt đầu lại từ đầu"
-                      >
-                        <RotateCcw className="w-3.5 h-3.5" />
-                        <span>Bắt Đầu Mới / Dọn Dẹp</span>
-                      </button>
-                    )}
+                  <div className="flex items-center gap-2 text-xs font-mono text-slate-400 bg-slate-950 px-3 py-1.5 rounded-xl border border-slate-800">
+                    <span>Batch: <strong className="text-amber-400">{activeJob?.options.batchSize ?? effectiveBatchSize} câu/đợt</strong></span>
                   </div>
                 </div>
-
-                {/* Progress Bar (0% to 100%) */}
-                <div className="space-y-1.5">
-                  <div className="w-full bg-slate-800/80 rounded-full h-3 overflow-hidden p-0.5 border border-slate-700/60">
-                    <div
-                      className="h-full bg-gradient-to-r from-amber-500 via-rose-500 to-emerald-400 rounded-full transition-all duration-300"
-                      style={{ width: `${activeJob?.overallProgress.percent ?? 0}%` }}
-                    />
-                  </div>
 
                   {/* Batch & Concurrency Metrics Strip */}
                   <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 pt-1 text-xs font-mono">
@@ -1201,7 +1290,6 @@ export default function App() {
                       )}
                     </div>
                   )}
-                </div>
 
                 {/* 9 Stages Visual Tracker (Collapsible) */}
                 <div className="pt-2 border-t border-slate-800/80">
@@ -1875,7 +1963,7 @@ const { audio, sampleRate } = await tts.synthesize("Ca ca, lớn quá, thật nh
       )}
 
       {/* Footer */}
-      <footer className="border-t border-slate-900 py-6 mt-12 bg-slate-950/80 text-xs text-slate-400">
+      <footer className="border-t border-slate-900 py-6 mt-12 mb-20 bg-slate-950/80 text-xs text-slate-400">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 flex flex-col sm:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-2">
             <span>Hoài My Piper TTS Studio</span>
@@ -1887,6 +1975,245 @@ const { audio, sampleRate } = await tts.synthesize("Ca ca, lớn quá, thật nh
           <div>Hỗ trợ tiếng Việt tự nhiên với chuẩn ngữ âm espeak-ng & FFmpeg atempo</div>
         </div>
       </footer>
+
+      {/* ========================================================= */}
+      {/* FULL-SCREEN DRAG & DROP OVERLAY (Requirement 1)            */}
+      {/* Kéo thả phụ đề vào bất kỳ đâu trên màn hình               */}
+      {/* ========================================================= */}
+      {isWindowDragging && (
+        <div
+          onDragOver={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+          }}
+          onDragLeave={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setIsWindowDragging(false);
+          }}
+          onDrop={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setIsWindowDragging(false);
+            const files = e.dataTransfer?.files;
+            if (files && files.length > 0) {
+              processSubtitleFile(files[0]);
+            }
+          }}
+          className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-md border-4 border-dashed border-amber-400 flex flex-col items-center justify-center gap-4 animate-in fade-in duration-150 p-6 select-none"
+        >
+          <div className="w-20 h-20 rounded-3xl bg-amber-500 text-slate-950 flex items-center justify-center shadow-2xl shadow-amber-500/50 scale-110 animate-bounce">
+            <UploadCloud className="w-10 h-10" />
+          </div>
+          <div className="text-center space-y-1.5">
+            <h3 className="text-2xl font-black text-white">Thả tệp phụ đề vào đây</h3>
+            <p className="text-sm text-amber-300 font-medium">Hỗ trợ tệp phụ đề .SRT hoặc .TXT tiếng Việt</p>
+            <p className="text-xs text-slate-400">Hệ thống sẽ tự động phân tích và đồng bộ timeline ngay lập tức</p>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* STICKY BOTTOM BAR (Requirement 2)                          */}
+      {/* Thanh dock luôn ghim đáy màn hình như Navbar dưới đáy     */}
+      {/* Tách riêng: Progress bar, % hoàn thành & Nút bắt đầu xử lý*/}
+      {/* ========================================================= */}
+      {activeTab === 'subtitles' && (
+        <div
+          role="region"
+          aria-label="Thanh điều khiển tiến độ và xử lý phụ đề"
+          className="fixed bottom-0 left-0 right-0 z-40 bg-slate-950/95 backdrop-blur-xl border-t border-slate-800 shadow-[0_-12px_40px_rgba(0,0,0,0.85)]"
+        >
+          <div className="max-w-[1680px] mx-auto px-3 sm:px-6 py-2.5 sm:py-3.5">
+            <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 sm:gap-4">
+              {/* Vùng Trái: Thông tin Giọng đọc & Phụ đề & Trạng thái */}
+              <div className="flex items-center justify-between md:justify-start gap-3 shrink-0">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-amber-500/15 text-amber-400 border border-amber-500/25 flex items-center justify-center shrink-0">
+                    <Radio className="w-4 h-4" />
+                  </div>
+                  <div className="leading-tight">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold text-white truncate max-w-[140px] sm:max-w-[180px]">
+                        {selectedVoice.name}
+                      </span>
+                      <span
+                        className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                          activeJob?.status === 'running'
+                            ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30 animate-pulse'
+                            : activeJob?.status === 'completed'
+                            ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                            : activeJob?.status === 'paused'
+                            ? 'bg-sky-500/20 text-sky-300 border border-sky-500/30'
+                            : 'bg-slate-800 text-slate-300 border border-slate-700'
+                        }`}
+                      >
+                        {activeJob?.status === 'running' && 'Đang chạy song song'}
+                        {activeJob?.status === 'completed' && 'Hoàn thành 100%'}
+                        {activeJob?.status === 'paused' && 'Đang tạm dừng'}
+                        {(!activeJob || activeJob?.status === 'idle') && 'Sẵn sàng'}
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-slate-400 font-mono mt-0.5 flex items-center gap-2">
+                      <span className="text-amber-400 font-semibold">{subtitles.length} câu</span>
+                      <span>·</span>
+                      <span>Batch {activeJob?.options.batchSize ?? effectiveBatchSize} câu/đợt</span>
+                      {uploadedFileName && (
+                        <>
+                          <span>·</span>
+                          <span className="truncate max-w-[120px] text-slate-300 hidden sm:inline" title={uploadedFileName}>
+                            {uploadedFileName}
+                          </span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Vùng Giữa: Progress Bar & Phần Trăm Hoàn Thành (Requirement 2) */}
+              <div className="flex-1 min-w-0 max-w-2xl mx-auto w-full space-y-1.5 px-0 md:px-4">
+                <div className="flex items-center justify-between text-xs font-mono">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm sm:text-base font-extrabold text-amber-400">
+                      {completionPercent}%
+                    </span>
+                    <span className="text-slate-400 text-[11px]">
+                      ({completedSentencesCount}/{totalSentencesCount} câu hoàn tất)
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-slate-400">
+                    {activeJob?.status === 'running' && (
+                      <span className="text-amber-400 font-medium">
+                        {activeJob.overallProgress.estimatedRemainingMs !== undefined
+                          ? `Còn ~${(activeJob.overallProgress.estimatedRemainingMs / 1000).toFixed(0)}s`
+                          : `Đã chạy ${(activeJob.overallProgress.elapsedMs / 1000).toFixed(1)}s`}
+                      </span>
+                    )}
+                    {activeJob?.status === 'completed' && (
+                      <span className="text-emerald-400 flex items-center gap-1 font-semibold">
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        Master audio sẵn sàng
+                      </span>
+                    )}
+                    {(!activeJob || activeJob?.status === 'idle') && (
+                      <span className="text-slate-400">Chờ bắt đầu xử lý</span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Thanh Tiến Độ Hoàn Thành (Progress Bar) */}
+                <div className="w-full bg-slate-900 rounded-full h-3 overflow-hidden p-0.5 border border-slate-700/80 shadow-inner relative">
+                  <div
+                    className={`h-full rounded-full transition-all duration-300 relative ${
+                      activeJob?.status === 'completed'
+                        ? 'bg-gradient-to-r from-emerald-500 to-emerald-400 shadow-[0_0_14px_rgba(16,185,129,0.5)]'
+                        : 'bg-gradient-to-r from-amber-500 via-amber-400 to-emerald-400 shadow-[0_0_14px_rgba(245,158,11,0.5)]'
+                    }`}
+                    style={{ width: `${Math.min(100, Math.max(0, completionPercent))}%` }}
+                  >
+                    {activeJob?.status === 'running' && (
+                      <div className="absolute inset-0 bg-white/25 animate-pulse" />
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Vùng Phải: Nút Bắt Đầu Xử Lý & Các Điều Khiển Phụ (Requirement 2) */}
+              <div className="flex items-center justify-end gap-2 shrink-0">
+                {activeJob?.status === 'running' ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={handlePauseResume}
+                      className="px-3.5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+                      title="Tạm dừng tiến trình"
+                    >
+                      <Pause className="w-4 h-4 text-amber-400" />
+                      <span className="hidden sm:inline">Tạm dừng</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleCancelJob}
+                      className="px-3 py-2.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+                      title="Hủy bỏ tiến trình"
+                    >
+                      <Square className="w-3.5 h-3.5 text-rose-400 fill-current" />
+                      <span className="hidden sm:inline">Hủy</span>
+                    </button>
+                    <div className="px-4 py-2.5 bg-amber-500/20 border border-amber-500/40 text-amber-300 rounded-xl text-xs font-bold flex items-center gap-2 shadow-sm">
+                      <RefreshCw className="w-4 h-4 animate-spin text-amber-400" />
+                      <span>Đang xử lý ({completionPercent}%)</span>
+                    </div>
+                  </>
+                ) : activeJob?.status === 'paused' ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={handlePauseResume}
+                      className="px-4 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-lg shadow-emerald-500/20 transition-colors cursor-pointer"
+                    >
+                      <Play className="w-4 h-4 fill-current" />
+                      <span>Tiếp tục</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleCancelJob}
+                      className="px-3.5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+                    >
+                      <Square className="w-3.5 h-3.5 text-rose-400" />
+                      <span>Hủy</span>
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    {activeJob?.status === 'completed' && activeJob.masterAudio && (
+                      <button
+                        type="button"
+                        onClick={handlePlayMasterAudio}
+                        className="px-3.5 py-2.5 bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-emerald-500/40 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-md"
+                        title="Nghe file master hoàn chỉnh"
+                      >
+                        {masterPlaying ? (
+                          <>
+                            <Pause className="w-4 h-4 fill-current" />
+                            <span>Dừng</span>
+                          </>
+                        ) : (
+                          <>
+                            <Play className="w-4 h-4 fill-current text-emerald-400" />
+                            <span>Nghe Master</span>
+                          </>
+                        )}
+                      </button>
+                    )}
+
+                    {/* Nút Bắt Đầu Xử Lý Chính */}
+                    <button
+                      type="button"
+                      disabled={subtitles.length === 0}
+                      onClick={handleStartProcessing}
+                      className="px-5 sm:px-6 py-2.5 bg-gradient-to-r from-amber-500 to-amber-400 hover:from-amber-400 hover:to-amber-300 active:scale-95 text-slate-950 font-black rounded-xl text-xs sm:text-sm flex items-center gap-2 shadow-xl shadow-amber-500/25 disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none transition-all cursor-pointer"
+                    >
+                      {activeJob?.status === 'completed' ? (
+                        <>
+                          <RotateCcw className="w-4 h-4" />
+                          <span>Chạy Lại ({subtitles.length} câu)</span>
+                        </>
+                      ) : (
+                        <>
+                          <Play className="w-4 h-4 fill-current ml-0.5" />
+                          <span>Bắt Đầu Xử Lý ({subtitles.length} câu)</span>
+                        </>
+                      )}
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
