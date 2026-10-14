@@ -89,6 +89,83 @@ export const AVAILABLE_MODELS: VoiceDefinition[] = [
     recommended: false,
   },
   {
+    id: "hub:huyenngoc-vietnamese-vi-medium-ljkjhi",
+    modelId: "hub:huyenngoc-vietnamese-vi-medium-ljkjhi",
+    name: "Huyền Ngọc",
+    tag: "Nữ · Miền Bắc · Tự nhiên, gần gũi",
+    gender: "female",
+    description: "Âm sắc miền Bắc tự nhiên, gần gũi, cuốn hút người nghe.",
+    sampleText:
+      "Xin kính chào quý vị và các bạn đã quay trở lại với chương trình ngày hôm nay.",
+    recommended: false,
+  },
+  {
+    id: "hub:duy-onyx-vietnamese-vi-medium",
+    modelId: "hub:duy-onyx-vietnamese-vi-medium",
+    name: "Duy Onyx",
+    tag: "Nam · Miền Bắc · Tự nhiên, gần gũi",
+    gender: "male",
+    description: "Âm sắc miền Bắc tự nhiên, gần gũi, cuốn hút người nghe.",
+    sampleText:
+      "Xin kính chào quý vị và các bạn đã quay trở lại với chương trình ngày hôm nay.",
+    recommended: false,
+  },
+  {
+    id: "hub:doanhdoanh-vietnamese-vi-congchualong",
+    modelId: "hub:doanhdoanh-vietnamese-vi-congchualong",
+    name: "Doanh Doanh",
+    tag: "Nữ · Miền Nam · Tự nhiên, gần gũi",
+    gender: "female",
+    description: "Âm sắc miền Nam tự nhiên, gần gũi, cuốn hút người nghe.",
+    sampleText:
+      "Xin kính chào quý vị và các bạn đã quay trở lại với chương trình ngày hôm nay.",
+    recommended: false,
+  },
+  {
+    id: "hub:dungdien-vietnamese-vi-congchualong",
+    modelId: "hub:dungdien-vietnamese-vi-congchualong",
+    name: "Dung Dien",
+    tag: "Nữ · Miền Nam · Tự nhiên, gần gũi",
+    gender: "female",
+    description: "Âm sắc miền Nam tự nhiên, gần gũi, cuốn hút người nghe.",
+    sampleText:
+      "Xin kính chào quý vị và các bạn đã quay trở lại với chương trình ngày hôm nay.",
+    recommended: false,
+  },
+  {
+    id: "hub:yan3d-vietnamese-vi-medium",
+    modelId: "hub:yan3d-vietnamese-vi-medium",
+    name: "Yan 3D",
+    tag: "Nữ · Miền Nam · Tự nhiên, gần gũi",
+    gender: "female",
+    description: "Âm sắc miền Nam tự nhiên, gần gũi, cuốn hút người nghe.",
+    sampleText:
+      "Xin kính chào quý vị và các bạn đã quay trở lại với chương trình ngày hôm nay.",
+    recommended: false,
+  },
+  {
+    id: "hub:ngoc-ngan-vietnamese-vi-medium",
+    modelId: "hub:ngoc-ngan-vietnamese-vi-medium",
+    name: "Nguyễn Ngọc Ngạn",
+    tag: "Nữ · Miền Bắc 54 · Tự nhiên, gần gũi",
+    gender: "female",
+    description: "Âm sắc miền Nam tự nhiên, gần gũi, cuốn hút người nghe.",
+    sampleText:
+      "Xin kính chào quý vị và các bạn đã quay trở lại với chương trình ngày hôm nay.",
+    recommended: false,
+  },
+  {
+    id: "hub:ngochuyen-vietnamese-vi-medium",
+    modelId: "hub:ngochuyen-vietnamese-vi-medium",
+    name: "Ngọc Huyền",
+    tag: "Nữ · Miền Bắc· Tự nhiên, gần gũi",
+    gender: "female",
+    description: "Âm sắc miền Nam tự nhiên, gần gũi, cuốn hút người nghe.",
+    sampleText:
+      "Xin kính chào quý vị và các bạn đã quay trở lại với chương trình ngày hôm nay.",
+    recommended: false,
+  },
+  {
     id: `${CSA_VOICE_MODEL_ID}:speaker-0`,
     modelId: CSA_VOICE_MODEL_ID,
     speakerId: 0,
