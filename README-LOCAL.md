@@ -1,6 +1,6 @@
 # Hướng Dẫn Cài Đặt & Sử Dụng Hoài My Piper TTS Trên Windows
 
-Ứng dụng chuyển đổi phụ đề SRT/TXT thành Audio TTS tiếng Việt chất lượng cao với nhiều giọng Piper, bao gồm **Hoài My** (`hub:hoaimy-vietnamese-vi-medium-ljkjhi`) và 5 giọng **CSA Voice v3**: Ngọc Lan, Minh Anh, Quang Huy, Thu Hà và Yến Nhi. Ứng dụng tự động điều chỉnh tốc độ đọc theo timestamp, ghép nối timeline âm thanh, giữ lại audio từng câu và dọn dữ liệu khi người dùng yêu cầu.
+Ứng dụng chuyển đổi phụ đề SRT/TXT thành Audio TTS tiếng Việt chất lượng cao với nhiều giọng Piper hoạt động 100% Offline, bao gồm **Hoài My** (`local:hoaimy-vietnamese-vi-medium-ljkjhi`) và 5 giọng **CSA Voice v3**: Ngọc Lan, Minh Anh, Quang Huy, Thu Hà và Yến Nhi. Tất cả mô hình nạp trực tiếp từ thư mục `models/` không cần kết nối internet. Ứng dụng tự động điều chỉnh tốc độ đọc theo timestamp, ghép nối timeline âm thanh, giữ lại audio từng câu và dọn dữ liệu khi người dùng yêu cầu.
 
 ---
 

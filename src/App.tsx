@@ -67,6 +67,9 @@ interface VoiceOption {
   description: string;
   sampleText: string;
   recommended: boolean;
+  hasLocalFile?: boolean;
+  localFilePath?: string | null;
+  isLoaded?: boolean;
 }
 
 export default function App() {
@@ -76,7 +79,7 @@ export default function App() {
   // Voices
   const [voices, setVoices] = useState<VoiceOption[]>([]);
   const [selectedVoiceId, setSelectedVoiceId] = useState<string>(
-    'hub:hoaimy-vietnamese-vi-medium-ljkjhi'
+    'local:hoaimy-vietnamese-vi-medium-ljkjhi'
   );
 
   // Voice Selection Panel (Modal Table) & Preview States
@@ -742,12 +745,12 @@ export default function App() {
   const selectedVoice =
     voices.find((v) => v.id === selectedVoiceId) ||
     voices[0] || {
-      id: 'hub:hoaimy-vietnamese-vi-medium-ljkjhi',
-      modelId: 'hub:hoaimy-vietnamese-vi-medium-ljkjhi',
-      name: 'Hoài My',
-      tag: 'Nữ · Miền Bắc',
+      id: 'local:hoaimy-vietnamese-vi-medium-ljkjhi',
+      modelId: 'local:hoaimy-vietnamese-vi-medium-ljkjhi',
+      name: 'Hoài My (Khuyên Dùng)',
+      tag: 'Nữ · Miền Bắc · Chuẩn & Truyền cảm (Offline)',
       gender: 'female',
-      description: 'Giọng đọc nữ tự nhiên chuẩn miền Bắc.',
+      description: 'Giọng đọc nữ tự nhiên chuẩn miền Bắc, 100% Offline.',
       sampleText: 'Xin chào, tôi là Hoài My.',
       recommended: true,
     };
@@ -1982,6 +1985,38 @@ export default function App() {
                 <span className="text-xs text-slate-400">{singleText.length} ký tự</span>
               </div>
 
+              {/* Voice Selector in Tab 2 */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 bg-slate-950/80 rounded-xl border border-slate-800 text-xs">
+                <div className="flex items-center gap-2.5">
+                  <div
+                    className={`w-7 h-7 rounded-lg flex items-center justify-center font-bold text-[11px] shrink-0 ${
+                      selectedVoice.gender === 'female'
+                        ? 'bg-rose-500/15 text-rose-300 border border-rose-500/30'
+                        : 'bg-sky-500/15 text-sky-300 border border-sky-500/30'
+                    }`}
+                  >
+                    {selectedVoice.gender === 'female' ? 'Nữ' : 'Nam'}
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-bold text-white">{selectedVoice.name}</span>
+                      <span className="text-[10px] text-emerald-400 bg-emerald-500/15 px-1.5 py-0.2 rounded border border-emerald-500/30 font-medium">
+                        Offline 100%
+                      </span>
+                    </div>
+                    <span className="text-[11px] text-slate-400 font-mono">{selectedVoice.tag}</span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowVoiceModal(true)}
+                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-amber-400 font-semibold rounded-lg border border-slate-700 hover:border-amber-500/40 transition-colors flex items-center gap-1.5 self-start sm:self-auto cursor-pointer"
+                >
+                  <UserCheck className="w-3.5 h-3.5" />
+                  <span>Đổi giọng đọc ({voices.length} giọng)</span>
+                </button>
+              </div>
+
               <textarea
                 value={singleText}
                 onChange={(e) => setSingleText(e.target.value)}
@@ -2028,7 +2063,7 @@ export default function App() {
                 type="button"
                 disabled={singleIsLoading || !singleText.trim()}
                 onClick={handleSingleSynthesize}
-                className="w-full py-3 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-xl text-xs flex items-center justify-center gap-2 shadow-lg shadow-amber-500/20 disabled:opacity-50"
+                className="w-full py-3 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-xl text-xs flex items-center justify-center gap-2 shadow-lg shadow-amber-500/20 disabled:opacity-50 cursor-pointer"
               >
                 {singleIsLoading ? (
                   <>
@@ -2038,7 +2073,7 @@ export default function App() {
                 ) : (
                   <>
                     <Sparkles className="w-4 h-4" />
-                    <span>Tạo Giọng Đọc Hoài My ({singleFormat.toUpperCase()})</span>
+                    <span>Tạo Giọng Đọc {selectedVoice.name} ({singleFormat.toUpperCase()})</span>
                   </>
                 )}
               </button>
@@ -2095,9 +2130,13 @@ export default function App() {
                     <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
                       Piper TTS ({voices.length} giọng)
                     </span>
+                    <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                      100% Offline (Không Cần Mạng)
+                    </span>
                   </div>
                   <p className="text-xs text-slate-400 mt-0.5">
-                    Nghe thử giọng mẫu trực tiếp và chọn giọng đọc chuẩn ngữ điệu phù hợp nhất cho video của bạn.
+                    Toàn bộ mô hình chạy trực tiếp từ thư mục local <code className="text-amber-400 font-mono">/models</code>. Nghe thử mẫu âm thanh và chọn giọng đọc chuẩn ngữ điệu.
                   </p>
                 </div>
               </div>
@@ -2241,6 +2280,9 @@ export default function App() {
                                       Khuyên dùng
                                     </span>
                                   )}
+                                  <span className="px-1.5 py-0.2 rounded text-[9px] font-medium bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                                    Offline
+                                  </span>
                                   {isCurrent && (
                                     <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1">
                                       <Check className="w-2.5 h-2.5" />
@@ -2396,10 +2438,10 @@ export default function App() {
             <div className="relative bg-slate-950 rounded-xl border border-slate-800 p-4 font-mono text-xs text-emerald-300 overflow-x-auto">
               <pre>{`import { PiperNativeTTS } from "pipertts";
 
-// Khởi tạo và nạp mô hình Hoài My tiếng Việt
+// Khởi tạo và nạp mô hình Hoài My tiếng Việt 100% Offline (Không cần mạng)
 const tts = await PiperNativeTTS.load({
-  model: "hub:hoaimy-vietnamese-vi-medium-ljkjhi",
-  modelsDir: "./models",
+  modelPath: "./models/hoaimy-vietnamese-vi-medium-ljkjhi.onnx",
+  espeakBinary: "espeak-ng",
 });
 
 // Chuyển đổi văn bản thành giọng nói
@@ -2413,7 +2455,7 @@ const { audio, sampleRate } = await tts.synthesize("Ca ca, lớn quá, thật nh
                 type="button"
                 onClick={() => {
                   navigator.clipboard.writeText(
-                    `import { PiperNativeTTS } from "pipertts";\n\nconst tts = await PiperNativeTTS.load({\n  model: "hub:hoaimy-vietnamese-vi-medium-ljkjhi",\n  modelsDir: "./models",\n});\n\nconst { audio } = await tts.synthesize("Ca ca, lớn quá, thật nhiều đồ của tiên gia.");`
+                    `import { PiperNativeTTS } from "pipertts";\n\n// Nạp mô hình 100% Offline không cần internet\nconst tts = await PiperNativeTTS.load({\n  modelPath: "./models/hoaimy-vietnamese-vi-medium-ljkjhi.onnx",\n  espeakBinary: "espeak-ng",\n});\n\nconst { audio } = await tts.synthesize("Ca ca, lớn quá, thật nhiều đồ của tiên gia.");`
                   );
                   setCopiedCode(true);
                   setTimeout(() => setCopiedCode(false), 2000);
@@ -2522,10 +2564,13 @@ const { audio, sampleRate } = await tts.synthesize("Ca ca, lớn quá, thật nh
                       <button
                         type="button"
                         onClick={() => setShowVoiceModal(true)}
-                        className="text-xs font-bold text-white hover:text-amber-300 truncate max-w-[140px] sm:max-w-[180px] transition-colors cursor-pointer text-left underline decoration-dotted decoration-amber-400/40 underline-offset-2 flex items-center gap-1"
+                        className="text-xs font-bold text-white hover:text-amber-300 truncate max-w-[150px] sm:max-w-[220px] transition-colors cursor-pointer text-left flex items-center gap-1.5 group"
                         title="Bấm để mở bảng chọn giọng đọc"
                       >
-                        <span>{selectedVoice.name}</span>
+                        <span className="truncate group-hover:underline">{selectedVoice.name}</span>
+                        <span className="text-[10px] text-amber-400 font-semibold bg-amber-500/15 px-1.5 py-0.2 rounded border border-amber-500/30 group-hover:bg-amber-500/25 shrink-0">
+                          Đổi giọng
+                        </span>
                       </button>
                       <span
                         className={`px-2 py-0.5 rounded text-[10px] font-bold ${

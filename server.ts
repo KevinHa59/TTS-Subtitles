@@ -201,48 +201,121 @@ if (!fs.existsSync(JOBS_DIR)) {
 const modelCache = new Map<string, any>();
 const loadingPromises = new Map<string, Promise<any>>();
 
+// Resolve 100% local ONNX model path from models/ directory without any internet dependency
+function resolveLocalModelPath(modelId: string): string | null {
+  if (!modelId) return null;
+  const cleanId = modelId.replace(/^(local:|hub:)/, "").trim();
+  const localKey = `local:${cleanId}`;
+
+  // 1. Check mapping in LOCAL_MODEL_FILES
+  const mapped = LOCAL_MODEL_FILES[localKey] || LOCAL_MODEL_FILES[modelId];
+  if (mapped) {
+    const candidates = Array.isArray(mapped) ? mapped : [mapped];
+    for (const cand of candidates) {
+      const p = path.join(MODELS_DIR, cand);
+      if (fs.existsSync(p)) return p;
+    }
+  }
+
+  // 2. Check direct .onnx file in MODELS_DIR
+  const directPath = path.join(MODELS_DIR, `${cleanId}.onnx`);
+  if (fs.existsSync(directPath)) return directPath;
+
+  // 3. Scan MODELS_DIR for any .onnx file that matches cleanId or its variants
+  try {
+    const files = fs.readdirSync(MODELS_DIR);
+
+    // Exact name match case-insensitive
+    const exactMatch = files.find(
+      (f) => f.toLowerCase() === `${cleanId.toLowerCase()}.onnx`
+    );
+    if (exactMatch) return path.join(MODELS_DIR, exactMatch);
+
+    // Starts with cleanId
+    const prefixMatch = files.find(
+      (f) => f.toLowerCase().startsWith(cleanId.toLowerCase()) && f.endsWith(".onnx")
+    );
+    if (prefixMatch) return path.join(MODELS_DIR, prefixMatch);
+
+    // Contains cleanId base keyword
+    const baseName = cleanId.split("-")[0];
+    if (baseName && baseName.length >= 3) {
+      const baseMatch = files.find(
+        (f) => f.toLowerCase().includes(baseName.toLowerCase()) && f.endsWith(".onnx")
+      );
+      if (baseMatch) return path.join(MODELS_DIR, baseMatch);
+    }
+  } catch (err) {
+    console.error("[PiperTTS] Error scanning MODELS_DIR:", err);
+  }
+
+  // 4. Default fallback: check if Hoài My default model is available
+  const defaultCandidate = path.join(MODELS_DIR, "hoaimy-vietnamese-vi-medium-ljkjhi.onnx");
+  if (fs.existsSync(defaultCandidate)) {
+    console.warn(
+      `[PiperTTS] Không tìm thấy file .onnx riêng cho "${modelId}", tự động dùng mô hình Hoài My có sẵn để tiếp tục offline.`
+    );
+    return defaultCandidate;
+  }
+
+  return null;
+}
+
 async function getOrLoadModel(modelId: string) {
+  const cleanId = (modelId || "").replace(/^(local:|hub:)/, "").trim();
+  const normalizedModelId = `local:${cleanId}`;
+
+  if (modelCache.has(normalizedModelId)) {
+    return modelCache.get(normalizedModelId);
+  }
   if (modelCache.has(modelId)) {
     return modelCache.get(modelId);
   }
 
+  if (loadingPromises.has(normalizedModelId)) {
+    return await loadingPromises.get(normalizedModelId);
+  }
   if (loadingPromises.has(modelId)) {
     return await loadingPromises.get(modelId);
   }
 
   const loadPromise = (async () => {
-    console.log(`[PiperTTS] Loading model "${modelId}"...`);
+    console.log(`[PiperTTS] Loading local model "${normalizedModelId}" (input: ${modelId})...`);
     const startTime = Date.now();
     const espeakBin = resolveEspeakPath();
-    const localModelFile = LOCAL_MODEL_FILES[modelId];
-    try {
+    const localOnnxPath = resolveLocalModelPath(modelId);
+
+    if (localOnnxPath && fs.existsSync(localOnnxPath)) {
+      console.log(`[PiperTTS] Loading local ONNX file: "${localOnnxPath}" (100% offline, zero internet calls)`);
       const tts = await PiperNativeTTS.load({
-        ...(localModelFile
-          ? { modelPath: path.join(MODELS_DIR, localModelFile) }
-          : { model: modelId, modelsDir: MODELS_DIR }),
+        modelPath: localOnnxPath,
         espeakBinary: espeakBin,
       });
       console.log(
-        `[PiperTTS] Model "${modelId}" loaded successfully in ${Date.now() - startTime}ms (espeakBinary: ${espeakBin}).`,
+        `[PiperTTS] Local model "${normalizedModelId}" loaded successfully in ${Date.now() - startTime}ms (espeakBinary: ${espeakBin}).`,
       );
+      modelCache.set(normalizedModelId, tts);
       modelCache.set(modelId, tts);
       return tts;
-    } finally {
-      loadingPromises.delete(modelId);
     }
+
+    throw new Error(
+      `Không tìm thấy file mô hình (.onnx) cho "${modelId}" trong thư mục "${MODELS_DIR}". Vui lòng đảm bảo bạn đã lưu file .onnx vào thư mục models/ để sử dụng offline 100%.`
+    );
   })();
 
+  loadingPromises.set(normalizedModelId, loadPromise);
   loadingPromises.set(modelId, loadPromise);
   return await loadPromise;
 }
 
-// Preload the default Hoài My voice at server startup
+// Preload the default Hoài My voice at server startup (100% Offline)
 (async () => {
   try {
-    console.log("[PiperTTS] Preloading default model:", DEFAULT_MODEL);
+    console.log("[PiperTTS] Preloading default model (100% offline):", DEFAULT_MODEL);
     await getOrLoadModel(DEFAULT_MODEL);
     console.log(
-      "[PiperTTS] Default model Hoài My is ready for instant synthesis!",
+      "[PiperTTS] Default model Hoài My is ready for instant offline synthesis!",
     );
   } catch (err) {
     console.error("[PiperTTS] Error preloading default model:", err);
@@ -1389,10 +1462,18 @@ app.get("/api/voices", (req: Request, res: Response) => {
     defaultModel: DEFAULT_MODEL,
     espeakAvailable: checkEspeakAvailable(),
     espeakPath: resolveEspeakPath(),
-    voices: AVAILABLE_MODELS.map((v) => ({
-      ...v,
-      isLoaded: modelCache.has(v.modelId),
-    })),
+    voices: AVAILABLE_MODELS.map((v) => {
+      const cleanId = v.modelId.replace(/^(local:|hub:)/, "").trim();
+      const normalized = `local:${cleanId}`;
+      const isLoaded = modelCache.has(normalized) || modelCache.has(v.modelId);
+      const localPath = resolveLocalModelPath(v.modelId);
+      return {
+        ...v,
+        isLoaded,
+        hasLocalFile: !!(localPath && fs.existsSync(localPath)),
+        localFilePath: localPath ? path.basename(localPath) : null,
+      };
+    }),
   });
 });
 
