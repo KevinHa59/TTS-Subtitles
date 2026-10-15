@@ -1219,7 +1219,7 @@ export default function App() {
                         </div>
                         <input
                           type="range"
-                          min="1.1"
+                          min="0.9"
                           max="3.0"
                           step="0.05"
                           value={maxSpeed}
@@ -1230,7 +1230,7 @@ export default function App() {
                           }}
                           className="w-full accent-amber-500 h-1.5 bg-slate-800 rounded cursor-pointer"
                         />
-                        <span className="text-[10px] text-slate-400 block">Giới hạn tăng tốc tối đa (1.1x - 3.0x)</span>
+                        <span className="text-[10px] text-slate-400 block">Giới hạn tăng tốc tối đa (0.9x - 3.0x)</span>
                       </div>
 
                       {/* Min Speed */}
