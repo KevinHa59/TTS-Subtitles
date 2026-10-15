@@ -44,7 +44,11 @@ import {
   UserCheck,
   Bookmark,
   Save,
-  BookmarkCheck
+  BookmarkCheck,
+  Edit3,
+  FileJson,
+  FolderInput,
+  FolderOutput
 } from 'lucide-react';
 
 import { SubtitleItem, TimelineJob, TimelineJobOptions, LogEntry } from './types/subtitles';
@@ -213,6 +217,10 @@ export default function App() {
   const [presetFeedback, setPresetFeedback] = useState<string | null>(null);
   const [showSavePresetModal, setShowSavePresetModal] = useState<boolean>(false);
   const [newPresetName, setNewPresetName] = useState<string>('');
+  const [showPresetManagerModal, setShowPresetManagerModal] = useState<boolean>(false);
+  const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
+  const [editingPresetName, setEditingPresetName] = useState<string>('');
+  const importPresetsInputRef = useRef<HTMLInputElement | null>(null);
 
   // Layout expansion states (Requirement 3)
   const [isLeftPanelExpanded, setIsLeftPanelExpanded] = useState<boolean>(true);
@@ -761,21 +769,159 @@ export default function App() {
     setTimeout(() => setPresetFeedback(null), 3000);
   };
 
-  const handleDeletePreset = (presetId: string) => {
-    const preset = projectPresets.find((p) => p.id === presetId);
-    if (!preset || preset.isDefault) return;
+  const handleStartRenamePreset = (preset: ProjectPreset) => {
+    setEditingPresetId(preset.id);
+    setEditingPresetName(preset.name);
+  };
 
-    const updated = projectPresets.filter((p) => p.id !== presetId);
+  const handleSaveRenamePreset = (presetId: string) => {
+    const trimmed = editingPresetName.trim();
+    if (!trimmed) return;
+
+    const updated = projectPresets.map((p) => {
+      if (p.id === presetId) {
+        return { ...p, name: trimmed, isDefault: false };
+      }
+      return p;
+    });
+
     setProjectPresets(updated);
     try {
       localStorage.setItem('hoaimy_project_presets', JSON.stringify(updated));
     } catch {}
 
+    setEditingPresetId(null);
+    setEditingPresetName('');
+    setPresetFeedback(`Đã đổi tên cấu hình thành "${trimmed}"`);
+    setTimeout(() => setPresetFeedback(null), 3000);
+  };
+
+  const handleDeletePreset = (presetId: string) => {
+    const preset = projectPresets.find((p) => p.id === presetId);
+    if (!preset) return;
+
+    const updated = projectPresets.filter((p) => p.id !== presetId);
+    const finalPresets = updated.length > 0 ? updated : DEFAULT_PRESETS;
+    setProjectPresets(finalPresets);
+    try {
+      localStorage.setItem('hoaimy_project_presets', JSON.stringify(finalPresets));
+    } catch {}
+
     if (selectedPresetId === presetId) {
-      handleApplyPreset('preset-balanced');
+      handleApplyPreset(finalPresets[0]?.id || 'preset-balanced');
     }
     setPresetFeedback(`Đã xóa cấu hình: "${preset.name}"`);
     setTimeout(() => setPresetFeedback(null), 3000);
+  };
+
+  // Export settings to JSON file named "tts_studio_project_settings.json" (Requirement 2)
+  const handleExportPresets = () => {
+    try {
+      const exportData = {
+        app: 'HoaiMy_PiperTTS_Studio',
+        exportedAt: new Date().toISOString(),
+        version: '1.0',
+        presets: projectPresets,
+      };
+
+      const jsonStr = JSON.stringify(exportData, null, 2);
+      const blob = new Blob([jsonStr], { type: 'application/json;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'tts_studio_project_settings.json';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+
+      setPresetFeedback('Đã xuất file "tts_studio_project_settings.json" thành công!');
+      setTimeout(() => setPresetFeedback(null), 3500);
+    } catch (e: any) {
+      console.error('Lỗi xuất cấu hình:', e);
+      setPresetFeedback('Lỗi khi xuất file cấu hình!');
+      setTimeout(() => setPresetFeedback(null), 3000);
+    }
+  };
+
+  // Import settings from JSON file into studio (Requirement 2)
+  const handleImportPresetsFile = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const text = e.target?.result as string;
+        const parsed = JSON.parse(text);
+        let rawList: any[] = [];
+
+        if (Array.isArray(parsed)) {
+          rawList = parsed;
+        } else if (parsed && Array.isArray(parsed.presets)) {
+          rawList = parsed.presets;
+        } else {
+          throw new Error('Định dạng file JSON không chứa mảng presets hợp lệ');
+        }
+
+        const validImported: ProjectPreset[] = [];
+        for (const item of rawList) {
+          if (!item.name || typeof item.name !== 'string') continue;
+          validImported.push({
+            id: item.id && !projectPresets.some((p) => p.id === item.id)
+              ? item.id
+              : `imported-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+            name: item.name.trim(),
+            isDefault: false,
+            voiceId: item.voiceId || 'local:hoaimy-vietnamese-vi-medium-ljkjhi',
+            batchSizeChoice: item.batchSizeChoice || '4',
+            customBatchSize: typeof item.customBatchSize === 'number' ? item.customBatchSize : 4,
+            maxSpeed: typeof item.maxSpeed === 'number' ? item.maxSpeed : 1.5,
+            minSpeed: typeof item.minSpeed === 'number' ? item.minSpeed : 0.8,
+            speedPriority: item.speedPriority || 'balanced',
+            padSilence: typeof item.padSilence === 'boolean' ? item.padSilence : true,
+            outputFormat: item.outputFormat === 'wav' ? 'wav' : 'mp3',
+          });
+        }
+
+        if (validImported.length === 0) {
+          setPresetFeedback('Không tìm thấy cấu hình hợp lệ trong file JSON!');
+          setTimeout(() => setPresetFeedback(null), 3500);
+          return;
+        }
+
+        // Merge imported presets, handling duplicate names nicely
+        const existingNames = new Set(projectPresets.map((p) => p.name.toLowerCase()));
+        const toAdd = validImported.map((item) => {
+          let name = item.name;
+          if (existingNames.has(name.toLowerCase())) {
+            name = `${name} (Nhập)`;
+          }
+          existingNames.add(name.toLowerCase());
+          return { ...item, name };
+        });
+
+        const updated = [...projectPresets, ...toAdd];
+        setProjectPresets(updated);
+        try {
+          localStorage.setItem('hoaimy_project_presets', JSON.stringify(updated));
+        } catch {}
+
+        if (toAdd.length > 0) {
+          handleApplyPreset(toAdd[0].id);
+        }
+
+        setPresetFeedback(`Đã nhập thành công ${toAdd.length} cấu hình từ JSON!`);
+        setTimeout(() => setPresetFeedback(null), 3500);
+      } catch (err: any) {
+        console.error('Import presets error:', err);
+        setPresetFeedback('Lỗi: File JSON không đúng định dạng!');
+        setTimeout(() => setPresetFeedback(null), 3500);
+      } finally {
+        if (event.target) event.target.value = '';
+      }
+    };
+    reader.readAsText(file);
   };
 
   const processSubtitleFile = (file: File) => {
@@ -1097,9 +1243,15 @@ export default function App() {
                       <Bookmark className="w-4 h-4 text-amber-400" />
                       Cấu hình Dự án
                     </span>
-                    <span className="text-[10px] text-amber-400 font-medium bg-amber-400/10 px-2 py-0.5 rounded border border-amber-400/20 font-mono">
-                      Tự động điền
-                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setShowPresetManagerModal(true)}
+                      className="text-[10px] text-amber-400 hover:text-amber-300 font-semibold bg-amber-400/10 hover:bg-amber-400/20 px-2 py-0.5 rounded border border-amber-400/30 flex items-center gap-1 transition-colors cursor-pointer"
+                      title="Mở bảng quản lý, đổi tên, xóa, xuất JSON & nhập JSON"
+                    >
+                      <Edit3 className="w-3 h-3" />
+                      <span>Quản lý</span>
+                    </button>
                   </div>
 
                   {/* Dropdown Selector */}
@@ -1156,38 +1308,50 @@ export default function App() {
                   </div>
 
                   {/* Preset Action Buttons */}
-                  <div className="flex items-center gap-2 pt-0.5">
+                  <div className="space-y-2 pt-0.5">
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setShowSavePresetModal(true)}
+                        className="flex-1 py-1.5 px-3 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                        title="Lưu lại cấu hình giọng đọc, tốc độ và timeline hiện tại thành cấu hình dự án mới"
+                      >
+                        <Save className="w-3.5 h-3.5 text-amber-400" />
+                        <span>Lưu mới...</span>
+                      </button>
+
+                      {!selectedPreset?.isDefault && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={handleUpdateCurrentPreset}
+                            className="py-1.5 px-2.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 rounded-xl text-xs font-semibold flex items-center justify-center gap-1 transition-colors cursor-pointer"
+                            title="Cập nhật thông số hiện tại vào cấu hình cá nhân này"
+                          >
+                            <BookmarkCheck className="w-3.5 h-3.5 text-emerald-400" />
+                            <span>Lưu đè</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeletePreset(selectedPresetId)}
+                            className="p-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 rounded-xl transition-colors cursor-pointer"
+                            title="Xóa cấu hình cá nhân này"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </>
+                      )}
+                    </div>
+
                     <button
                       type="button"
-                      onClick={() => setShowSavePresetModal(true)}
-                      className="flex-1 py-1.5 px-3 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-                      title="Lưu lại cấu hình giọng đọc, tốc độ và timeline hiện tại thành cấu hình dự án mới"
+                      onClick={() => setShowPresetManagerModal(true)}
+                      className="w-full py-1.5 px-3 bg-slate-950/70 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-800 hover:border-slate-700 rounded-xl text-xs font-medium flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                      title="Mở panel chỉnh sửa, đổi tên, xóa, xuất JSON (tts_studio_project_settings.json) & nhập JSON"
                     >
-                      <Save className="w-3.5 h-3.5 text-amber-400" />
-                      <span>Lưu cấu hình mới...</span>
+                      <FileJson className="w-3.5 h-3.5 text-amber-400" />
+                      <span>Quản lý / Đổi tên / Xuất & Nhập JSON</span>
                     </button>
-
-                    {!selectedPreset?.isDefault && (
-                      <>
-                        <button
-                          type="button"
-                          onClick={handleUpdateCurrentPreset}
-                          className="py-1.5 px-2.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 rounded-xl text-xs font-semibold flex items-center justify-center gap-1 transition-colors cursor-pointer"
-                          title="Cập nhật thông số hiện tại vào cấu hình cá nhân này"
-                        >
-                          <BookmarkCheck className="w-3.5 h-3.5 text-emerald-400" />
-                          <span>Lưu đè</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleDeletePreset(selectedPresetId)}
-                          className="p-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 rounded-xl transition-colors cursor-pointer"
-                          title="Xóa cấu hình cá nhân này"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </>
-                    )}
                   </div>
 
                   {presetFeedback && (
@@ -2324,7 +2488,7 @@ export default function App() {
                     <select
                       value={selectedPresetId}
                       onChange={(e) => handleApplyPreset(e.target.value)}
-                      className="bg-transparent text-xs text-slate-200 focus:outline-none cursor-pointer max-w-[160px] sm:max-w-[210px] truncate"
+                      className="bg-transparent text-xs text-slate-200 focus:outline-none cursor-pointer max-w-[150px] sm:max-w-[200px] truncate"
                       title="Nạp cấu hình dự án (giọng + tốc độ)"
                     >
                       {projectPresets.map((p) => (
@@ -2334,6 +2498,14 @@ export default function App() {
                         </option>
                       ))}
                     </select>
+                    <button
+                      type="button"
+                      onClick={() => setShowPresetManagerModal(true)}
+                      className="p-1 hover:bg-slate-800 text-slate-400 hover:text-amber-400 rounded transition-colors cursor-pointer"
+                      title="Quản lý cấu hình (Đổi tên, Xóa, Xuất/Nhập JSON)"
+                    >
+                      <Edit3 className="w-3 h-3" />
+                    </button>
                   </div>
 
                   <button
@@ -2441,18 +2613,13 @@ export default function App() {
 
       {/* ========================================================= */}
       {/* MODAL: BẢNG DANH SÁCH GIỌNG ĐỌC (VOICE SELECTION TABLE)   */}
-      {/* Các cột: Tên, Giới tính, Tag, Nghe thử, Chọn dùng         */}
-      {/* ========================================================= */}
-      {/* ========================================================= */}
-      {/* MODAL: BẢNG DANH SÁCH GIỌNG ĐỌC (VOICE SELECTION TABLE)   */}
-      {/* Các cột: Tên, Giới tính, Tag, Nghe thử, Chọn dùng         */}
-      {/* Gọn gàng, loại bỏ description/ID/text để xem nhiều giọng  */}
+      {/* Độ rộng max screen width để hiển thị đầy đủ tất cả các cột*/}
       {/* ========================================================= */}
       {showVoiceModal && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-2 sm:p-4 animate-in fade-in duration-200">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-4xl w-full max-h-[92vh] flex flex-col shadow-2xl overflow-hidden relative">
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-2 sm:p-4 md:p-6 animate-in fade-in duration-200">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-[96vw] xl:max-w-7xl 2xl:max-w-[1440px] max-h-[92vh] flex flex-col shadow-2xl overflow-hidden relative">
             {/* Modal Header (Compact) */}
-            <div className="flex items-center justify-between gap-3 px-4 py-3 sm:px-5 sm:py-3.5 border-b border-slate-800 bg-slate-950/70 shrink-0">
+            <div className="flex items-center justify-between gap-3 px-4 py-3 sm:px-6 sm:py-3.5 border-b border-slate-800 bg-slate-950/70 shrink-0">
               <div className="flex items-center gap-2.5">
                 <div className="w-8 h-8 rounded-xl bg-amber-500 text-slate-950 flex items-center justify-center font-black shadow-md shadow-amber-500/20 shrink-0">
                   <Radio className="w-4 h-4" />
@@ -2562,15 +2729,15 @@ export default function App() {
             </div>
 
             {/* Table Area (Compact single-line rows: Hiển thị 12-16 giọng cùng lúc, chỉ Tên, Giới tính, Tags, Nghe thử, Chọn dùng) */}
-            <div className="flex-1 overflow-x-auto overflow-y-auto max-h-[70vh] p-1 sm:p-2 bg-slate-950/40 scrollbar-thin">
+            <div className="flex-1 overflow-x-auto overflow-y-auto max-h-[70vh] p-1 sm:p-3 bg-slate-950/40 scrollbar-thin">
               <table className="w-full text-left text-xs border-collapse">
                 <thead className="sticky top-0 z-20 bg-slate-950 shadow-sm">
                   <tr className="bg-slate-950 text-slate-400 border-b border-slate-800 text-[11px] font-mono">
-                    <th className="py-2 px-3 min-w-[200px]">Tên giọng đọc</th>
-                    <th className="py-2 px-3 w-24 text-center">Giới tính</th>
-                    <th className="py-2 px-3 min-w-[140px]">Tags / Phân loại</th>
-                    <th className="py-2 px-3 w-28 text-center">Nghe thử</th>
-                    <th className="py-2 px-3 w-28 text-center">Chọn dùng</th>
+                    <th className="py-2.5 px-4 sm:w-[38%] min-w-[200px]">Tên giọng đọc</th>
+                    <th className="py-2.5 px-4 w-28 text-center">Giới tính</th>
+                    <th className="py-2.5 px-4 sm:w-[28%] min-w-[150px]">Tags / Phân loại</th>
+                    <th className="py-2.5 px-4 w-32 text-center">Nghe thử</th>
+                    <th className="py-2.5 px-4 w-32 text-center">Chọn dùng</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800/60">
@@ -2594,10 +2761,10 @@ export default function App() {
                           }`}
                         >
                           {/* 1. Cột Tên: Tên + Badges (Bỏ hoàn toàn description, ID và text) */}
-                          <td className="py-1 px-3 whitespace-nowrap">
+                          <td className="py-1.5 px-4 whitespace-nowrap">
                             <div className="flex items-center gap-2">
                               <span
-                                className={`font-semibold text-xs sm:text-[13px] truncate max-w-[260px] ${
+                                className={`font-semibold text-xs sm:text-[13px] truncate max-w-[340px] sm:max-w-none ${
                                   isCurrent ? 'text-amber-300 font-bold' : 'text-slate-100'
                                 }`}
                               >
@@ -2618,9 +2785,9 @@ export default function App() {
                           </td>
 
                           {/* 2. Cột Giới tính (Gọn gàng) */}
-                          <td className="py-1 px-3 text-center whitespace-nowrap">
+                          <td className="py-1.5 px-4 text-center whitespace-nowrap">
                             <span
-                              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold ${
+                              className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-[11px] font-semibold ${
                                 v.gender === 'female'
                                   ? 'bg-rose-500/15 text-rose-300 border border-rose-500/25'
                                   : 'bg-sky-500/15 text-sky-300 border border-sky-500/25'
@@ -2636,19 +2803,19 @@ export default function App() {
                           </td>
 
                           {/* 3. Cột Tag (Gọn gàng, bỏ ID) */}
-                          <td className="py-1 px-3 whitespace-nowrap">
-                            <span className="inline-block px-2 py-0.5 rounded text-[11px] font-mono font-medium bg-slate-900 text-slate-300 border border-slate-800">
+                          <td className="py-1.5 px-4 whitespace-nowrap">
+                            <span className="inline-block px-2.5 py-0.5 rounded text-[11px] font-mono font-medium bg-slate-900 text-slate-300 border border-slate-800">
                               {v.tag}
                             </span>
                           </td>
 
                           {/* 4. Cột Nghe thử (Bỏ câu text) */}
-                          <td className="py-1 px-3 text-center whitespace-nowrap">
+                          <td className="py-1.5 px-4 text-center whitespace-nowrap">
                             <button
                               type="button"
                               onClick={() => handlePreviewVoice(v)}
                               disabled={isLoadingPreview}
-                              className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                              className={`inline-flex items-center gap-1 px-3 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
                                 isPreviewing
                                   ? 'bg-amber-500 text-slate-950 font-bold shadow-sm shadow-amber-500/30 ring-1 ring-amber-400'
                                   : 'bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700 hover:border-amber-500/40'
@@ -2675,9 +2842,9 @@ export default function App() {
                           </td>
 
                           {/* 5. Cột Chọn dùng */}
-                          <td className="py-1 px-3 text-center whitespace-nowrap">
+                          <td className="py-1.5 px-4 text-center whitespace-nowrap">
                             {isCurrent ? (
-                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shadow-sm">
+                              <span className="inline-flex items-center gap-1 px-3 py-1 rounded-lg text-xs font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shadow-sm">
                                 <Check className="w-3 h-3" />
                                 <span>Đang Dùng</span>
                               </span>
@@ -2685,7 +2852,7 @@ export default function App() {
                               <button
                                 type="button"
                                 onClick={() => handleSelectVoice(v.id)}
-                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold bg-amber-500 hover:bg-amber-400 text-slate-950 transition-all cursor-pointer shadow-sm shadow-amber-500/20 active:scale-95"
+                                className="inline-flex items-center gap-1 px-3 py-1 rounded-lg text-xs font-bold bg-amber-500 hover:bg-amber-400 text-slate-950 transition-all cursor-pointer shadow-sm shadow-amber-500/20 active:scale-95"
                               >
                                 <UserCheck className="w-3 h-3" />
                                 <span>Chọn dùng</span>
@@ -2841,6 +3008,260 @@ export default function App() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* MODAL: PANEL EDIT & QUẢN LÝ CẤU HÌNH DỰ ÁN (Requirement 2)*/}
+      {/* Đổi tên, xóa, xuất tts_studio_project_settings.json, nhập */}
+      {/* ========================================================= */}
+      {showPresetManagerModal && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-6 animate-in fade-in duration-150">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-4xl w-full max-h-[92vh] flex flex-col shadow-2xl overflow-hidden relative">
+            {/* Header */}
+            <div className="flex items-center justify-between gap-4 p-4 sm:p-6 border-b border-slate-800 bg-slate-950/70 shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-amber-500/15 text-amber-400 border border-amber-500/25 flex items-center justify-center font-bold shrink-0">
+                  <Bookmark className="w-5 h-5" />
+                </div>
+                <div>
+                  <h2 className="text-base sm:text-lg font-bold text-white tracking-tight flex items-center gap-2">
+                    <span>Quản Lý & Chỉnh Sửa Cấu Hình Dự Án</span>
+                    <span className="text-[11px] font-mono bg-slate-800 px-2 py-0.5 rounded text-amber-300 border border-slate-700">
+                      {projectPresets.length} cấu hình
+                    </span>
+                  </h2>
+                  <p className="text-xs text-slate-400">
+                    Đổi tên, xóa cấu hình, xuất file JSON hoặc nhập cấu hình vào Studio
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowPresetManagerModal(false);
+                  setEditingPresetId(null);
+                }}
+                className="w-8 h-8 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
+                title="Đóng (ESC)"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Action Bar: Export & Import JSON (Requirement 2) */}
+            <div className="px-4 py-3 sm:px-6 bg-slate-950/90 border-b border-slate-800 flex flex-wrap items-center justify-between gap-3 shrink-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                {/* Export JSON Button */}
+                <button
+                  type="button"
+                  onClick={handleExportPresets}
+                  className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-amber-300 hover:text-white text-xs font-semibold rounded-xl border border-slate-700 hover:border-amber-500/40 transition-colors flex items-center gap-1.5 cursor-pointer shadow-sm group"
+                  title="Xuất cấu hình thành tệp JSON tên 'tts_studio_project_settings.json'"
+                >
+                  <Download className="w-3.5 h-3.5 text-amber-400 group-hover:scale-110 transition-transform" />
+                  <span>Xuất File JSON (tts_studio_project_settings.json)</span>
+                </button>
+
+                {/* Import JSON Button */}
+                <button
+                  type="button"
+                  onClick={() => importPresetsInputRef.current?.click()}
+                  className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white text-xs font-semibold rounded-xl border border-slate-700 hover:border-slate-600 transition-colors flex items-center gap-1.5 cursor-pointer shadow-sm group"
+                  title="Tải tệp JSON cấu hình từ máy tính vào studio"
+                >
+                  <Upload className="w-3.5 h-3.5 text-slate-300 group-hover:scale-110 transition-transform" />
+                  <span>Nhập File JSON Vào Studio...</span>
+                </button>
+                <input
+                  ref={importPresetsInputRef}
+                  type="file"
+                  accept=".json,application/json"
+                  onChange={handleImportPresetsFile}
+                  className="hidden"
+                />
+              </div>
+
+              {/* Add New Preset from Current Settings */}
+              <button
+                type="button"
+                onClick={() => {
+                  setShowPresetManagerModal(false);
+                  setShowSavePresetModal(true);
+                }}
+                className="px-3.5 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shadow-md shadow-amber-500/20"
+              >
+                <Save className="w-3.5 h-3.5" />
+                <span>+ Lưu cấu hình hiện tại</span>
+              </button>
+            </div>
+
+            {/* Presets List */}
+            <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-3 max-h-[62vh]">
+              <div className="space-y-2.5">
+                {projectPresets.map((preset) => {
+                  const isSelected = preset.id === selectedPresetId;
+                  const isEditing = editingPresetId === preset.id;
+                  const voice = voices.find((v) => v.id === preset.voiceId);
+
+                  return (
+                    <div
+                      key={preset.id}
+                      className={`p-3.5 sm:p-4 rounded-2xl border transition-all ${
+                        isSelected
+                          ? 'bg-amber-500/10 border-amber-500/40 ring-1 ring-amber-500/30'
+                          : 'bg-slate-950/60 border-slate-800 hover:border-slate-700'
+                      }`}
+                    >
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        {/* Left: Name or inline edit */}
+                        <div className="flex-1 min-w-0 space-y-1">
+                          {isEditing ? (
+                            <div className="flex items-center gap-2 max-w-lg">
+                              <input
+                                type="text"
+                                autoFocus
+                                value={editingPresetName}
+                                onChange={(e) => setEditingPresetName(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') handleSaveRenamePreset(preset.id);
+                                  if (e.key === 'Escape') setEditingPresetId(null);
+                                }}
+                                className="flex-1 bg-slate-900 border border-amber-500 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-amber-500 font-medium"
+                                placeholder="Nhập tên mới..."
+                              />
+                              <button
+                                type="button"
+                                onClick={() => handleSaveRenamePreset(preset.id)}
+                                className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-lg text-xs cursor-pointer shadow-sm"
+                              >
+                                Lưu
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setEditingPresetId(null)}
+                                className="px-2.5 py-1.5 bg-slate-800 text-slate-300 hover:text-white rounded-lg text-xs cursor-pointer"
+                              >
+                                Hủy
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-bold text-white text-xs sm:text-sm">
+                                {preset.name}
+                              </span>
+                              {preset.isDefault ? (
+                                <span className="px-2 py-0.2 rounded text-[10px] font-semibold bg-slate-800 text-slate-400 border border-slate-700">
+                                  Mẫu chuẩn hệ thống
+                                </span>
+                              ) : (
+                                <span className="px-2 py-0.2 rounded text-[10px] font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                                  Cá nhân
+                                </span>
+                              )}
+                              {isSelected && (
+                                <span className="px-2 py-0.2 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1">
+                                  <Check className="w-2.5 h-2.5" />
+                                  Đang kích hoạt
+                                </span>
+                              )}
+                            </div>
+                          )}
+
+                          {/* Details Strip */}
+                          <div className="text-[11px] text-slate-400 font-mono flex items-center gap-2 flex-wrap pt-0.5">
+                            <span className="text-amber-400 font-semibold truncate max-w-[200px]">
+                              {voice?.name || preset.voiceId}
+                            </span>
+                            <span>·</span>
+                            <span className="text-emerald-400 font-semibold">
+                              {preset.minSpeed.toFixed(2)}x - {preset.maxSpeed.toFixed(2)}x
+                            </span>
+                            <span>·</span>
+                            <span>
+                              {preset.speedPriority === 'strict'
+                                ? 'Ép timeline'
+                                : preset.speedPriority === 'natural'
+                                ? 'Tự nhiên'
+                                : 'Cân bằng'}
+                            </span>
+                            <span>·</span>
+                            <span>{preset.padSilence ? 'Đệm silence' : 'Không đệm'}</span>
+                            <span>·</span>
+                            <span>Batch {preset.customBatchSize || preset.batchSizeChoice}</span>
+                            <span>·</span>
+                            <span className="uppercase text-slate-300 bg-slate-900 px-1.5 py-0.2 rounded border border-slate-800">
+                              {preset.outputFormat}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Right: Actions (Dùng, Đổi tên, Xóa) */}
+                        <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                          {!isSelected ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                handleApplyPreset(preset.id);
+                              }}
+                              className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white rounded-xl text-xs font-semibold border border-slate-700 hover:border-amber-500/40 transition-colors cursor-pointer flex items-center gap-1"
+                              title="Tự động nạp thông số cấu hình này vào Studio"
+                            >
+                              <Check className="w-3 h-3 text-amber-400" />
+                              <span>Nạp cấu hình này</span>
+                            </button>
+                          ) : (
+                            <span className="px-3 py-1.5 bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 rounded-xl text-xs font-bold flex items-center gap-1">
+                              <Check className="w-3 h-3" />
+                              <span>Đang chọn</span>
+                            </span>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={() => handleStartRenamePreset(preset)}
+                            className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-xl transition-colors border border-slate-700 cursor-pointer"
+                            title="Đổi tên cấu hình này"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => handleDeletePreset(preset.id)}
+                            className="p-2 bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 hover:text-rose-200 border border-rose-500/30 rounded-xl transition-colors cursor-pointer"
+                            title="Xóa cấu hình này"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="p-4 sm:px-6 bg-slate-950/90 border-t border-slate-800 flex items-center justify-between text-xs text-slate-400 shrink-0">
+              <div className="flex items-center gap-2">
+                <span>File xuất mặc định:</span>
+                <code className="text-amber-400 font-mono text-[11px] bg-slate-900 px-1.5 py-0.5 rounded border border-slate-800">
+                  tts_studio_project_settings.json
+                </code>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowPresetManagerModal(false);
+                  setEditingPresetId(null);
+                }}
+                className="px-5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-xl transition-colors cursor-pointer border border-slate-700"
+              >
+                Xong & Đóng
+              </button>
+            </div>
           </div>
         </div>
       )}
