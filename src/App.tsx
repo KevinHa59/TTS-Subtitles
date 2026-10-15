@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import {
   Play,
   Pause,
@@ -49,6 +49,9 @@ import {
   FileJson,
   FolderInput,
   FolderOutput,
+  SkipBack,
+  SkipForward,
+  Quote,
 } from "lucide-react";
 
 import {
@@ -217,10 +220,12 @@ export default function App() {
   const [autoScrollLogs, setAutoScrollLogs] = useState<boolean>(true);
   const logsContainerRef = useRef<HTMLDivElement | null>(null);
 
-  // Playback state for Master Audio
+  // Playback state for Master Audio (Full timeline scrubbing & live sentence tracking)
   const [masterPlaying, setMasterPlaying] = useState<boolean>(false);
   const [masterCurrentTime, setMasterCurrentTime] = useState<number>(0);
   const [masterDuration, setMasterDuration] = useState<number>(0);
+  const [isSeekingMaster, setIsSeekingMaster] = useState<boolean>(false);
+  const [masterSeekValue, setMasterSeekValue] = useState<number>(0);
   const masterAudioRef = useRef<HTMLAudioElement | null>(null);
 
   // Playback state for Individual Subtitle Item
@@ -543,38 +548,103 @@ export default function App() {
       });
   };
 
-  const handlePlayMasterAudio = () => {
+  // Master Audio Timeline Scrubbing & Navigation Logic (Requirement 1 & 2)
+  // Ensure audio is loaded when masterAudio becomes available
+  useEffect(() => {
+    if (activeJob?.masterAudio?.url && masterAudioRef.current) {
+      const audio = masterAudioRef.current;
+      const targetUrl = activeJob.masterAudio.url;
+      if (!audio.src || !audio.src.includes(targetUrl)) {
+        audio.src = targetUrl;
+        audio.load();
+      }
+    }
+  }, [activeJob?.masterAudio?.url]);
+
+  // Determine currently active sentence in Master Audio based on playback position (Requirement 2)
+  const currentMasterItem = useMemo(() => {
+    if (!activeJob?.items || activeJob.items.length === 0) return null;
+    const time = isSeekingMaster ? masterSeekValue : masterCurrentTime;
+
+    // 1. Direct match: playback time is within [startTime, endTime]
+    const exact = activeJob.items.find(
+      (it) => time >= it.startTime - 0.05 && time <= it.endTime + 0.05,
+    );
+    if (exact) {
+      return {
+        item: exact,
+        isSilenceGap: false,
+        gapLabel: "",
+      };
+    }
+
+    // 2. Playback is in the intro gap before the first sentence
+    if (time < activeJob.items[0].startTime) {
+      const waitTime = Math.max(0, activeJob.items[0].startTime - time);
+      return {
+        item: activeJob.items[0],
+        isSilenceGap: true,
+        gapLabel: `Khoảng lặng đầu video (còn ${waitTime.toFixed(1)}s tới Câu 1)`,
+      };
+    }
+
+    // 3. Playback is in a silence gap between two sentences
+    for (let i = 0; i < activeJob.items.length - 1; i++) {
+      const prev = activeJob.items[i];
+      const next = activeJob.items[i + 1];
+      if (time > prev.endTime && time < next.startTime) {
+        const waitTime = Math.max(0, next.startTime - time);
+        return {
+          item: next,
+          prevItem: prev,
+          isSilenceGap: true,
+          gapLabel: `Khoảng lặng giữa câu ${prev.index} & ${next.index} (còn ${waitTime.toFixed(1)}s)`,
+        };
+      }
+    }
+
+    // 4. Playback is past the last sentence
+    const last = activeJob.items[activeJob.items.length - 1];
+    return {
+      item: last,
+      isSilenceGap: true,
+      gapLabel: `Đã hoàn tất toàn bộ phụ đề (${last.index} câu)`,
+    };
+  }, [activeJob?.items, isSeekingMaster, masterSeekValue, masterCurrentTime]);
+
+  const handlePlayMasterAudio = (startTime?: number) => {
     if (!activeJob?.masterAudio) return;
 
-    // Stop item audio if playing
+    // Stop item audio or voice preview if playing
     if (itemAudioRef.current && playingItemIndex !== null) {
       itemAudioRef.current.pause();
       setPlayingItemIndex(null);
+    }
+    if (previewAudioRef.current && previewVoiceId !== null) {
+      previewAudioRef.current.pause();
+      setPreviewVoiceId(null);
     }
 
     if (!masterAudioRef.current) {
       masterAudioRef.current = new Audio();
     }
     const audio = masterAudioRef.current;
-    if (masterPlaying) {
-      audio.pause();
-      setMasterPlaying(false);
-    } else {
-      audio.src = activeJob.masterAudio.url;
-      audio.ontimeupdate = () => {
-        setMasterCurrentTime(audio.currentTime);
-        if (audio.duration && !isNaN(audio.duration)) {
-          setMasterDuration(audio.duration);
-        }
-      };
-      audio.onended = () => {
-        setMasterPlaying(false);
-        setMasterCurrentTime(0);
-      };
-      audio.onerror = () => {
-        console.error("Lỗi phát master audio");
-        setMasterPlaying(false);
-      };
+    const targetUrl = activeJob.masterAudio.url;
+
+    // If audio.src is not yet pointing to this master audio, set it
+    if (!audio.src || !audio.src.includes(targetUrl)) {
+      audio.src = targetUrl;
+    }
+
+    // If explicit startTime provided (e.g. clicked on sentence or jump button)
+    if (typeof startTime === "number") {
+      const maxDur = masterDuration || activeJob.masterAudio.duration || 100;
+      const clamped = Math.max(0, Math.min(startTime, maxDur));
+      try {
+        audio.currentTime = clamped;
+      } catch {}
+      setMasterCurrentTime(clamped);
+      setMasterSeekValue(clamped);
       audio
         .play()
         .then(() => setMasterPlaying(true))
@@ -582,6 +652,98 @@ export default function App() {
           console.error("Lỗi phát master audio:", e);
           setMasterPlaying(false);
         });
+      return;
+    }
+
+    if (masterPlaying) {
+      audio.pause();
+      setMasterPlaying(false);
+    } else {
+      audio
+        .play()
+        .then(() => setMasterPlaying(true))
+        .catch((e) => {
+          console.error("Lỗi phát master audio:", e);
+          setMasterPlaying(false);
+        });
+    }
+  };
+
+  // Seek master audio to any position (Requirement 1)
+  const handleSeekMaster = (targetSeconds: number, autoPlay: boolean = false) => {
+    if (!activeJob?.masterAudio) return;
+    const maxDur = masterDuration || activeJob.masterAudio.duration || 100;
+    const clamped = Math.max(0, Math.min(targetSeconds, maxDur));
+    setMasterCurrentTime(clamped);
+    setMasterSeekValue(clamped);
+
+    if (masterAudioRef.current) {
+      const audio = masterAudioRef.current;
+      if (!audio.src || !audio.src.includes(activeJob.masterAudio.url)) {
+        audio.src = activeJob.masterAudio.url;
+      }
+      try {
+        audio.currentTime = clamped;
+      } catch (err) {
+        console.warn("Could not set currentTime immediately:", err);
+      }
+      if (autoPlay && audio.paused) {
+        audio
+          .play()
+          .then(() => setMasterPlaying(true))
+          .catch((e) => console.error("Lỗi phát sau khi seek:", e));
+      }
+    }
+  };
+
+  // Jump -5s or +5s
+  const handleJumpMaster = (deltaSeconds: number) => {
+    const current = isSeekingMaster ? masterSeekValue : masterCurrentTime;
+    handleSeekMaster(current + deltaSeconds);
+  };
+
+  // Jump to previous or next sentence
+  const handleJumpToSentence = (direction: "prev" | "next") => {
+    if (!activeJob?.items || activeJob.items.length === 0) return;
+    const current = isSeekingMaster ? masterSeekValue : masterCurrentTime;
+    const items = activeJob.items;
+
+    let currentIndex = items.findIndex(
+      (it) => current >= it.startTime - 0.1 && current <= it.endTime + 0.1,
+    );
+    if (currentIndex === -1) {
+      currentIndex = items.findIndex((it) => it.startTime > current);
+      if (currentIndex === -1) currentIndex = items.length - 1;
+    }
+
+    let targetIndex = currentIndex;
+    if (direction === "prev") {
+      // If already > 1.2s into current sentence, jump to start of current; otherwise jump to previous
+      if (currentIndex > 0 && current > items[currentIndex].startTime + 1.2) {
+        targetIndex = currentIndex;
+      } else {
+        targetIndex = Math.max(0, currentIndex - 1);
+      }
+    } else {
+      targetIndex = Math.min(items.length - 1, currentIndex + 1);
+    }
+
+    const targetItem = items[targetIndex];
+    if (targetItem) {
+      handleSeekMaster(targetItem.startTime);
+    }
+  };
+
+  // Play master audio starting from a specific sentence
+  const handlePlayMasterFromSentence = (item: SubtitleItem) => {
+    handlePlayMasterAudio(item.startTime);
+  };
+
+  // Scroll to sentence in Subtitles Table
+  const handleScrollToSentence = (index: number) => {
+    const el = document.getElementById(`subtitle-row-${index}`);
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
     }
   };
 
@@ -1146,13 +1308,35 @@ export default function App() {
       {/* Hidden Audio Elements */}
       <audio
         ref={masterAudioRef}
+        preload="auto"
         onTimeUpdate={() => {
-          if (masterAudioRef.current) {
+          if (masterAudioRef.current && !isSeekingMaster) {
             setMasterCurrentTime(masterAudioRef.current.currentTime);
-            setMasterDuration(masterAudioRef.current.duration || 0);
+            if (masterAudioRef.current.duration) {
+              setMasterDuration(masterAudioRef.current.duration);
+            }
           }
         }}
-        onEnded={() => setMasterPlaying(false)}
+        onLoadedMetadata={() => {
+          if (masterAudioRef.current && masterAudioRef.current.duration) {
+            setMasterDuration(masterAudioRef.current.duration);
+          }
+        }}
+        onDurationChange={() => {
+          if (masterAudioRef.current && masterAudioRef.current.duration) {
+            setMasterDuration(masterAudioRef.current.duration);
+          }
+        }}
+        onPlay={() => setMasterPlaying(true)}
+        onPause={() => setMasterPlaying(false)}
+        onEnded={() => {
+          setMasterPlaying(false);
+          setMasterCurrentTime(0);
+        }}
+        onError={() => {
+          console.error("Lỗi thẻ audio phát master");
+          setMasterPlaying(false);
+        }}
       />
       <audio
         ref={itemAudioRef}
@@ -2288,44 +2472,208 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* Audio Player Controls */}
-                  <div className="bg-slate-950/80 rounded-xl p-3 border border-slate-800 flex items-center gap-4">
-                    <button
-                      type="button"
-                      onClick={handlePlayMasterAudio}
-                      className="w-10 h-10 rounded-full bg-amber-500 hover:bg-amber-400 text-slate-950 flex items-center justify-center shrink-0 shadow-md cursor-pointer"
-                    >
-                      {masterPlaying ? (
-                        <Pause className="w-5 h-5 fill-current" />
-                      ) : (
-                        <Play className="w-5 h-5 fill-current ml-0.5" />
-                      )}
-                    </button>
-
-                    <div className="flex-1 space-y-1">
-                      <input
-                        type="range"
-                        min="0"
-                        max={masterDuration || activeJob.masterAudio.duration}
-                        step="0.05"
-                        value={masterCurrentTime}
-                        onChange={(e) => {
-                          const val = parseFloat(e.target.value);
-                          setMasterCurrentTime(val);
-                          if (masterAudioRef.current)
-                            masterAudioRef.current.currentTime = val;
-                        }}
-                        className="w-full accent-amber-500 h-1.5 bg-slate-800 rounded cursor-pointer"
-                      />
-                      <div className="flex justify-between text-[11px] font-mono text-slate-400">
-                        <span>{formatSecondsDisplay(masterCurrentTime)}</span>
-                        <span>
-                          {formatSecondsDisplay(
-                            masterDuration || activeJob.masterAudio.duration,
+                  {/* Master Audio Scrubbing Player & Live Sentence Display (Requirement 1 & 2) */}
+                  <div className="bg-slate-950/90 rounded-2xl p-4 sm:p-5 border border-slate-800 space-y-4 shadow-xl">
+                    {/* Top Row: Playback Controls + Scrubbing Slider */}
+                    <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+                      {/* Nav & Play Buttons */}
+                      <div className="flex items-center gap-1.5 shrink-0 self-center sm:self-auto">
+                        <button
+                          type="button"
+                          onClick={() => handleJumpToSentence("prev")}
+                          className="p-2 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white rounded-xl border border-slate-700/80 transition-colors cursor-pointer"
+                          title="Nhảy về câu trước (⏮)"
+                        >
+                          <SkipBack className="w-4 h-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleJumpMaster(-5)}
+                          className="px-2.5 py-2 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white rounded-xl border border-slate-700/80 text-xs font-mono font-bold transition-colors cursor-pointer"
+                          title="Tua lùi 5 giây (⏪ -5s)"
+                        >
+                          -5s
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handlePlayMasterAudio()}
+                          className="w-12 h-12 rounded-2xl bg-gradient-to-r from-amber-500 to-amber-400 hover:from-amber-400 hover:to-amber-300 text-slate-950 flex items-center justify-center shrink-0 shadow-lg shadow-amber-500/30 transition-transform active:scale-95 cursor-pointer font-bold"
+                          title={masterPlaying ? "Tạm dừng" : "Phát Master Audio"}
+                        >
+                          {masterPlaying ? (
+                            <Pause className="w-6 h-6 fill-current" />
+                          ) : (
+                            <Play className="w-6 h-6 fill-current ml-0.5" />
                           )}
-                        </span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleJumpMaster(5)}
+                          className="px-2.5 py-2 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white rounded-xl border border-slate-700/80 text-xs font-mono font-bold transition-colors cursor-pointer"
+                          title="Tua tới 5 giây (+5s ⏩)"
+                        >
+                          +5s
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleJumpToSentence("next")}
+                          className="p-2 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white rounded-xl border border-slate-700/80 transition-colors cursor-pointer"
+                          title="Nhảy sang câu sau (⏭)"
+                        >
+                          <SkipForward className="w-4 h-4" />
+                        </button>
+                      </div>
+
+                      {/* Scrubbing Track (Requirement 1: Kéo tới bất kỳ vị trí nào để nghe) */}
+                      <div className="flex-1 w-full space-y-1.5">
+                        <div className="relative flex items-center">
+                          <input
+                            type="range"
+                            min="0"
+                            max={
+                              masterDuration ||
+                              activeJob.masterAudio.duration ||
+                              100
+                            }
+                            step="0.05"
+                            value={
+                              isSeekingMaster
+                                ? masterSeekValue
+                                : masterCurrentTime
+                            }
+                            onPointerDown={() => setIsSeekingMaster(true)}
+                            onTouchStart={() => setIsSeekingMaster(true)}
+                            onChange={(e) => {
+                              const val = parseFloat(e.target.value);
+                              setMasterSeekValue(val);
+                              setMasterCurrentTime(val);
+                              if (masterAudioRef.current) {
+                                const audio = masterAudioRef.current;
+                                const masterUrl = activeJob?.masterAudio?.url;
+                                if (
+                                  masterUrl &&
+                                  (!audio.src || !audio.src.includes(masterUrl))
+                                ) {
+                                  audio.src = masterUrl;
+                                }
+                                try {
+                                  audio.currentTime = val;
+                                } catch {}
+                              }
+                            }}
+                            onPointerUp={(e) => {
+                              setIsSeekingMaster(false);
+                              const val = parseFloat(e.currentTarget.value);
+                              handleSeekMaster(val);
+                            }}
+                            onTouchEnd={() => {
+                              setIsSeekingMaster(false);
+                              handleSeekMaster(masterSeekValue);
+                            }}
+                            className="w-full accent-amber-500 h-2.5 bg-slate-800 hover:bg-slate-750 rounded-lg cursor-pointer transition-all"
+                            title="Kéo hoặc nhấn vào thanh timeline để nghe ở bất kỳ vị trí nào"
+                          />
+                        </div>
+                        <div className="flex justify-between items-center text-xs font-mono text-slate-400">
+                          <span className="text-amber-400 font-bold">
+                            {formatSecondsDisplay(
+                              isSeekingMaster
+                                ? masterSeekValue
+                                : masterCurrentTime,
+                            )}
+                          </span>
+                          <span className="text-slate-500 text-[11px] hidden sm:inline">
+                            💡 Kéo hoặc bấm thanh để tua tới bất kỳ vị trí nào
+                          </span>
+                          <span className="text-slate-300 font-semibold">
+                            {formatSecondsDisplay(
+                              masterDuration || activeJob.masterAudio.duration,
+                            )}
+                          </span>
+                        </div>
                       </div>
                     </div>
+
+                    {/* Requirement 2: Hiển thị câu số mấy và nội dung câu đang phát */}
+                    {currentMasterItem?.item && (
+                      <div className="border border-amber-500/30 bg-gradient-to-r from-amber-500/10 via-slate-900/90 to-amber-500/5 rounded-xl p-3.5 sm:p-4 shadow-inner space-y-2">
+                        {/* Subtitle Status & Meta Bar */}
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <span className="px-2.5 py-1 rounded-lg bg-amber-500/20 text-amber-300 border border-amber-500/40 text-xs font-bold flex items-center gap-1.5 shadow-sm">
+                              <Quote className="w-3.5 h-3.5 text-amber-400" />
+                              <span>
+                                Câu {currentMasterItem.item.index} /{" "}
+                                {activeJob.items.length}
+                              </span>
+                            </span>
+
+                            {currentMasterItem.isSilenceGap ? (
+                              <span className="px-2 py-0.5 rounded text-[11px] font-medium bg-slate-800 text-slate-400 border border-slate-700">
+                                {currentMasterItem.gapLabel}
+                              </span>
+                            ) : (
+                              <span className="px-2.5 py-0.5 rounded text-[11px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1.5 animate-pulse">
+                                <Volume2 className="w-3.5 h-3.5 text-emerald-400" />
+                                <span>Đang đọc</span>
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="flex items-center gap-2.5 text-xs font-mono text-slate-400">
+                            <span className="text-slate-300">
+                              [
+                              {formatSecondsToSrtTime(
+                                currentMasterItem.item.startTime,
+                              )}{" "}
+                              ➔{" "}
+                              {formatSecondsToSrtTime(
+                                currentMasterItem.item.endTime,
+                              )}
+                              ]
+                            </span>
+                            {currentMasterItem.item.appliedSpeed && (
+                              <span className="px-1.5 py-0.5 rounded bg-slate-800 text-amber-300 text-[10px] font-bold border border-amber-500/20">
+                                {currentMasterItem.item.appliedSpeed.toFixed(2)}
+                                x
+                              </span>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleSeekMaster(
+                                  currentMasterItem.item.startTime,
+                                  true,
+                                )
+                              }
+                              className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-amber-400 hover:text-amber-300 text-[11px] font-semibold border border-slate-700 transition-colors cursor-pointer"
+                              title="Nghe lại câu này từ đầu"
+                            >
+                              ↺ Phát lại câu
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleScrollToSentence(
+                                  currentMasterItem.item.index,
+                                )
+                              }
+                              className="text-amber-400 hover:text-amber-300 underline text-[11px] cursor-pointer"
+                              title="Cuộn danh sách câu bên dưới đến câu này"
+                            >
+                              Xem trong bảng ⬇
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Sentence Text Display */}
+                        <div className="pl-3 border-l-4 border-amber-500 bg-black/40 py-2.5 px-3 rounded-r-lg">
+                          <p className="text-sm sm:text-base font-semibold text-white tracking-wide leading-relaxed select-text">
+                            "{currentMasterItem.item.text}"
+                          </p>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
@@ -2390,17 +2738,39 @@ export default function App() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-800/80">
-                      {(activeJob?.items || subtitles).map((item) => (
-                        <tr
-                          key={item.index}
-                          className={`hover:bg-slate-800/30 transition-colors ${
-                            item.warning ? "bg-amber-500/5" : ""
-                          } ${item.status === "failed" ? "bg-rose-500/5" : ""}`}
-                        >
-                          {/* Index */}
-                          <td className="py-2.5 px-3 text-center font-mono text-slate-400">
-                            {item.index}
-                          </td>
+                      {(activeJob?.items || subtitles).map((item) => {
+                        const isCurrentActiveSentence =
+                          activeJob?.masterAudio &&
+                          currentMasterItem?.item?.index === item.index &&
+                          !currentMasterItem.isSilenceGap;
+
+                        return (
+                          <tr
+                            key={item.index}
+                            id={`subtitle-row-${item.index}`}
+                            className={`transition-colors ${
+                              isCurrentActiveSentence
+                                ? "bg-amber-500/20 border-l-4 border-l-amber-400 font-semibold ring-1 ring-amber-500/40 shadow-inner"
+                                : item.warning
+                                ? "bg-amber-500/5 hover:bg-slate-800/40"
+                                : item.status === "failed"
+                                ? "bg-rose-500/5 hover:bg-slate-800/40"
+                                : "hover:bg-slate-800/30"
+                            }`}
+                          >
+                            {/* Index */}
+                            <td className="py-2.5 px-3 text-center font-mono">
+                              {isCurrentActiveSentence ? (
+                                <span className="inline-flex items-center justify-center gap-1 text-amber-400 font-bold">
+                                  <Volume2 className="w-3.5 h-3.5 animate-pulse" />
+                                  <span>{item.index}</span>
+                                </span>
+                              ) : (
+                                <span className="text-slate-400">
+                                  {item.index}
+                                </span>
+                              )}
+                            </td>
 
                           {/* Timeline */}
                           <td className="py-2.5 px-3 font-mono text-[11px] text-slate-300">
@@ -2498,35 +2868,54 @@ export default function App() {
                             )}
                           </td>
 
-                          {/* Audio Preview (Requirement 2) */}
+                          {/* Audio Preview (Single Item & Master Timeline Jump) */}
                           <td className="py-2.5 px-3 text-center">
                             {activeJob && item.status === "completed" ? (
-                              <button
-                                type="button"
-                                onClick={() => handlePlayItemAudio(item)}
-                                className={`inline-flex items-center justify-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-                                  playingItemIndex === item.index
-                                    ? "bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/30 scale-105 ring-2 ring-amber-400/50"
-                                    : "bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700 hover:border-amber-500/40"
-                                }`}
-                                title={
-                                  playingItemIndex === item.index
-                                    ? "Dừng phát"
-                                    : "Nghe thử câu thoại này"
-                                }
-                              >
-                                {playingItemIndex === item.index ? (
-                                  <>
-                                    <Pause className="w-3.5 h-3.5 fill-current text-slate-950" />
-                                    <span>Dừng</span>
-                                  </>
-                                ) : (
-                                  <>
-                                    <Play className="w-3.5 h-3.5 fill-current text-amber-400 ml-0.5" />
-                                    <span>Nghe</span>
-                                  </>
+                              <div className="flex items-center justify-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => handlePlayItemAudio(item)}
+                                  className={`inline-flex items-center justify-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                                    playingItemIndex === item.index
+                                      ? "bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/30 scale-105 ring-2 ring-amber-400/50"
+                                      : "bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700 hover:border-amber-500/40"
+                                  }`}
+                                  title={
+                                    playingItemIndex === item.index
+                                      ? "Dừng phát câu lẻ"
+                                      : "Nghe thử câu thoại lẻ này"
+                                  }
+                                >
+                                  {playingItemIndex === item.index ? (
+                                    <>
+                                      <Pause className="w-3.5 h-3.5 fill-current text-slate-950" />
+                                      <span>Dừng</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Play className="w-3.5 h-3.5 fill-current text-amber-400 ml-0.5" />
+                                      <span>Nghe</span>
+                                    </>
+                                  )}
+                                </button>
+
+                                {activeJob.masterAudio && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      handlePlayMasterFromSentence(item)
+                                    }
+                                    className={`p-1.5 rounded-lg border transition-all cursor-pointer ${
+                                      isCurrentActiveSentence && masterPlaying
+                                        ? "bg-amber-500 text-slate-950 border-amber-400 font-bold shadow-md scale-105"
+                                        : "bg-slate-900 hover:bg-slate-800 text-amber-400 hover:text-amber-300 border-slate-700"
+                                    }`}
+                                    title={`Tua Master Audio tới câu ${item.index} (${formatSecondsDisplay(item.startTime)}) và phát`}
+                                  >
+                                    <Play className="w-3.5 h-3.5 fill-current" />
+                                  </button>
                                 )}
-                              </button>
+                              </div>
                             ) : (
                               <span className="text-slate-600 font-mono text-[11px]">
                                 —
@@ -2534,7 +2923,8 @@ export default function App() {
                             )}
                           </td>
                         </tr>
-                      ))}
+                      );
+                    })}
                     </tbody>
                   </table>
                 </div>
@@ -3942,24 +4332,38 @@ const { audio, sampleRate } = await tts.synthesize("Ca ca, lớn quá, thật nh
                   <>
                     {activeJob?.status === "completed" &&
                       activeJob.masterAudio && (
-                        <button
-                          type="button"
-                          onClick={handlePlayMasterAudio}
-                          className="px-3.5 py-2.5 bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-emerald-500/40 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-md"
-                          title="Nghe file master hoàn chỉnh"
-                        >
-                          {masterPlaying ? (
-                            <>
-                              <Pause className="w-4 h-4 fill-current" />
-                              <span>Dừng</span>
-                            </>
-                          ) : (
-                            <>
-                              <Play className="w-4 h-4 fill-current text-emerald-400" />
-                              <span>Nghe Master</span>
-                            </>
+                        <div className="flex items-center gap-2">
+                          {masterPlaying && currentMasterItem?.item && (
+                            <span className="hidden lg:inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs font-mono font-medium max-w-[240px] truncate">
+                              <Volume2 className="w-3.5 h-3.5 animate-pulse shrink-0" />
+                              <span className="truncate">
+                                Câu {currentMasterItem.item.index}:{" "}
+                                {currentMasterItem.item.text}
+                              </span>
+                            </span>
                           )}
-                        </button>
+                          <button
+                            type="button"
+                            onClick={() => handlePlayMasterAudio()}
+                            className="px-3.5 py-2.5 bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-emerald-500/40 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-md"
+                            title="Nghe file master hoàn chỉnh"
+                          >
+                            {masterPlaying ? (
+                              <>
+                                <Pause className="w-4 h-4 fill-current" />
+                                <span>
+                                  Dừng (
+                                  {formatSecondsDisplay(masterCurrentTime)})
+                                </span>
+                              </>
+                            ) : (
+                              <>
+                                <Play className="w-4 h-4 fill-current text-emerald-400" />
+                                <span>Nghe Master</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
                       )}
 
                     {/* Nút Bắt Đầu Xử Lý Chính */}

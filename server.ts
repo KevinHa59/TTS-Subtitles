@@ -1335,13 +1335,71 @@ app.post(
   },
 );
 
-// Stream or download master audio
+// Helper: Stream audio file with full HTTP Range (206 Partial Content) support for browser timeline seeking
+function streamAudioWithRange(
+  req: Request,
+  res: Response,
+  filePath: string,
+  mimeType: string,
+  downloadFilename?: string,
+) {
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).send("Audio file not found");
+  }
+
+  const stat = fs.statSync(filePath);
+  const fileSize = stat.size;
+
+  if (downloadFilename) {
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${downloadFilename}"`,
+    );
+    res.setHeader("Content-Type", mimeType);
+    res.setHeader("Content-Length", fileSize);
+    return fs.createReadStream(filePath).pipe(res);
+  }
+
+  const range = req.headers.range;
+  if (range) {
+    // Format: "bytes=start-end" or "bytes=start-"
+    const parts = range.replace(/bytes=/, "").split("-");
+    const start = parseInt(parts[0], 10);
+    const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+
+    if (isNaN(start) || start >= fileSize || (parts[1] && end < start)) {
+      res.setHeader("Content-Range", `bytes */${fileSize}`);
+      return res.status(416).send("Requested Range Not Satisfiable");
+    }
+
+    const chunkSize = end - start + 1;
+    const fileStream = fs.createReadStream(filePath, { start, end });
+
+    res.writeHead(206, {
+      "Content-Range": `bytes ${start}-${end}/${fileSize}`,
+      "Accept-Ranges": "bytes",
+      "Content-Length": chunkSize,
+      "Content-Type": mimeType,
+      "Cache-Control": "no-cache",
+    });
+
+    return fileStream.pipe(res);
+  } else {
+    res.writeHead(200, {
+      "Content-Length": fileSize,
+      "Accept-Ranges": "bytes",
+      "Content-Type": mimeType,
+      "Cache-Control": "no-cache",
+    });
+    return fs.createReadStream(filePath).pipe(res);
+  }
+}
+
+// Stream or download master audio with full timeline scrubbing/seeking support
 app.get(
   "/api/subtitles/job/:jobId/master-audio",
   (req: Request, res: Response) => {
-    const job = jobs.get(req.params.jobId);
     const jobDir = path.join(JOBS_DIR, req.params.jobId);
-
     const format = req.query.format === "wav" ? "wav" : "mp3";
     const filePath =
       format === "wav"
@@ -1354,19 +1412,15 @@ app.get(
 
     const isDownload = req.query.download === "1";
     const mimeType = format === "wav" ? "audio/wav" : "audio/mpeg";
+    const downloadName = isDownload
+      ? `hoaimy-timeline-master.${format}`
+      : undefined;
 
-    if (isDownload) {
-      res.setHeader(
-        "Content-Disposition",
-        `attachment; filename="hoaimy-timeline-master.${format}"`,
-      );
-    }
-    res.setHeader("Content-Type", mimeType);
-    fs.createReadStream(filePath).pipe(res);
+    streamAudioWithRange(req, res, filePath, mimeType, downloadName);
   },
 );
 
-// Stream single item audio
+// Stream single item audio with range support
 app.get(
   "/api/subtitles/job/:jobId/item-audio/:index",
   (req: Request, res: Response) => {
@@ -1382,8 +1436,7 @@ app.get(
       return res.status(404).send("Audio not found");
     }
 
-    res.setHeader("Content-Type", "audio/wav");
-    fs.createReadStream(fileToServe).pipe(res);
+    streamAudioWithRange(req, res, fileToServe, "audio/wav");
   },
 );
 
