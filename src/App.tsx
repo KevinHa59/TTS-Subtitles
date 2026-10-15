@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from "react";
 import {
   Play,
   Pause,
@@ -48,101 +48,54 @@ import {
   Edit3,
   FileJson,
   FolderInput,
-  FolderOutput
-} from 'lucide-react';
+  FolderOutput,
+} from "lucide-react";
 
-import { SubtitleItem, TimelineJob, TimelineJobOptions, LogEntry } from './types/subtitles';
+import {
+  SubtitleItem,
+  TimelineJob,
+  TimelineJobOptions,
+  LogEntry,
+} from "./types/subtitles";
 import {
   parseSrtContent,
   formatSecondsToSrtTime,
   formatSecondsDisplay,
   exportToSrtString,
-} from './utils/srtParser';
+} from "./utils/srtParser";
 import {
   SAMPLE_PROMPT_SRT,
   SAMPLE_DIALOGUE_SRT,
   SAMPLE_TEST_50_SRT,
-} from './utils/sampleData';
+} from "./utils/sampleData";
 
 export interface ProjectPreset {
   id: string;
   name: string;
   isDefault?: boolean;
   voiceId: string;
-  batchSizeChoice: '1' | '2' | '4' | '8' | '16' | 'custom';
+  batchSizeChoice: "1" | "2" | "4" | "8" | "16" | "custom";
   customBatchSize: number;
   maxSpeed: number;
   minSpeed: number;
-  speedPriority: 'balanced' | 'strict' | 'natural';
+  speedPriority: "balanced" | "strict" | "natural";
   padSilence: boolean;
-  outputFormat: 'mp3' | 'wav';
+  outputFormat: "mp3" | "wav";
 }
 
 const DEFAULT_PRESETS: ProjectPreset[] = [
   {
-    id: 'preset-balanced',
-    name: 'Mặc định - Cân bằng (Khuyên dùng)',
+    id: "preset-balanced",
+    name: "Mặc định - Cân bằng (Khuyên dùng)",
     isDefault: true,
-    voiceId: 'local:hoaimy-vietnamese-vi-medium-ljkjhi',
-    batchSizeChoice: '4',
+    voiceId: "local:hoaimy-vietnamese-vi-medium-ljkjhi",
+    batchSizeChoice: "4",
     customBatchSize: 4,
     maxSpeed: 1.5,
     minSpeed: 0.8,
-    speedPriority: 'balanced',
+    speedPriority: "balanced",
     padSilence: true,
-    outputFormat: 'mp3',
-  },
-  {
-    id: 'preset-fast-action',
-    name: 'Phim & Video Nhanh (1.0x - 1.8x, Batch 6)',
-    isDefault: true,
-    voiceId: 'local:hoaimy-vietnamese-vi-medium-ljkjhi',
-    batchSizeChoice: 'custom',
-    customBatchSize: 6,
-    maxSpeed: 1.8,
-    minSpeed: 1.0,
-    speedPriority: 'strict',
-    padSilence: true,
-    outputFormat: 'mp3',
-  },
-  {
-    id: 'preset-podcast',
-    name: 'Kể Chuyện / Podcast (Tự Nhiên 0.85x - 1.2x)',
-    isDefault: true,
-    voiceId: 'local:hoaimy-vietnamese-vi-nmh19xx',
-    batchSizeChoice: '2',
-    customBatchSize: 2,
-    maxSpeed: 1.2,
-    minSpeed: 0.85,
-    speedPriority: 'natural',
-    padSilence: true,
-    outputFormat: 'mp3',
-  },
-  {
-    id: 'preset-documentary',
-    name: 'Tài Liệu / Bản Tin (Thanh Niên Tự Tin)',
-    isDefault: true,
-    voiceId: 'local:thanh-nien-tu-tin-vietnamese-vi-medium',
-    batchSizeChoice: '4',
-    customBatchSize: 4,
-    maxSpeed: 1.35,
-    minSpeed: 0.9,
-    speedPriority: 'balanced',
-    padSilence: true,
-    outputFormat: 'mp3',
-  },
-  {
-    id: 'preset-csa-voice',
-    name: 'CSA Voice v3 (Ngọc Lan / Đa nhân vật, WAV)',
-    isDefault: true,
-    voiceId: 'local:vi_VN-csa-voice-piper-v3-medium:speaker-0',
-    batchSizeChoice: '4',
-    customBatchSize: 4,
-    maxSpeed: 1.4,
-    minSpeed: 0.85,
-    speedPriority: 'balanced',
-    padSilence: true,
-    outputFormat: 'wav',
+    outputFormat: "mp3",
   },
 ];
 
@@ -152,7 +105,7 @@ interface VoiceOption {
   speakerId?: number;
   name: string;
   tag: string;
-  gender: 'female' | 'male' | 'neutral';
+  gender: "female" | "male" | "neutral";
   description: string;
   sampleText: string;
   recommended: boolean;
@@ -163,20 +116,26 @@ interface VoiceOption {
 
 export default function App() {
   // Navigation: 'subtitles' (Phụ đề Timeline) | 'single' (Đọc văn bản đơn)
-  const [activeTab, setActiveTab] = useState<'subtitles' | 'single'>('subtitles');
+  const [activeTab, setActiveTab] = useState<"subtitles" | "single">(
+    "subtitles",
+  );
 
   // Voices
   const [voices, setVoices] = useState<VoiceOption[]>([]);
   const [selectedVoiceId, setSelectedVoiceId] = useState<string>(
-    'local:hoaimy-vietnamese-vi-medium-ljkjhi'
+    "local:hoaimy-vietnamese-vi-medium-ljkjhi",
   );
 
   // Voice Selection Panel (Modal Table) & Preview States
   const [showVoiceModal, setShowVoiceModal] = useState<boolean>(false);
-  const [voiceSearchQuery, setVoiceSearchQuery] = useState<string>('');
-  const [voiceGenderFilter, setVoiceGenderFilter] = useState<'all' | 'female' | 'male' | 'recommended'>('all');
+  const [voiceSearchQuery, setVoiceSearchQuery] = useState<string>("");
+  const [voiceGenderFilter, setVoiceGenderFilter] = useState<
+    "all" | "female" | "male" | "recommended"
+  >("all");
   const [previewVoiceId, setPreviewVoiceId] = useState<string | null>(null);
-  const [previewLoadingVoiceId, setPreviewLoadingVoiceId] = useState<string | null>(null);
+  const [previewLoadingVoiceId, setPreviewLoadingVoiceId] = useState<
+    string | null
+  >(null);
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
   const previewAudioCacheRef = useRef<Map<string, string>>(new Map());
 
@@ -189,20 +148,24 @@ export default function App() {
   const [activeJob, setActiveJob] = useState<TimelineJob | null>(null);
 
   // Job options
-  const [batchSizeChoice, setBatchSizeChoice] = useState<'1' | '2' | '4' | '8' | '16' | 'custom'>('4');
+  const [batchSizeChoice, setBatchSizeChoice] = useState<
+    "1" | "2" | "4" | "8" | "16" | "custom"
+  >("4");
   const [customBatchSize, setCustomBatchSize] = useState<number>(6);
   const [maxSpeed, setMaxSpeed] = useState<number>(1.5);
   const [minSpeed, setMinSpeed] = useState<number>(0.8);
-  const [speedPriority, setSpeedPriority] = useState<'balanced' | 'strict' | 'natural'>('balanced');
+  const [speedPriority, setSpeedPriority] = useState<
+    "balanced" | "strict" | "natural"
+  >("balanced");
   const [padSilence, setPadSilence] = useState<boolean>(true);
-  const [videoDurationStr, setVideoDurationStr] = useState<string>('');
-  const [outputFormat, setOutputFormat] = useState<'mp3' | 'wav'>('mp3');
+  const [videoDurationStr, setVideoDurationStr] = useState<string>("");
+  const [outputFormat, setOutputFormat] = useState<"mp3" | "wav">("mp3");
   const [showSettingsDrawer, setShowSettingsDrawer] = useState<boolean>(true);
 
   // Project Settings Presets (Requirement 2)
   const [projectPresets, setProjectPresets] = useState<ProjectPreset[]>(() => {
     try {
-      const saved = localStorage.getItem('hoaimy_project_presets');
+      const saved = localStorage.getItem("hoaimy_project_presets");
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
@@ -213,13 +176,16 @@ export default function App() {
     } catch {}
     return DEFAULT_PRESETS;
   });
-  const [selectedPresetId, setSelectedPresetId] = useState<string>('preset-balanced');
+  const [selectedPresetId, setSelectedPresetId] =
+    useState<string>("preset-balanced");
   const [presetFeedback, setPresetFeedback] = useState<string | null>(null);
-  const [showSavePresetModal, setShowSavePresetModal] = useState<boolean>(false);
-  const [newPresetName, setNewPresetName] = useState<string>('');
-  const [showPresetManagerModal, setShowPresetManagerModal] = useState<boolean>(false);
+  const [showSavePresetModal, setShowSavePresetModal] =
+    useState<boolean>(false);
+  const [newPresetName, setNewPresetName] = useState<string>("");
+  const [showPresetManagerModal, setShowPresetManagerModal] =
+    useState<boolean>(false);
   const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
-  const [editingPresetName, setEditingPresetName] = useState<string>('');
+  const [editingPresetName, setEditingPresetName] = useState<string>("");
   const importPresetsInputRef = useRef<HTMLInputElement | null>(null);
 
   // Layout expansion states (Requirement 3)
@@ -240,12 +206,14 @@ export default function App() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const effectiveBatchSize =
-    batchSizeChoice === 'custom'
+    batchSizeChoice === "custom"
       ? Math.max(1, Math.min(32, customBatchSize || 4))
       : parseInt(batchSizeChoice, 10);
 
   // Logging & Filtering
-  const [logFilter, setLogFilter] = useState<'ALL' | 'INFO' | 'SUCCESS' | 'WARNING' | 'ERROR'>('ALL');
+  const [logFilter, setLogFilter] = useState<
+    "ALL" | "INFO" | "SUCCESS" | "WARNING" | "ERROR"
+  >("ALL");
   const [autoScrollLogs, setAutoScrollLogs] = useState<boolean>(true);
   const logsContainerRef = useRef<HTMLDivElement | null>(null);
 
@@ -264,13 +232,13 @@ export default function App() {
 
   // Single Text TTS State (Tab 2)
   const [singleText, setSingleText] = useState<string>(
-    'Xin chào! Tôi là Hoài My. Đây là giọng đọc tiếng Việt tự nhiên được phát triển từ công nghệ Piper TTS.'
+    "Xin chào! Tôi là Hoài My. Đây là giọng đọc tiếng Việt tự nhiên được phát triển từ công nghệ Piper TTS.",
   );
   const [singleSpeed, setSingleSpeed] = useState<number>(1.0);
   const [singleSilence, setSingleSilence] = useState<number>(0.2);
   const [singleAudioUrl, setSingleAudioUrl] = useState<string | null>(null);
   const [singleIsLoading, setSingleIsLoading] = useState<boolean>(false);
-  const [singleFormat, setSingleFormat] = useState<'mp3' | 'wav'>('mp3');
+  const [singleFormat, setSingleFormat] = useState<"mp3" | "wav">("mp3");
   const singleAudioRef = useRef<HTMLAudioElement | null>(null);
 
   // Modal API code
@@ -279,21 +247,21 @@ export default function App() {
 
   // Load voices on mount
   useEffect(() => {
-    fetch('/api/voices')
+    fetch("/api/voices")
       .then((res) => res.json())
       .then((data) => {
         if (data.voices && Array.isArray(data.voices)) {
           setVoices(data.voices);
           if (data.defaultModel) setSelectedVoiceId(data.defaultModel);
         }
-        if (typeof data.espeakAvailable === 'boolean') {
+        if (typeof data.espeakAvailable === "boolean") {
           setEspeakStatus({
             available: data.espeakAvailable,
             path: data.espeakPath,
           });
         }
       })
-      .catch((e) => console.error('Failed to load voices:', e));
+      .catch((e) => console.error("Failed to load voices:", e));
   }, []);
 
   // Parse SRT whenever raw text changes
@@ -315,7 +283,8 @@ export default function App() {
   // Auto-scroll logs internally without scrolling the outer webpage viewport
   useEffect(() => {
     if (autoScrollLogs && logsContainerRef.current) {
-      logsContainerRef.current.scrollTop = logsContainerRef.current.scrollHeight;
+      logsContainerRef.current.scrollTop =
+        logsContainerRef.current.scrollHeight;
     }
   }, [activeJob?.logs, autoScrollLogs]);
 
@@ -328,65 +297,69 @@ export default function App() {
     const es = new EventSource(`/api/subtitles/job/${jobId}/events`);
     eventSourceRef.current = es;
 
-    es.addEventListener('job_state', (e) => {
+    es.addEventListener("job_state", (e) => {
       const data = JSON.parse(e.data);
       setActiveJob(data);
     });
 
-    es.addEventListener('stage_change', (e) => {
+    es.addEventListener("stage_change", (e) => {
       const stage = JSON.parse(e.data);
       setActiveJob((prev) => {
         if (!prev) return null;
-        const stages = prev.stages.map((s) => (s.id === stage.id ? { ...s, ...stage } : s));
+        const stages = prev.stages.map((s) =>
+          s.id === stage.id ? { ...s, ...stage } : s,
+        );
         return { ...prev, stages };
       });
     });
 
-    es.addEventListener('sentence_start', (e) => {
+    es.addEventListener("sentence_start", (e) => {
       const data = JSON.parse(e.data);
       setActiveJob((prev) => {
         if (!prev) return null;
         const items = prev.items.map((it) =>
-          it.index === data.index ? { ...it, status: 'generating' as const } : it
+          it.index === data.index
+            ? { ...it, status: "generating" as const }
+            : it,
         );
         return { ...prev, items };
       });
     });
 
-    es.addEventListener('sentence_progress', (e) => {
+    es.addEventListener("sentence_progress", (e) => {
       const data = JSON.parse(e.data);
       setActiveJob((prev) => {
         if (!prev) return null;
         const items = prev.items.map((it) =>
-          it.index === data.index ? { ...it, status: data.status } : it
+          it.index === data.index ? { ...it, status: data.status } : it,
         );
         return { ...prev, items };
       });
     });
 
-    es.addEventListener('sentence_complete', (e) => {
+    es.addEventListener("sentence_complete", (e) => {
       const completedItem = JSON.parse(e.data);
       setActiveJob((prev) => {
         if (!prev) return null;
         const items = prev.items.map((it) =>
-          it.index === completedItem.index ? { ...it, ...completedItem } : it
+          it.index === completedItem.index ? { ...it, ...completedItem } : it,
         );
         return { ...prev, items };
       });
     });
 
-    es.addEventListener('sentence_error', (e) => {
+    es.addEventListener("sentence_error", (e) => {
       const errorItem = JSON.parse(e.data);
       setActiveJob((prev) => {
         if (!prev) return null;
         const items = prev.items.map((it) =>
-          it.index === errorItem.index ? { ...it, ...errorItem } : it
+          it.index === errorItem.index ? { ...it, ...errorItem } : it,
         );
         return { ...prev, items };
       });
     });
 
-    es.addEventListener('log', (e) => {
+    es.addEventListener("log", (e) => {
       const log = JSON.parse(e.data);
       setActiveJob((prev) => {
         if (!prev) return null;
@@ -394,7 +367,7 @@ export default function App() {
       });
     });
 
-    es.addEventListener('overall_progress', (e) => {
+    es.addEventListener("overall_progress", (e) => {
       const progress = JSON.parse(e.data);
       setActiveJob((prev) => {
         if (!prev) return null;
@@ -402,18 +375,18 @@ export default function App() {
       });
     });
 
-    es.addEventListener('job_status', (e) => {
+    es.addEventListener("job_status", (e) => {
       const data = JSON.parse(e.data);
       setActiveJob((prev) => (prev ? { ...prev, status: data.status } : null));
     });
 
-    es.addEventListener('job_finished', (e) => {
+    es.addEventListener("job_finished", (e) => {
       const data = JSON.parse(e.data);
       setActiveJob((prev) => {
         if (!prev) return null;
         return {
           ...prev,
-          status: 'completed',
+          status: "completed",
           masterAudio: data.masterAudio,
         };
       });
@@ -430,9 +403,12 @@ export default function App() {
 
     let videoDur: number | undefined = undefined;
     if (videoDurationStr.trim()) {
-      const parts = videoDurationStr.trim().split(':');
+      const parts = videoDurationStr.trim().split(":");
       if (parts.length === 3) {
-        videoDur = parseFloat(parts[0]) * 3600 + parseFloat(parts[1]) * 60 + parseFloat(parts[2]);
+        videoDur =
+          parseFloat(parts[0]) * 3600 +
+          parseFloat(parts[1]) * 60 +
+          parseFloat(parts[2]);
       } else if (parts.length === 2) {
         videoDur = parseFloat(parts[0]) * 60 + parseFloat(parts[1]);
       } else {
@@ -441,9 +417,9 @@ export default function App() {
     }
 
     try {
-      const res = await fetch('/api/subtitles/job/create', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      const res = await fetch("/api/subtitles/job/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           items: subtitles,
           model: selectedVoice.modelId,
@@ -461,52 +437,58 @@ export default function App() {
       });
 
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Không thể tạo dự án.');
+      if (!res.ok) throw new Error(data.error || "Không thể tạo dự án.");
 
       const jobId = data.jobId;
       setActiveJob(data.job);
       connectSSE(jobId);
 
       // Start the job
-      await fetch(`/api/subtitles/job/${jobId}/start`, { method: 'POST' });
+      await fetch(`/api/subtitles/job/${jobId}/start`, { method: "POST" });
     } catch (e: any) {
-      console.error('Failed to start job:', e);
+      console.error("Failed to start job:", e);
     }
   };
 
   const handlePauseJob = async () => {
     if (!activeJob) return;
-    await fetch(`/api/subtitles/job/${activeJob.id}/pause`, { method: 'POST' });
+    await fetch(`/api/subtitles/job/${activeJob.id}/pause`, { method: "POST" });
   };
 
   const handleResumeJob = async () => {
     if (!activeJob) return;
-    await fetch(`/api/subtitles/job/${activeJob.id}/start`, { method: 'POST' });
+    await fetch(`/api/subtitles/job/${activeJob.id}/start`, { method: "POST" });
   };
 
   const handlePauseResume = async () => {
     if (!activeJob) return;
-    if (activeJob.status === 'running') {
+    if (activeJob.status === "running") {
       await handlePauseJob();
-    } else if (activeJob.status === 'paused') {
+    } else if (activeJob.status === "paused") {
       await handleResumeJob();
     }
   };
 
   const handleCancelJob = async () => {
     if (!activeJob) return;
-    await fetch(`/api/subtitles/job/${activeJob.id}/cancel`, { method: 'POST' });
+    await fetch(`/api/subtitles/job/${activeJob.id}/cancel`, {
+      method: "POST",
+    });
   };
 
   const handleRetryFailed = async () => {
     if (!activeJob) return;
-    await fetch(`/api/subtitles/job/${activeJob.id}/retry-failed`, { method: 'POST' });
+    await fetch(`/api/subtitles/job/${activeJob.id}/retry-failed`, {
+      method: "POST",
+    });
   };
 
   const handleResetJob = async () => {
     if (activeJob) {
       try {
-        await fetch(`/api/subtitles/job/${activeJob.id}/cleanup`, { method: 'POST' });
+        await fetch(`/api/subtitles/job/${activeJob.id}/cleanup`, {
+          method: "POST",
+        });
       } catch {}
     }
     if (eventSourceRef.current) {
@@ -519,7 +501,9 @@ export default function App() {
 
   const handleRegenerateSingle = async (index: number) => {
     if (!activeJob) return;
-    await fetch(`/api/subtitles/job/${activeJob.id}/single/${index}`, { method: 'POST' });
+    await fetch(`/api/subtitles/job/${activeJob.id}/single/${index}`, {
+      method: "POST",
+    });
   };
 
   const handlePlayItemAudio = (item: SubtitleItem) => {
@@ -547,14 +531,14 @@ export default function App() {
     audio.src = url;
     audio.onended = () => setPlayingItemIndex(null);
     audio.onerror = () => {
-      console.error('Lỗi tải file audio câu:', item.index);
+      console.error("Lỗi tải file audio câu:", item.index);
       setPlayingItemIndex(null);
     };
     audio
       .play()
       .then(() => setPlayingItemIndex(item.index))
       .catch((e) => {
-        console.error('Lỗi phát âm thanh câu:', e);
+        console.error("Lỗi phát âm thanh câu:", e);
         setPlayingItemIndex(null);
       });
   };
@@ -588,14 +572,14 @@ export default function App() {
         setMasterCurrentTime(0);
       };
       audio.onerror = () => {
-        console.error('Lỗi phát master audio');
+        console.error("Lỗi phát master audio");
         setMasterPlaying(false);
       };
       audio
         .play()
         .then(() => setMasterPlaying(true))
         .catch((e) => {
-          console.error('Lỗi phát master audio:', e);
+          console.error("Lỗi phát master audio:", e);
           setMasterPlaying(false);
         });
     }
@@ -629,7 +613,9 @@ export default function App() {
       audio.src = cachedUrl;
       audio.onended = () => setPreviewVoiceId(null);
       audio.onerror = () => setPreviewVoiceId(null);
-      await audio.play().catch((err) => console.error('Audio play error:', err));
+      await audio
+        .play()
+        .catch((err) => console.error("Audio play error:", err));
       setPreviewVoiceId(voice.id);
       return;
     }
@@ -637,26 +623,30 @@ export default function App() {
     // Synthesize sampleText via /api/tts
     setPreviewLoadingVoiceId(voice.id);
     try {
-      const res = await fetch('/api/tts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      const res = await fetch("/api/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          text: voice.sampleText || `Xin chào, tôi là ${voice.name}. Rất hân hạnh được đồng hành cùng bạn.`,
+          text:
+            voice.sampleText ||
+            `Xin chào, tôi là ${voice.name}. Rất hân hạnh được đồng hành cùng bạn.`,
           model: voice.modelId,
           speakerId: voice.speakerId,
           speed: 1.0,
-          format: 'mp3',
+          format: "mp3",
         }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Lỗi tạo âm thanh mẫu');
+      if (!res.ok) throw new Error(data.error || "Lỗi tạo âm thanh mẫu");
 
       const byteCharacters = atob(data.audioBase64);
       const byteNumbers = new Array(byteCharacters.length);
       for (let i = 0; i < byteCharacters.length; i++) {
         byteNumbers[i] = byteCharacters.charCodeAt(i);
       }
-      const blob = new Blob([new Uint8Array(byteNumbers)], { type: data.mimeType || 'audio/mpeg' });
+      const blob = new Blob([new Uint8Array(byteNumbers)], {
+        type: data.mimeType || "audio/mpeg",
+      });
       const url = URL.createObjectURL(blob);
       previewAudioCacheRef.current.set(voice.id, url);
 
@@ -666,10 +656,12 @@ export default function App() {
       audio.src = url;
       audio.onended = () => setPreviewVoiceId(null);
       audio.onerror = () => setPreviewVoiceId(null);
-      await audio.play().catch((err) => console.error('Audio play error:', err));
+      await audio
+        .play()
+        .catch((err) => console.error("Audio play error:", err));
       setPreviewVoiceId(voice.id);
     } catch (e: any) {
-      console.error('Failed to preview voice:', e);
+      console.error("Failed to preview voice:", e);
     } finally {
       setPreviewLoadingVoiceId(null);
     }
@@ -704,7 +696,9 @@ export default function App() {
     setSpeedPriority(preset.speedPriority);
     setPadSilence(preset.padSilence);
     setOutputFormat(preset.outputFormat);
-    setSingleSpeed(Math.min(1.8, Math.max(0.6, (preset.minSpeed + preset.maxSpeed) / 2)));
+    setSingleSpeed(
+      Math.min(1.8, Math.max(0.6, (preset.minSpeed + preset.maxSpeed) / 2)),
+    );
 
     setPresetFeedback(`Đã tự động điền cấu hình: "${preset.name}"`);
     setTimeout(() => setPresetFeedback(null), 3000);
@@ -732,11 +726,11 @@ export default function App() {
     setProjectPresets(updated);
     setSelectedPresetId(newPreset.id);
     try {
-      localStorage.setItem('hoaimy_project_presets', JSON.stringify(updated));
+      localStorage.setItem("hoaimy_project_presets", JSON.stringify(updated));
     } catch {}
 
     setShowSavePresetModal(false);
-    setNewPresetName('');
+    setNewPresetName("");
     setPresetFeedback(`Đã lưu cấu hình dự án: "${trimmed}"`);
     setTimeout(() => setPresetFeedback(null), 3500);
   };
@@ -758,11 +752,11 @@ export default function App() {
             padSilence,
             outputFormat,
           }
-        : p
+        : p,
     );
     setProjectPresets(updated);
     try {
-      localStorage.setItem('hoaimy_project_presets', JSON.stringify(updated));
+      localStorage.setItem("hoaimy_project_presets", JSON.stringify(updated));
     } catch {}
 
     setPresetFeedback(`Đã cập nhật cấu hình: "${preset.name}"`);
@@ -787,11 +781,11 @@ export default function App() {
 
     setProjectPresets(updated);
     try {
-      localStorage.setItem('hoaimy_project_presets', JSON.stringify(updated));
+      localStorage.setItem("hoaimy_project_presets", JSON.stringify(updated));
     } catch {}
 
     setEditingPresetId(null);
-    setEditingPresetName('');
+    setEditingPresetName("");
     setPresetFeedback(`Đã đổi tên cấu hình thành "${trimmed}"`);
     setTimeout(() => setPresetFeedback(null), 3000);
   };
@@ -804,11 +798,14 @@ export default function App() {
     const finalPresets = updated.length > 0 ? updated : DEFAULT_PRESETS;
     setProjectPresets(finalPresets);
     try {
-      localStorage.setItem('hoaimy_project_presets', JSON.stringify(finalPresets));
+      localStorage.setItem(
+        "hoaimy_project_presets",
+        JSON.stringify(finalPresets),
+      );
     } catch {}
 
     if (selectedPresetId === presetId) {
-      handleApplyPreset(finalPresets[0]?.id || 'preset-balanced');
+      handleApplyPreset(finalPresets[0]?.id || "preset-balanced");
     }
     setPresetFeedback(`Đã xóa cấu hình: "${preset.name}"`);
     setTimeout(() => setPresetFeedback(null), 3000);
@@ -818,34 +815,40 @@ export default function App() {
   const handleExportPresets = () => {
     try {
       const exportData = {
-        app: 'HoaiMy_PiperTTS_Studio',
+        app: "HoaiMy_PiperTTS_Studio",
         exportedAt: new Date().toISOString(),
-        version: '1.0',
+        version: "1.0",
         presets: projectPresets,
       };
 
       const jsonStr = JSON.stringify(exportData, null, 2);
-      const blob = new Blob([jsonStr], { type: 'application/json;charset=utf-8' });
+      const blob = new Blob([jsonStr], {
+        type: "application/json;charset=utf-8",
+      });
       const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
+      const link = document.createElement("a");
       link.href = url;
-      link.download = 'tts_studio_project_settings.json';
+      link.download = "tts_studio_project_settings.json";
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
       URL.revokeObjectURL(url);
 
-      setPresetFeedback('Đã xuất file "tts_studio_project_settings.json" thành công!');
+      setPresetFeedback(
+        'Đã xuất file "tts_studio_project_settings.json" thành công!',
+      );
       setTimeout(() => setPresetFeedback(null), 3500);
     } catch (e: any) {
-      console.error('Lỗi xuất cấu hình:', e);
-      setPresetFeedback('Lỗi khi xuất file cấu hình!');
+      console.error("Lỗi xuất cấu hình:", e);
+      setPresetFeedback("Lỗi khi xuất file cấu hình!");
       setTimeout(() => setPresetFeedback(null), 3000);
     }
   };
 
   // Import settings from JSON file into studio (Requirement 2)
-  const handleImportPresetsFile = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImportPresetsFile = (
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) => {
     const file = event.target.files?.[0];
     if (!file) return;
 
@@ -861,37 +864,44 @@ export default function App() {
         } else if (parsed && Array.isArray(parsed.presets)) {
           rawList = parsed.presets;
         } else {
-          throw new Error('Định dạng file JSON không chứa mảng presets hợp lệ');
+          throw new Error("Định dạng file JSON không chứa mảng presets hợp lệ");
         }
 
         const validImported: ProjectPreset[] = [];
         for (const item of rawList) {
-          if (!item.name || typeof item.name !== 'string') continue;
+          if (!item.name || typeof item.name !== "string") continue;
           validImported.push({
-            id: item.id && !projectPresets.some((p) => p.id === item.id)
-              ? item.id
-              : `imported-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+            id:
+              item.id && !projectPresets.some((p) => p.id === item.id)
+                ? item.id
+                : `imported-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
             name: item.name.trim(),
             isDefault: false,
-            voiceId: item.voiceId || 'local:hoaimy-vietnamese-vi-medium-ljkjhi',
-            batchSizeChoice: item.batchSizeChoice || '4',
-            customBatchSize: typeof item.customBatchSize === 'number' ? item.customBatchSize : 4,
-            maxSpeed: typeof item.maxSpeed === 'number' ? item.maxSpeed : 1.5,
-            minSpeed: typeof item.minSpeed === 'number' ? item.minSpeed : 0.8,
-            speedPriority: item.speedPriority || 'balanced',
-            padSilence: typeof item.padSilence === 'boolean' ? item.padSilence : true,
-            outputFormat: item.outputFormat === 'wav' ? 'wav' : 'mp3',
+            voiceId: item.voiceId || "local:hoaimy-vietnamese-vi-medium-ljkjhi",
+            batchSizeChoice: item.batchSizeChoice || "4",
+            customBatchSize:
+              typeof item.customBatchSize === "number"
+                ? item.customBatchSize
+                : 4,
+            maxSpeed: typeof item.maxSpeed === "number" ? item.maxSpeed : 1.5,
+            minSpeed: typeof item.minSpeed === "number" ? item.minSpeed : 0.8,
+            speedPriority: item.speedPriority || "balanced",
+            padSilence:
+              typeof item.padSilence === "boolean" ? item.padSilence : true,
+            outputFormat: item.outputFormat === "wav" ? "wav" : "mp3",
           });
         }
 
         if (validImported.length === 0) {
-          setPresetFeedback('Không tìm thấy cấu hình hợp lệ trong file JSON!');
+          setPresetFeedback("Không tìm thấy cấu hình hợp lệ trong file JSON!");
           setTimeout(() => setPresetFeedback(null), 3500);
           return;
         }
 
         // Merge imported presets, handling duplicate names nicely
-        const existingNames = new Set(projectPresets.map((p) => p.name.toLowerCase()));
+        const existingNames = new Set(
+          projectPresets.map((p) => p.name.toLowerCase()),
+        );
         const toAdd = validImported.map((item) => {
           let name = item.name;
           if (existingNames.has(name.toLowerCase())) {
@@ -904,21 +914,26 @@ export default function App() {
         const updated = [...projectPresets, ...toAdd];
         setProjectPresets(updated);
         try {
-          localStorage.setItem('hoaimy_project_presets', JSON.stringify(updated));
+          localStorage.setItem(
+            "hoaimy_project_presets",
+            JSON.stringify(updated),
+          );
         } catch {}
 
         if (toAdd.length > 0) {
           handleApplyPreset(toAdd[0].id);
         }
 
-        setPresetFeedback(`Đã nhập thành công ${toAdd.length} cấu hình từ JSON!`);
+        setPresetFeedback(
+          `Đã nhập thành công ${toAdd.length} cấu hình từ JSON!`,
+        );
         setTimeout(() => setPresetFeedback(null), 3500);
       } catch (err: any) {
-        console.error('Import presets error:', err);
-        setPresetFeedback('Lỗi: File JSON không đúng định dạng!');
+        console.error("Import presets error:", err);
+        setPresetFeedback("Lỗi: File JSON không đúng định dạng!");
         setTimeout(() => setPresetFeedback(null), 3500);
       } finally {
-        if (event.target) event.target.value = '';
+        if (event.target) event.target.value = "";
       }
     };
     reader.readAsText(file);
@@ -927,8 +942,10 @@ export default function App() {
   const processSubtitleFile = (file: File) => {
     if (!file) return;
     const name = file.name.toLowerCase();
-    if (!name.endsWith('.srt') && !name.endsWith('.txt')) {
-      setDragFeedback('Vui lòng chọn hoặc kéo thả file phụ đề có đuôi .srt hoặc .txt');
+    if (!name.endsWith(".srt") && !name.endsWith(".txt")) {
+      setDragFeedback(
+        "Vui lòng chọn hoặc kéo thả file phụ đề có đuôi .srt hoặc .txt",
+      );
       setTimeout(() => setDragFeedback(null), 4000);
       return;
     }
@@ -938,11 +955,11 @@ export default function App() {
       let content = evt.target?.result as string;
       if (content) {
         // Strip BOM if present
-        if (content.charCodeAt(0) === 0xFEFF) {
+        if (content.charCodeAt(0) === 0xfeff) {
           content = content.slice(1);
         }
         // Normalize to Unicode NFC
-        content = content.normalize('NFC');
+        content = content.normalize("NFC");
         setSrtRawText(content);
         setActiveJob(null);
         setUploadedFileName(file.name);
@@ -950,7 +967,7 @@ export default function App() {
         setTimeout(() => setDragFeedback(null), 3500);
       }
     };
-    reader.readAsText(file, 'utf-8');
+    reader.readAsText(file, "utf-8");
   };
 
   // Window-level drag & drop listener for smooth UX
@@ -959,14 +976,14 @@ export default function App() {
     const handleWindowDragEnter = (e: DragEvent) => {
       e.preventDefault();
       dragCounter++;
-      if (e.dataTransfer?.types?.includes('Files')) {
+      if (e.dataTransfer?.types?.includes("Files")) {
         setIsWindowDragging(true);
       }
     };
     const handleWindowDragOver = (e: DragEvent) => {
       e.preventDefault();
       if (e.dataTransfer) {
-        e.dataTransfer.dropEffect = 'copy';
+        e.dataTransfer.dropEffect = "copy";
       }
     };
     const handleWindowDragLeave = (e: DragEvent) => {
@@ -987,15 +1004,15 @@ export default function App() {
       }
     };
 
-    window.addEventListener('dragenter', handleWindowDragEnter);
-    window.addEventListener('dragover', handleWindowDragOver);
-    window.addEventListener('dragleave', handleWindowDragLeave);
-    window.addEventListener('drop', handleWindowDrop);
+    window.addEventListener("dragenter", handleWindowDragEnter);
+    window.addEventListener("dragover", handleWindowDragOver);
+    window.addEventListener("dragleave", handleWindowDragLeave);
+    window.addEventListener("drop", handleWindowDrop);
     return () => {
-      window.removeEventListener('dragenter', handleWindowDragEnter);
-      window.removeEventListener('dragover', handleWindowDragOver);
-      window.removeEventListener('dragleave', handleWindowDragLeave);
-      window.removeEventListener('drop', handleWindowDrop);
+      window.removeEventListener("dragenter", handleWindowDragEnter);
+      window.removeEventListener("dragover", handleWindowDragOver);
+      window.removeEventListener("dragleave", handleWindowDragLeave);
+      window.removeEventListener("drop", handleWindowDrop);
     };
   }, []);
 
@@ -1003,7 +1020,7 @@ export default function App() {
     const file = e.target.files?.[0];
     if (file) {
       processSubtitleFile(file);
-      e.target.value = '';
+      e.target.value = "";
     }
   };
 
@@ -1034,9 +1051,9 @@ export default function App() {
     if (!singleText.trim()) return;
     setSingleIsLoading(true);
     try {
-      const res = await fetch('/api/tts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      const res = await fetch("/api/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           text: singleText.trim(),
           model: selectedVoice.modelId,
@@ -1054,7 +1071,9 @@ export default function App() {
       for (let i = 0; i < byteCharacters.length; i++) {
         byteNumbers[i] = byteCharacters.charCodeAt(i);
       }
-      const blob = new Blob([new Uint8Array(byteNumbers)], { type: data.mimeType });
+      const blob = new Blob([new Uint8Array(byteNumbers)], {
+        type: data.mimeType,
+      });
       const url = URL.createObjectURL(blob);
       setSingleAudioUrl(url);
 
@@ -1073,13 +1092,13 @@ export default function App() {
 
   // Filtered logs
   const displayLogs = (activeJob?.logs || []).filter((log) => {
-    if (logFilter === 'ALL') return true;
+    if (logFilter === "ALL") return true;
     return log.level === logFilter;
   });
 
   const completedSentencesCount =
     activeJob?.overallProgress?.completed ??
-    subtitles.filter((s) => s.status === 'completed').length;
+    subtitles.filter((s) => s.status === "completed").length;
   const totalSentencesCount =
     activeJob?.overallProgress?.total ?? subtitles.length;
   const completionPercent =
@@ -1087,30 +1106,29 @@ export default function App() {
       ? Math.round((completedSentencesCount / totalSentencesCount) * 100)
       : 0;
 
-  const selectedVoice =
-    voices.find((v) => v.id === selectedVoiceId) ||
+  const selectedVoice = voices.find((v) => v.id === selectedVoiceId) ||
     voices[0] || {
-      id: 'local:hoaimy-vietnamese-vi-medium-ljkjhi',
-      modelId: 'local:hoaimy-vietnamese-vi-medium-ljkjhi',
-      name: 'Hoài My (Khuyên Dùng)',
-      tag: 'Nữ · Miền Bắc · Chuẩn & Truyền cảm (Offline)',
-      gender: 'female',
-      description: 'Giọng đọc nữ tự nhiên chuẩn miền Bắc, 100% Offline.',
-      sampleText: 'Xin chào, tôi là Hoài My.',
+      id: "local:hoaimy-vietnamese-vi-medium-ljkjhi",
+      modelId: "local:hoaimy-vietnamese-vi-medium-ljkjhi",
+      name: "Hoài My (Khuyên Dùng)",
+      tag: "Nữ · Miền Bắc · Chuẩn & Truyền cảm (Offline)",
+      gender: "female",
+      description: "Giọng đọc nữ tự nhiên chuẩn miền Bắc, 100% Offline.",
+      sampleText: "Xin chào, tôi là Hoài My.",
       recommended: true,
     };
 
   const selectedPreset =
     projectPresets.find((p) => p.id === selectedPresetId) || projectPresets[0];
 
-  const femaleVoicesCount = voices.filter((v) => v.gender === 'female').length;
-  const maleVoicesCount = voices.filter((v) => v.gender === 'male').length;
+  const femaleVoicesCount = voices.filter((v) => v.gender === "female").length;
+  const maleVoicesCount = voices.filter((v) => v.gender === "male").length;
   const recommendedVoicesCount = voices.filter((v) => v.recommended).length;
 
   const filteredVoices = voices.filter((v) => {
-    if (voiceGenderFilter === 'recommended' && !v.recommended) return false;
-    if (voiceGenderFilter === 'female' && v.gender !== 'female') return false;
-    if (voiceGenderFilter === 'male' && v.gender !== 'male') return false;
+    if (voiceGenderFilter === "recommended" && !v.recommended) return false;
+    if (voiceGenderFilter === "female" && v.gender !== "female") return false;
+    if (voiceGenderFilter === "male" && v.gender !== "male") return false;
     if (voiceSearchQuery.trim()) {
       const q = voiceSearchQuery.toLowerCase();
       return (
@@ -1155,10 +1173,13 @@ export default function App() {
                 <h1 className="font-semibold text-base sm:text-lg text-white tracking-tight">
                   Hoài My Piper TTS Studio
                 </h1>
-                <span className="text-xs text-amber-400 font-mono font-medium">Timeline Sync</span>
+                <span className="text-xs text-amber-400 font-mono font-medium">
+                  Timeline Sync
+                </span>
               </div>
               <p className="text-xs text-slate-400 hidden sm:block">
-                Đồng bộ phụ đề SRT sang Audio TTS khớp Timestamp chuẩn giọng Hoài My
+                Đồng bộ phụ đề SRT sang Audio TTS khớp Timestamp chuẩn giọng
+                Hoài My
               </p>
             </div>
           </div>
@@ -1168,22 +1189,22 @@ export default function App() {
             <div className="flex items-center p-1 bg-slate-950/80 rounded-xl border border-slate-800 text-xs">
               <button
                 type="button"
-                onClick={() => setActiveTab('subtitles')}
+                onClick={() => setActiveTab("subtitles")}
                 className={`px-3 py-1.5 rounded-lg font-medium transition-all ${
-                  activeTab === 'subtitles'
-                    ? 'bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/20'
-                    : 'text-slate-400 hover:text-white'
+                  activeTab === "subtitles"
+                    ? "bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/20"
+                    : "text-slate-400 hover:text-white"
                 }`}
               >
                 Đồng Bộ Phụ Đề (SRT)
               </button>
               <button
                 type="button"
-                onClick={() => setActiveTab('single')}
+                onClick={() => setActiveTab("single")}
                 className={`px-3 py-1.5 rounded-lg font-medium transition-all ${
-                  activeTab === 'single'
-                    ? 'bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/20'
-                    : 'text-slate-400 hover:text-white'
+                  activeTab === "single"
+                    ? "bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/20"
+                    : "text-slate-400 hover:text-white"
                 }`}
               >
                 Đọc Đoạn Văn Nhanh
@@ -1206,7 +1227,7 @@ export default function App() {
         {/* ========================================================= */}
         {/* TAB 1: SUBTITLE TIMELINE SYNCHRONIZATION STUDIO */}
         {/* ========================================================= */}
-        {activeTab === 'subtitles' && (
+        {activeTab === "subtitles" && (
           <div className="flex flex-col lg:flex-row items-start gap-6">
             {/* ========================================================= */}
             {/* CỘT BÊN TRÁI: TOÀN BỘ SETTINGS & DỮ LIỆU ĐẦU VÀO          */}
@@ -1221,8 +1242,12 @@ export default function App() {
                       <Sliders className="w-4 h-4" />
                     </div>
                     <div>
-                      <h2 className="text-sm font-bold text-white tracking-tight">Cột Cài Đặt (Settings)</h2>
-                      <p className="text-[11px] text-slate-400">Giọng đọc, phụ đề & tham số</p>
+                      <h2 className="text-sm font-bold text-white tracking-tight">
+                        Cột Cài Đặt (Settings)
+                      </h2>
+                      <p className="text-[11px] text-slate-400">
+                        Giọng đọc, phụ đề & tham số
+                      </p>
                     </div>
                   </div>
                   <button
@@ -1257,9 +1282,11 @@ export default function App() {
                   {/* Dropdown Selector */}
                   <div className="space-y-1.5">
                     <div className="flex items-center justify-between text-[11px] text-slate-300">
-                      <span className="font-medium">Chọn cấu hình lưu sẵn:</span>
+                      <span className="font-medium">
+                        Chọn cấu hình lưu sẵn:
+                      </span>
                       <span className="text-[10px] text-slate-400 font-mono">
-                        {selectedPreset?.isDefault ? 'Mẫu chuẩn' : 'Cá nhân'}
+                        {selectedPreset?.isDefault ? "Mẫu chuẩn" : "Cá nhân"}
                       </span>
                     </div>
                     <select
@@ -1301,9 +1328,17 @@ export default function App() {
                       </span>
                     </div>
                     <div className="flex items-center justify-between text-[10px] text-slate-400 pt-1 border-t border-slate-900">
-                      <span>Tốc độ: {minSpeed.toFixed(2)}x - {maxSpeed.toFixed(2)}x</span>
+                      <span>
+                        Tốc độ: {minSpeed.toFixed(2)}x - {maxSpeed.toFixed(2)}x
+                      </span>
                       <span>Batch: {effectiveBatchSize}</span>
-                      <span>{speedPriority === 'strict' ? 'Timeline' : speedPriority === 'natural' ? 'Tự nhiên' : 'Cân bằng'}</span>
+                      <span>
+                        {speedPriority === "strict"
+                          ? "Timeline"
+                          : speedPriority === "natural"
+                            ? "Tự nhiên"
+                            : "Cân bằng"}
+                      </span>
                     </div>
                   </div>
 
@@ -1380,12 +1415,12 @@ export default function App() {
                       <div className="flex items-center gap-2.5">
                         <div
                           className={`w-9 h-9 rounded-xl flex items-center justify-center font-bold text-xs shrink-0 shadow-md ${
-                            selectedVoice.gender === 'female'
-                              ? 'bg-rose-500/15 text-rose-300 border border-rose-500/30'
-                              : 'bg-sky-500/15 text-sky-300 border border-sky-500/30'
+                            selectedVoice.gender === "female"
+                              ? "bg-rose-500/15 text-rose-300 border border-rose-500/30"
+                              : "bg-sky-500/15 text-sky-300 border border-sky-500/30"
                           }`}
                         >
-                          {selectedVoice.gender === 'female' ? 'Nữ' : 'Nam'}
+                          {selectedVoice.gender === "female" ? "Nữ" : "Nam"}
                         </div>
                         <div>
                           <div className="flex items-center gap-1.5 flex-wrap">
@@ -1416,8 +1451,8 @@ export default function App() {
                       disabled={previewLoadingVoiceId === selectedVoice.id}
                       className={`w-full py-2 px-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer border ${
                         previewVoiceId === selectedVoice.id
-                          ? 'bg-amber-500 text-slate-950 font-bold border-amber-400 shadow-md shadow-amber-500/25'
-                          : 'bg-slate-950/80 hover:bg-slate-800 text-slate-300 hover:text-white border-slate-800 hover:border-slate-700'
+                          ? "bg-amber-500 text-slate-950 font-bold border-amber-400 shadow-md shadow-amber-500/25"
+                          : "bg-slate-950/80 hover:bg-slate-800 text-slate-300 hover:text-white border-slate-800 hover:border-slate-700"
                       }`}
                       title="Nghe câu thoại mẫu của giọng đọc này"
                     >
@@ -1459,7 +1494,9 @@ export default function App() {
                   {espeakStatus?.available ? (
                     <div className="p-2.5 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-[11px] text-emerald-300 flex items-center gap-2">
                       <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
-                      <span>eSpeak NG: Đã kết nối (Phát âm chuẩn tiếng Việt có dấu).</span>
+                      <span>
+                        eSpeak NG: Đã kết nối (Phát âm chuẩn tiếng Việt có dấu).
+                      </span>
                     </div>
                   ) : (
                     <div className="p-2.5 bg-amber-500/10 border border-amber-500/30 rounded-xl text-[11px] text-amber-300 space-y-1">
@@ -1468,7 +1505,16 @@ export default function App() {
                         <span>eSpeak NG: Chưa phát hiện trên hệ thống</span>
                       </div>
                       <p className="text-[10px] text-amber-200/90 leading-relaxed">
-                        Để đọc chuẩn tiếng Việt có dấu khi chạy local, hãy chạy file <code className="text-white font-mono bg-slate-950 px-1 py-0.5 rounded">Setup.bat</code> hoặc cài đặt qua lệnh <code className="text-white font-mono bg-slate-950 px-1 py-0.5 rounded">winget install eSpeak-NG.eSpeak-NG</code>.
+                        Để đọc chuẩn tiếng Việt có dấu khi chạy local, hãy chạy
+                        file{" "}
+                        <code className="text-white font-mono bg-slate-950 px-1 py-0.5 rounded">
+                          Setup.bat
+                        </code>{" "}
+                        hoặc cài đặt qua lệnh{" "}
+                        <code className="text-white font-mono bg-slate-950 px-1 py-0.5 rounded">
+                          winget install eSpeak-NG.eSpeak-NG
+                        </code>
+                        .
                       </p>
                     </div>
                   )}
@@ -1499,8 +1545,8 @@ export default function App() {
                     onClick={() => fileInputRef.current?.click()}
                     className={`relative border-2 border-dashed rounded-xl p-4 text-center transition-all cursor-pointer select-none group ${
                       isDragging
-                        ? 'border-amber-400 bg-amber-500/15 scale-[1.01] shadow-lg shadow-amber-500/20 ring-2 ring-amber-400/40'
-                        : 'border-slate-700 hover:border-amber-500/60 hover:bg-slate-950/70 bg-slate-950/40'
+                        ? "border-amber-400 bg-amber-500/15 scale-[1.01] shadow-lg shadow-amber-500/20 ring-2 ring-amber-400/40"
+                        : "border-slate-700 hover:border-amber-500/60 hover:bg-slate-950/70 bg-slate-950/40"
                     }`}
                   >
                     <input
@@ -1514,17 +1560,22 @@ export default function App() {
                       <div
                         className={`w-9 h-9 rounded-xl flex items-center justify-center transition-transform ${
                           isDragging
-                            ? 'bg-amber-500 text-slate-950 scale-110'
-                            : 'bg-slate-800/80 text-amber-400 group-hover:scale-105'
+                            ? "bg-amber-500 text-slate-950 scale-110"
+                            : "bg-slate-800/80 text-amber-400 group-hover:scale-105"
                         }`}
                       >
                         <UploadCloud className="w-5 h-5" />
                       </div>
                       <div className="text-xs font-semibold text-white">
-                        {isDragging ? 'Thả file phụ đề vào đây...' : 'Kéo thả file .SRT hoặc .TXT vào đây'}
+                        {isDragging
+                          ? "Thả file phụ đề vào đây..."
+                          : "Kéo thả file .SRT hoặc .TXT vào đây"}
                       </div>
                       <div className="text-[11px] text-slate-400">
-                        hoặc <span className="text-amber-400 underline font-medium">bấm để duyệt file từ máy</span>
+                        hoặc{" "}
+                        <span className="text-amber-400 underline font-medium">
+                          bấm để duyệt file từ máy
+                        </span>
                       </div>
                       {dragFeedback && (
                         <div className="mt-1 text-[11px] text-emerald-300 font-medium px-2.5 py-0.5 bg-emerald-500/15 rounded-lg border border-emerald-500/30 animate-pulse">
@@ -1539,7 +1590,9 @@ export default function App() {
                     <div className="flex items-center justify-between p-2.5 bg-amber-500/10 border border-amber-500/25 rounded-xl text-xs">
                       <div className="flex items-center gap-2 min-w-0">
                         <FileText className="w-4 h-4 text-amber-400 shrink-0" />
-                        <span className="truncate text-slate-200 font-medium text-xs">{uploadedFileName}</span>
+                        <span className="truncate text-slate-200 font-medium text-xs">
+                          {uploadedFileName}
+                        </span>
                       </div>
                       <span className="text-[11px] text-amber-300 font-mono font-bold bg-amber-500/20 px-2 py-0.5 rounded border border-amber-500/30 shrink-0">
                         {subtitles.length} câu
@@ -1549,13 +1602,15 @@ export default function App() {
 
                   {/* Preset chips */}
                   <div className="space-y-1.5">
-                    <span className="text-slate-400 text-[11px] block">Dữ liệu mẫu nhanh:</span>
+                    <span className="text-slate-400 text-[11px] block">
+                      Dữ liệu mẫu nhanh:
+                    </span>
                     <div className="flex flex-wrap gap-1.5 text-xs">
                       <button
                         type="button"
                         onClick={() => {
                           setSrtRawText(SAMPLE_PROMPT_SRT);
-                          setUploadedFileName('Mẫu Prompt (2 câu)');
+                          setUploadedFileName("Mẫu Prompt (2 câu)");
                           setActiveJob(null);
                         }}
                         className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs transition-colors border border-slate-700/60 cursor-pointer"
@@ -1566,7 +1621,7 @@ export default function App() {
                         type="button"
                         onClick={() => {
                           setSrtRawText(SAMPLE_DIALOGUE_SRT);
-                          setUploadedFileName('Hội thoại Phim (8 câu)');
+                          setUploadedFileName("Hội thoại Phim (8 câu)");
                           setActiveJob(null);
                         }}
                         className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs transition-colors border border-slate-700/60 cursor-pointer"
@@ -1577,7 +1632,7 @@ export default function App() {
                         type="button"
                         onClick={() => {
                           setSrtRawText(SAMPLE_TEST_50_SRT);
-                          setUploadedFileName('Bài giảng Test (50 câu)');
+                          setUploadedFileName("Bài giảng Test (50 câu)");
                           setActiveJob(null);
                         }}
                         className="px-2.5 py-1 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 rounded-lg text-xs transition-colors border border-amber-500/30 font-medium cursor-pointer"
@@ -1590,15 +1645,23 @@ export default function App() {
 
                   <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-xs text-slate-400">
                     <span>
-                      Đã phân tích: <strong className="text-white">{subtitles.length}</strong> câu
+                      Đã phân tích:{" "}
+                      <strong className="text-white">{subtitles.length}</strong>{" "}
+                      câu
                     </span>
                     <button
                       type="button"
                       onClick={() => setShowSrtEditor(!showSrtEditor)}
                       className="text-amber-400 hover:text-amber-300 flex items-center gap-1 text-[11px] font-medium"
                     >
-                      {showSrtEditor ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                      <span>{showSrtEditor ? 'Đóng xem SRT' : 'Xem & Sửa SRT thô'}</span>
+                      {showSrtEditor ? (
+                        <EyeOff className="w-3.5 h-3.5" />
+                      ) : (
+                        <Eye className="w-3.5 h-3.5" />
+                      )}
+                      <span>
+                        {showSrtEditor ? "Đóng xem SRT" : "Xem & Sửa SRT thô"}
+                      </span>
                     </button>
                   </div>
 
@@ -1608,7 +1671,7 @@ export default function App() {
                       <textarea
                         value={srtRawText}
                         onChange={(e) => {
-                          setSrtRawText(e.target.value.normalize('NFC'));
+                          setSrtRawText(e.target.value.normalize("NFC"));
                           setActiveJob(null);
                         }}
                         rows={6}
@@ -1635,7 +1698,7 @@ export default function App() {
                       className="text-slate-400 hover:text-white"
                     >
                       <ChevronDown
-                        className={`w-4 h-4 transition-transform ${showSettingsDrawer ? 'rotate-180' : ''}`}
+                        className={`w-4 h-4 transition-transform ${showSettingsDrawer ? "rotate-180" : ""}`}
                       />
                     </button>
                   </div>
@@ -1654,31 +1717,46 @@ export default function App() {
                           </span>
                         </div>
                         <div className="grid grid-cols-3 gap-1 bg-slate-900 p-1 rounded-xl border border-slate-800">
-                          {(['1', '2', '4', '8', '16', 'custom'] as const).map((opt) => (
-                            <button
-                              key={opt}
-                              type="button"
-                              disabled={activeJob?.status === 'running'}
-                              onClick={() => setBatchSizeChoice(opt)}
-                              className={`py-1 rounded-lg text-center font-medium transition-colors ${
-                                batchSizeChoice === opt
-                                  ? 'bg-amber-500 text-slate-950 font-bold shadow'
-                                  : 'text-slate-400 hover:text-white'
-                              } ${activeJob?.status === 'running' ? 'opacity-50 cursor-not-allowed' : ''}`}
-                            >
-                              {opt === '1' ? '1 (Tuần tự)' : opt === 'custom' ? 'Tùy chỉnh' : `${opt} câu`}
-                            </button>
-                          ))}
+                          {(["1", "2", "4", "8", "16", "custom"] as const).map(
+                            (opt) => (
+                              <button
+                                key={opt}
+                                type="button"
+                                disabled={activeJob?.status === "running"}
+                                onClick={() => setBatchSizeChoice(opt)}
+                                className={`py-1 rounded-lg text-center font-medium transition-colors ${
+                                  batchSizeChoice === opt
+                                    ? "bg-amber-500 text-slate-950 font-bold shadow"
+                                    : "text-slate-400 hover:text-white"
+                                } ${activeJob?.status === "running" ? "opacity-50 cursor-not-allowed" : ""}`}
+                              >
+                                {opt === "1"
+                                  ? "1 (Tuần tự)"
+                                  : opt === "custom"
+                                    ? "Tùy chỉnh"
+                                    : `${opt} câu`}
+                              </button>
+                            ),
+                          )}
                         </div>
-                        {batchSizeChoice === 'custom' && (
+                        {batchSizeChoice === "custom" && (
                           <div className="flex items-center gap-2 pt-1">
-                            <span className="text-slate-400 text-[11px]">Nhập số câu:</span>
+                            <span className="text-slate-400 text-[11px]">
+                              Nhập số câu:
+                            </span>
                             <input
                               type="number"
                               min="1"
                               max="32"
                               value={customBatchSize}
-                              onChange={(e) => setCustomBatchSize(Math.max(1, Math.min(32, parseInt(e.target.value) || 1)))}
+                              onChange={(e) =>
+                                setCustomBatchSize(
+                                  Math.max(
+                                    1,
+                                    Math.min(32, parseInt(e.target.value) || 1),
+                                  ),
+                                )
+                              }
                               className="w-20 bg-slate-900 border border-slate-700 rounded-lg px-2 py-0.5 text-slate-100 font-mono text-xs focus:ring-1 focus:ring-amber-500"
                             />
                           </div>
@@ -1688,8 +1766,12 @@ export default function App() {
                       {/* Max Speed */}
                       <div className="space-y-1.5">
                         <div className="flex justify-between">
-                          <span className="text-slate-300 font-medium">Tốc độ tối đa (Max Speed):</span>
-                          <span className="text-amber-400 font-mono font-semibold">{maxSpeed.toFixed(2)}x</span>
+                          <span className="text-slate-300 font-medium">
+                            Tốc độ tối đa (Max Speed):
+                          </span>
+                          <span className="text-amber-400 font-mono font-semibold">
+                            {maxSpeed.toFixed(2)}x
+                          </span>
                         </div>
                         <input
                           type="range"
@@ -1704,14 +1786,20 @@ export default function App() {
                           }}
                           className="w-full accent-amber-500 h-1.5 bg-slate-800 rounded cursor-pointer"
                         />
-                        <span className="text-[10px] text-slate-400 block">Giới hạn tăng tốc tối đa (0.9x - 3.0x)</span>
+                        <span className="text-[10px] text-slate-400 block">
+                          Giới hạn tăng tốc tối đa (0.9x - 3.0x)
+                        </span>
                       </div>
 
                       {/* Min Speed */}
                       <div className="space-y-1.5">
                         <div className="flex justify-between">
-                          <span className="text-slate-300 font-medium">Tốc độ tối thiểu (Min Speed):</span>
-                          <span className="text-amber-400 font-mono font-semibold">{minSpeed.toFixed(2)}x</span>
+                          <span className="text-slate-300 font-medium">
+                            Tốc độ tối thiểu (Min Speed):
+                          </span>
+                          <span className="text-amber-400 font-mono font-semibold">
+                            {minSpeed.toFixed(2)}x
+                          </span>
                         </div>
                         <input
                           type="range"
@@ -1726,26 +1814,40 @@ export default function App() {
                           }}
                           className="w-full accent-amber-500 h-1.5 bg-slate-800 rounded cursor-pointer"
                         />
-                        <span className="text-[10px] text-slate-400 block">Giới hạn giảm tốc khi câu ngắn (0.6x - 1.5x)</span>
+                        <span className="text-[10px] text-slate-400 block">
+                          Giới hạn giảm tốc khi câu ngắn (0.6x - 1.5x)
+                        </span>
                       </div>
 
                       {/* Priority */}
                       <div className="space-y-1.5">
-                        <span className="text-slate-300 font-medium block">Mức độ ưu tiên:</span>
+                        <span className="text-slate-300 font-medium block">
+                          Mức độ ưu tiên:
+                        </span>
                         <select
                           value={speedPriority}
-                          onChange={(e) => setSpeedPriority(e.target.value as any)}
+                          onChange={(e) =>
+                            setSpeedPriority(e.target.value as any)
+                          }
                           className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-slate-200"
                         >
-                          <option value="balanced">Cân bằng (Khuyên dùng)</option>
-                          <option value="natural">Ưu tiên Giọng Tự Nhiên (Max 1.15x)</option>
-                          <option value="strict">Ưu tiên Khớp Timeline Tuyệt Đối</option>
+                          <option value="balanced">
+                            Cân bằng (Khuyên dùng)
+                          </option>
+                          <option value="natural">
+                            Ưu tiên Giọng Tự Nhiên (Max 1.15x)
+                          </option>
+                          <option value="strict">
+                            Ưu tiên Khớp Timeline Tuyệt Đối
+                          </option>
                         </select>
                       </div>
 
                       {/* Target Video Duration & Format */}
                       <div className="space-y-1.5">
-                        <span className="text-slate-300 font-medium block">Thời lượng video (Tùy chọn):</span>
+                        <span className="text-slate-300 font-medium block">
+                          Thời lượng video (Tùy chọn):
+                        </span>
                         <input
                           type="text"
                           placeholder="00:05:00 hoặc số giây"
@@ -1756,22 +1858,28 @@ export default function App() {
                       </div>
 
                       <div className="flex items-center justify-between pt-1 border-t border-slate-800">
-                        <span className="text-slate-400">Định dạng file xuất:</span>
+                        <span className="text-slate-400">
+                          Định dạng file xuất:
+                        </span>
                         <div className="flex gap-1.5">
                           <button
                             type="button"
-                            onClick={() => setOutputFormat('mp3')}
+                            onClick={() => setOutputFormat("mp3")}
                             className={`px-2.5 py-1 rounded text-xs font-semibold ${
-                              outputFormat === 'mp3' ? 'bg-amber-500 text-slate-950 font-bold' : 'bg-slate-800 text-slate-300'
+                              outputFormat === "mp3"
+                                ? "bg-amber-500 text-slate-950 font-bold"
+                                : "bg-slate-800 text-slate-300"
                             }`}
                           >
                             MP3
                           </button>
                           <button
                             type="button"
-                            onClick={() => setOutputFormat('wav')}
+                            onClick={() => setOutputFormat("wav")}
                             className={`px-2.5 py-1 rounded text-xs font-semibold ${
-                              outputFormat === 'wav' ? 'bg-amber-500 text-slate-950 font-bold' : 'bg-slate-800 text-slate-300'
+                              outputFormat === "wav"
+                                ? "bg-amber-500 text-slate-950 font-bold"
+                                : "bg-slate-800 text-slate-300"
                             }`}
                           >
                             WAV
@@ -1829,7 +1937,11 @@ export default function App() {
                     type="button"
                     onClick={() => setIsLeftPanelExpanded(!isLeftPanelExpanded)}
                     className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700 text-xs font-semibold transition-colors cursor-pointer"
-                    title={isLeftPanelExpanded ? 'Ẩn cột cài đặt bên trái' : 'Mở rộng cột cài đặt bên trái'}
+                    title={
+                      isLeftPanelExpanded
+                        ? "Ẩn cột cài đặt bên trái"
+                        : "Mở rộng cột cài đặt bên trái"
+                    }
                   >
                     {isLeftPanelExpanded ? (
                       <>
@@ -1850,7 +1962,11 @@ export default function App() {
 
                 <div className="flex items-center gap-2 text-xs font-mono text-slate-400">
                   <span className="bg-slate-950 px-2.5 py-1 rounded-lg border border-slate-800">
-                    Phụ đề: <strong className="text-amber-400">{subtitles.length}</strong> câu
+                    Phụ đề:{" "}
+                    <strong className="text-amber-400">
+                      {subtitles.length}
+                    </strong>{" "}
+                    câu
                   </span>
                   <button
                     type="button"
@@ -1859,8 +1975,12 @@ export default function App() {
                     title="Bấm để mở bảng chọn giọng đọc"
                   >
                     <span className="text-slate-400">Giọng:</span>
-                    <strong className="text-slate-200 group-hover:text-amber-300 transition-colors">{selectedVoice.name}</strong>
-                    <span className="text-[10px] text-amber-400 bg-amber-500/15 px-1.5 py-0.2 rounded border border-amber-500/30">Đổi</span>
+                    <strong className="text-slate-200 group-hover:text-amber-300 transition-colors">
+                      {selectedVoice.name}
+                    </strong>
+                    <span className="text-[10px] text-amber-400 bg-amber-500/15 px-1.5 py-0.2 rounded border border-amber-500/30">
+                      Đổi
+                    </span>
                   </button>
                 </div>
               </div>
@@ -1876,87 +1996,121 @@ export default function App() {
                       <h2 className="text-base font-semibold text-white">
                         Chi Tiết Xử Lý & Đo Lường Timeline
                       </h2>
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                        activeJob?.status === 'running'
-                          ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30 animate-pulse'
-                          : activeJob?.status === 'completed'
-                          ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                          : activeJob?.status === 'paused'
-                          ? 'bg-sky-500/20 text-sky-300 border border-sky-500/30'
-                          : 'bg-slate-800 text-slate-300 border border-slate-700'
-                      }`}>
-                        {activeJob?.status === 'running' && 'Đang chạy song song'}
-                        {activeJob?.status === 'completed' && 'Đã hoàn thành'}
-                        {activeJob?.status === 'paused' && 'Đang tạm dừng'}
-                        {(!activeJob || activeJob?.status === 'idle') && 'Chờ bắt đầu'}
+                      <span
+                        className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                          activeJob?.status === "running"
+                            ? "bg-amber-500/20 text-amber-300 border border-amber-500/30 animate-pulse"
+                            : activeJob?.status === "completed"
+                              ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+                              : activeJob?.status === "paused"
+                                ? "bg-sky-500/20 text-sky-300 border border-sky-500/30"
+                                : "bg-slate-800 text-slate-300 border border-slate-700"
+                        }`}
+                      >
+                        {activeJob?.status === "running" &&
+                          "Đang chạy song song"}
+                        {activeJob?.status === "completed" && "Đã hoàn thành"}
+                        {activeJob?.status === "paused" && "Đang tạm dừng"}
+                        {(!activeJob || activeJob?.status === "idle") &&
+                          "Chờ bắt đầu"}
                       </span>
                     </div>
                     <p className="text-xs text-slate-400 mt-0.5">
-                      Thanh tiến độ, % hoàn thành và nút bắt đầu xử lý được ghim cố định ở thanh đáy màn hình (Sticky Bottom Bar).
+                      Thanh tiến độ, % hoàn thành và nút bắt đầu xử lý được ghim
+                      cố định ở thanh đáy màn hình (Sticky Bottom Bar).
                     </p>
                   </div>
 
                   <div className="flex items-center gap-2 text-xs font-mono text-slate-400 bg-slate-950 px-3 py-1.5 rounded-xl border border-slate-800">
-                    <span>Batch: <strong className="text-amber-400">{activeJob?.options.batchSize ?? effectiveBatchSize} câu/đợt</strong></span>
+                    <span>
+                      Batch:{" "}
+                      <strong className="text-amber-400">
+                        {activeJob?.options.batchSize ?? effectiveBatchSize}{" "}
+                        câu/đợt
+                      </strong>
+                    </span>
                   </div>
                 </div>
 
-                  {/* Batch & Concurrency Metrics Strip */}
-                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 pt-1 text-xs font-mono">
-                    <div className="bg-slate-950/70 p-2.5 rounded-xl border border-slate-800">
-                      <span className="text-slate-400 text-[10px] block">Tổng số câu:</span>
-                      <span className="text-base font-bold text-white">{subtitles.length}</span>
-                    </div>
-                    <div className="bg-slate-950/70 p-2.5 rounded-xl border border-slate-800">
-                      <span className="text-slate-400 text-[10px] block">Batch Song Song:</span>
-                      <span className="text-sm font-bold text-amber-400">
-                        {activeJob?.options.batchSize ?? effectiveBatchSize} câu/đợt
-                      </span>
-                    </div>
-                    <div className="bg-slate-950/70 p-2.5 rounded-xl border border-slate-800">
-                      <span className="text-emerald-400 text-[10px] block">Đã hoàn thành:</span>
-                      <span className="text-base font-bold text-emerald-400">
-                        {activeJob?.overallProgress.completed ?? 0}
-                      </span>
-                    </div>
-                    <div className="bg-slate-950/70 p-2.5 rounded-xl border border-slate-800">
-                      <span className="text-amber-400 text-[10px] block">Đang xử lý:</span>
-                      <span className="text-base font-bold text-amber-400">
-                        {activeJob?.overallProgress.running ?? 0}
-                      </span>
-                    </div>
-                    <div className="bg-slate-950/70 p-2.5 rounded-xl border border-slate-800">
-                      <span className="text-slate-400 text-[10px] block">Đang chờ (Queued):</span>
-                      <span className="text-base font-bold text-slate-300">
-                        {activeJob?.overallProgress.queued ?? subtitles.length}
-                      </span>
-                    </div>
-                    <div className="bg-slate-950/70 p-2.5 rounded-xl border border-slate-800">
-                      <span className="text-rose-400 text-[10px] block">Bị lỗi:</span>
-                      <span className="text-base font-bold text-rose-400">
-                        {activeJob?.overallProgress.failed ?? 0}
-                      </span>
-                    </div>
+                {/* Batch & Concurrency Metrics Strip */}
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 pt-1 text-xs font-mono">
+                  <div className="bg-slate-950/70 p-2.5 rounded-xl border border-slate-800">
+                    <span className="text-slate-400 text-[10px] block">
+                      Tổng số câu:
+                    </span>
+                    <span className="text-base font-bold text-white">
+                      {subtitles.length}
+                    </span>
                   </div>
+                  <div className="bg-slate-950/70 p-2.5 rounded-xl border border-slate-800">
+                    <span className="text-slate-400 text-[10px] block">
+                      Batch Song Song:
+                    </span>
+                    <span className="text-sm font-bold text-amber-400">
+                      {activeJob?.options.batchSize ?? effectiveBatchSize}{" "}
+                      câu/đợt
+                    </span>
+                  </div>
+                  <div className="bg-slate-950/70 p-2.5 rounded-xl border border-slate-800">
+                    <span className="text-emerald-400 text-[10px] block">
+                      Đã hoàn thành:
+                    </span>
+                    <span className="text-base font-bold text-emerald-400">
+                      {activeJob?.overallProgress.completed ?? 0}
+                    </span>
+                  </div>
+                  <div className="bg-slate-950/70 p-2.5 rounded-xl border border-slate-800">
+                    <span className="text-amber-400 text-[10px] block">
+                      Đang xử lý:
+                    </span>
+                    <span className="text-base font-bold text-amber-400">
+                      {activeJob?.overallProgress.running ?? 0}
+                    </span>
+                  </div>
+                  <div className="bg-slate-950/70 p-2.5 rounded-xl border border-slate-800">
+                    <span className="text-slate-400 text-[10px] block">
+                      Đang chờ (Queued):
+                    </span>
+                    <span className="text-base font-bold text-slate-300">
+                      {activeJob?.overallProgress.queued ?? subtitles.length}
+                    </span>
+                  </div>
+                  <div className="bg-slate-950/70 p-2.5 rounded-xl border border-slate-800">
+                    <span className="text-rose-400 text-[10px] block">
+                      Bị lỗi:
+                    </span>
+                    <span className="text-base font-bold text-rose-400">
+                      {activeJob?.overallProgress.failed ?? 0}
+                    </span>
+                  </div>
+                </div>
 
-                  {/* Elapsed Time, Speed & ETA */}
-                  {activeJob && (
-                    <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-400 font-mono pt-1">
-                      <span>
-                        Thời gian đã chạy: {(activeJob.overallProgress.elapsedMs / 1000).toFixed(1)}s
+                {/* Elapsed Time, Speed & ETA */}
+                {activeJob && (
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-400 font-mono pt-1">
+                    <span>
+                      Thời gian đã chạy:{" "}
+                      {(activeJob.overallProgress.elapsedMs / 1000).toFixed(1)}s
+                    </span>
+                    {activeJob.overallProgress.speedItemsPerSec !==
+                      undefined && (
+                      <span className="text-slate-300">
+                        Tốc độ xử lý: ~
+                        {activeJob.overallProgress.speedItemsPerSec} câu/giây
                       </span>
-                      {activeJob.overallProgress.speedItemsPerSec !== undefined && (
-                        <span className="text-slate-300">
-                          Tốc độ xử lý: ~{activeJob.overallProgress.speedItemsPerSec} câu/giây
-                        </span>
-                      )}
-                      {activeJob.overallProgress.estimatedRemainingMs !== undefined && (
-                        <span className="text-amber-400">
-                          Thời gian còn lại ước tính: ~{(activeJob.overallProgress.estimatedRemainingMs / 1000).toFixed(0)}s
-                        </span>
-                      )}
-                    </div>
-                  )}
+                    )}
+                    {activeJob.overallProgress.estimatedRemainingMs !==
+                      undefined && (
+                      <span className="text-amber-400">
+                        Thời gian còn lại ước tính: ~
+                        {(
+                          activeJob.overallProgress.estimatedRemainingMs / 1000
+                        ).toFixed(0)}
+                        s
+                      </span>
+                    )}
+                  </div>
+                )}
 
                 {/* 9 Stages Visual Tracker (Collapsible) */}
                 <div className="pt-2 border-t border-slate-800/80">
@@ -1969,48 +2123,100 @@ export default function App() {
                       onClick={() => setShowStagesTracker(!showStagesTracker)}
                       className="text-[11px] text-slate-400 hover:text-amber-400 flex items-center gap-1"
                     >
-                      <span>{showStagesTracker ? 'Thu gọn' : 'Chi tiết 9 bước'}</span>
-                      <ChevronDown className={`w-3.5 h-3.5 transition-transform ${showStagesTracker ? 'rotate-180' : ''}`} />
+                      <span>
+                        {showStagesTracker ? "Thu gọn" : "Chi tiết 9 bước"}
+                      </span>
+                      <ChevronDown
+                        className={`w-3.5 h-3.5 transition-transform ${showStagesTracker ? "rotate-180" : ""}`}
+                      />
                     </button>
                   </div>
 
                   {showStagesTracker && (
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
-                      {(activeJob?.stages || [
-                        { id: 1, name: 'Upload và phân tích file phụ đề', status: 'completed' },
-                        { id: 2, name: 'Khởi tạo PiperTTS và tải model Hoài My', status: 'pending' },
-                        { id: 3, name: 'Tạo audio TTS cho từng câu', status: 'pending' },
-                        { id: 4, name: 'Đo thời lượng audio thực tế', status: 'pending' },
-                        { id: 5, name: 'Tự động điều chỉnh tốc độ đọc (atempo)', status: 'pending' },
-                        { id: 6, name: 'Chuẩn hóa định dạng audio', status: 'pending' },
-                        { id: 7, name: 'Ghép audio theo timeline & khoảng lặng', status: 'pending' },
-                        { id: 8, name: 'Xuất file WAV/MP3 hoàn chỉnh', status: 'pending' },
-                        { id: 9, name: 'Hoàn tất và cho phép tải xuống', status: 'pending' },
-                      ]).map((st) => (
+                      {(
+                        activeJob?.stages || [
+                          {
+                            id: 1,
+                            name: "Upload và phân tích file phụ đề",
+                            status: "completed",
+                          },
+                          {
+                            id: 2,
+                            name: "Khởi tạo PiperTTS và tải model Hoài My",
+                            status: "pending",
+                          },
+                          {
+                            id: 3,
+                            name: "Tạo audio TTS cho từng câu",
+                            status: "pending",
+                          },
+                          {
+                            id: 4,
+                            name: "Đo thời lượng audio thực tế",
+                            status: "pending",
+                          },
+                          {
+                            id: 5,
+                            name: "Tự động điều chỉnh tốc độ đọc (atempo)",
+                            status: "pending",
+                          },
+                          {
+                            id: 6,
+                            name: "Chuẩn hóa định dạng audio",
+                            status: "pending",
+                          },
+                          {
+                            id: 7,
+                            name: "Ghép audio theo timeline & khoảng lặng",
+                            status: "pending",
+                          },
+                          {
+                            id: 8,
+                            name: "Xuất file WAV/MP3 hoàn chỉnh",
+                            status: "pending",
+                          },
+                          {
+                            id: 9,
+                            name: "Hoàn tất và cho phép tải xuống",
+                            status: "pending",
+                          },
+                        ]
+                      ).map((st) => (
                         <div
                           key={st.id}
                           className={`p-2.5 rounded-xl border flex items-center gap-2 transition-colors ${
-                            st.status === 'completed'
-                              ? 'bg-emerald-950/20 border-emerald-500/40 text-emerald-300'
-                              : st.status === 'running'
-                              ? 'bg-amber-950/30 border-amber-500/50 text-amber-300 shadow-sm shadow-amber-500/10'
-                              : st.status === 'failed'
-                              ? 'bg-rose-950/20 border-rose-500/40 text-rose-300'
-                              : 'bg-slate-950/40 border-slate-800/70 text-slate-400'
+                            st.status === "completed"
+                              ? "bg-emerald-950/20 border-emerald-500/40 text-emerald-300"
+                              : st.status === "running"
+                                ? "bg-amber-950/30 border-amber-500/50 text-amber-300 shadow-sm shadow-amber-500/10"
+                                : st.status === "failed"
+                                  ? "bg-rose-950/20 border-rose-500/40 text-rose-300"
+                                  : "bg-slate-950/40 border-slate-800/70 text-slate-400"
                           }`}
                         >
                           <div className="shrink-0">
-                            {st.status === 'completed' && <CheckCircle2 className="w-4 h-4 text-emerald-400" />}
-                            {st.status === 'running' && <RefreshCw className="w-4 h-4 text-amber-400 animate-spin" />}
-                            {st.status === 'failed' && <AlertTriangle className="w-4 h-4 text-rose-400" />}
-                            {st.status === 'pending' && <Clock className="w-4 h-4 text-slate-400" />}
+                            {st.status === "completed" && (
+                              <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                            )}
+                            {st.status === "running" && (
+                              <RefreshCw className="w-4 h-4 text-amber-400 animate-spin" />
+                            )}
+                            {st.status === "failed" && (
+                              <AlertTriangle className="w-4 h-4 text-rose-400" />
+                            )}
+                            {st.status === "pending" && (
+                              <Clock className="w-4 h-4 text-slate-400" />
+                            )}
                           </div>
                           <div className="min-w-0 flex-1">
                             <div className="text-[11px] font-medium truncate">
                               {st.id}. {st.name}
                             </div>
                             {st.detail && (
-                              <div className="text-[10px] text-slate-400 truncate">{st.detail}</div>
+                              <div className="text-[10px] text-slate-400 truncate">
+                                {st.detail}
+                              </div>
                             )}
                           </div>
                         </div>
@@ -2040,9 +2246,15 @@ export default function App() {
                           </span>
                         </div>
                         <p className="text-xs text-slate-400 mt-0.5">
-                          Tổng thời lượng: <strong className="text-white">{activeJob.masterAudio.duration.toFixed(2)}s</strong> ·
-                          Định dạng: {activeJob.masterAudio.format.toUpperCase()} ·
-                          Dung lượng: {(activeJob.masterAudio.sizeBytes / 1024).toFixed(1)} KB
+                          Tổng thời lượng:{" "}
+                          <strong className="text-white">
+                            {activeJob.masterAudio.duration.toFixed(2)}s
+                          </strong>{" "}
+                          · Định dạng:{" "}
+                          {activeJob.masterAudio.format.toUpperCase()} · Dung
+                          lượng:{" "}
+                          {(activeJob.masterAudio.sizeBytes / 1024).toFixed(1)}{" "}
+                          KB
                         </p>
                       </div>
                     </div>
@@ -2083,7 +2295,11 @@ export default function App() {
                       onClick={handlePlayMasterAudio}
                       className="w-10 h-10 rounded-full bg-amber-500 hover:bg-amber-400 text-slate-950 flex items-center justify-center shrink-0 shadow-md cursor-pointer"
                     >
-                      {masterPlaying ? <Pause className="w-5 h-5 fill-current" /> : <Play className="w-5 h-5 fill-current ml-0.5" />}
+                      {masterPlaying ? (
+                        <Pause className="w-5 h-5 fill-current" />
+                      ) : (
+                        <Play className="w-5 h-5 fill-current ml-0.5" />
+                      )}
                     </button>
 
                     <div className="flex-1 space-y-1">
@@ -2096,13 +2312,18 @@ export default function App() {
                         onChange={(e) => {
                           const val = parseFloat(e.target.value);
                           setMasterCurrentTime(val);
-                          if (masterAudioRef.current) masterAudioRef.current.currentTime = val;
+                          if (masterAudioRef.current)
+                            masterAudioRef.current.currentTime = val;
                         }}
                         className="w-full accent-amber-500 h-1.5 bg-slate-800 rounded cursor-pointer"
                       />
                       <div className="flex justify-between text-[11px] font-mono text-slate-400">
                         <span>{formatSecondsDisplay(masterCurrentTime)}</span>
-                        <span>{formatSecondsDisplay(masterDuration || activeJob.masterAudio.duration)}</span>
+                        <span>
+                          {formatSecondsDisplay(
+                            masterDuration || activeJob.masterAudio.duration,
+                          )}
+                        </span>
                       </div>
                     </div>
                   </div>
@@ -2125,12 +2346,19 @@ export default function App() {
                       </span>
                     </div>
                     <p className="text-xs text-slate-400">
-                      Theo dõi thời lượng gốc, điều chỉnh tốc độ riêng và nghe thử từng câu sau khi hoàn thành (Cuộn để xem tất cả câu)
+                      Theo dõi thời lượng gốc, điều chỉnh tốc độ riêng và nghe
+                      thử từng câu sau khi hoàn thành (Cuộn để xem tất cả câu)
                     </p>
                   </div>
                   <div className="flex items-center gap-2">
                     <span className="text-xs text-slate-300 font-mono bg-slate-950 px-2.5 py-1 rounded-lg border border-slate-800">
-                      Tổng số: <strong className="text-amber-400">{activeJob?.items ? activeJob.items.length : subtitles.length}</strong> câu
+                      Tổng số:{" "}
+                      <strong className="text-amber-400">
+                        {activeJob?.items
+                          ? activeJob.items.length
+                          : subtitles.length}
+                      </strong>{" "}
+                      câu
                     </span>
                   </div>
                 </div>
@@ -2142,13 +2370,23 @@ export default function App() {
                       <tr className="bg-slate-950 text-slate-400 border-b border-slate-800 text-[11px] font-mono">
                         <th className="py-2.5 px-3 w-12 text-center">#</th>
                         <th className="py-2.5 px-3 w-36">Timeline</th>
-                        <th className="py-2.5 px-3 min-w-[200px]">Lời thoại (Tiếng Việt)</th>
-                        <th className="py-2.5 px-3 w-20 text-right">Mục tiêu</th>
+                        <th className="py-2.5 px-3 min-w-[200px]">
+                          Lời thoại (Tiếng Việt)
+                        </th>
+                        <th className="py-2.5 px-3 w-20 text-right">
+                          Mục tiêu
+                        </th>
                         <th className="py-2.5 px-3 w-20 text-right">TTS gốc</th>
                         <th className="py-2.5 px-3 w-20 text-center">Tốc độ</th>
-                        <th className="py-2.5 px-3 w-20 text-right">Độ dài cuối</th>
-                        <th className="py-2.5 px-3 w-28 text-center">Trạng thái</th>
-                        <th className="py-2.5 px-3 w-24 text-center">Nghe thử</th>
+                        <th className="py-2.5 px-3 w-20 text-right">
+                          Độ dài cuối
+                        </th>
+                        <th className="py-2.5 px-3 w-28 text-center">
+                          Trạng thái
+                        </th>
+                        <th className="py-2.5 px-3 w-24 text-center">
+                          Nghe thử
+                        </th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-800/80">
@@ -2156,21 +2394,27 @@ export default function App() {
                         <tr
                           key={item.index}
                           className={`hover:bg-slate-800/30 transition-colors ${
-                            item.warning ? 'bg-amber-500/5' : ''
-                          } ${item.status === 'failed' ? 'bg-rose-500/5' : ''}`}
+                            item.warning ? "bg-amber-500/5" : ""
+                          } ${item.status === "failed" ? "bg-rose-500/5" : ""}`}
                         >
                           {/* Index */}
-                          <td className="py-2.5 px-3 text-center font-mono text-slate-400">{item.index}</td>
+                          <td className="py-2.5 px-3 text-center font-mono text-slate-400">
+                            {item.index}
+                          </td>
 
                           {/* Timeline */}
                           <td className="py-2.5 px-3 font-mono text-[11px] text-slate-300">
                             <div>{formatSecondsToSrtTime(item.startTime)}</div>
-                            <div className="text-slate-400 text-[10px]">➔ {formatSecondsToSrtTime(item.endTime)}</div>
+                            <div className="text-slate-400 text-[10px]">
+                              ➔ {formatSecondsToSrtTime(item.endTime)}
+                            </div>
                           </td>
 
                           {/* Text & Warning */}
                           <td className="py-2.5 px-3">
-                            <p className="text-slate-200 font-medium leading-relaxed">{item.text}</p>
+                            <p className="text-slate-200 font-medium leading-relaxed">
+                              {item.text}
+                            </p>
                             {item.warning && (
                               <p className="text-[10px] text-amber-400/90 mt-0.5 flex items-center gap-1">
                                 <AlertTriangle className="w-3 h-3 shrink-0" />
@@ -2192,7 +2436,9 @@ export default function App() {
 
                           {/* Original Duration */}
                           <td className="py-2.5 px-3 text-right font-mono text-slate-400">
-                            {item.originalDuration ? `${item.originalDuration.toFixed(2)}s` : '—'}
+                            {item.originalDuration
+                              ? `${item.originalDuration.toFixed(2)}s`
+                              : "—"}
                           </td>
 
                           {/* Applied Speed */}
@@ -2201,65 +2447,73 @@ export default function App() {
                               <span
                                 className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
                                   item.appliedSpeed > 1.2
-                                    ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
-                                    : 'bg-slate-800 text-slate-300'
+                                    ? "bg-amber-500/20 text-amber-300 border border-amber-500/30"
+                                    : "bg-slate-800 text-slate-300"
                                 }`}
                               >
                                 {item.appliedSpeed.toFixed(2)}x
                               </span>
                             ) : (
-                              '—'
+                              "—"
                             )}
                           </td>
 
                           {/* Final Duration */}
                           <td className="py-2.5 px-3 text-right font-mono text-slate-200 font-semibold">
-                            {item.finalDuration ? `${item.finalDuration.toFixed(2)}s` : '—'}
+                            {item.finalDuration
+                              ? `${item.finalDuration.toFixed(2)}s`
+                              : "—"}
                           </td>
 
                           {/* Status Badge */}
                           <td className="py-2.5 px-3 text-center">
-                            {item.status === 'completed' && (
+                            {item.status === "completed" && (
                               <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-400">
                                 <CheckCircle2 className="w-3 h-3" />
                                 <span>Hoàn thành</span>
                               </span>
                             )}
-                            {item.status === 'generating' && (
+                            {item.status === "generating" && (
                               <span className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-400 animate-pulse">
                                 <RefreshCw className="w-3 h-3 animate-spin" />
                                 <span>Đang tạo...</span>
                               </span>
                             )}
-                            {item.status === 'adjusting' && (
+                            {item.status === "adjusting" && (
                               <span className="inline-flex items-center gap-1 text-[11px] font-medium text-sky-400">
                                 <Sliders className="w-3 h-3" />
                                 <span>Chỉnh tốc độ</span>
                               </span>
                             )}
-                            {item.status === 'failed' && (
+                            {item.status === "failed" && (
                               <span className="inline-flex items-center gap-1 text-[11px] font-medium text-rose-400">
                                 <AlertTriangle className="w-3 h-3" />
                                 <span>Thất bại</span>
                               </span>
                             )}
-                            {item.status === 'pending' && (
-                              <span className="text-[11px] text-slate-400">Chờ xử lý</span>
+                            {item.status === "pending" && (
+                              <span className="text-[11px] text-slate-400">
+                                Chờ xử lý
+                              </span>
                             )}
                           </td>
 
                           {/* Audio Preview (Requirement 2) */}
                           <td className="py-2.5 px-3 text-center">
-                            {activeJob && item.status === 'completed' ? (
+                            {activeJob && item.status === "completed" ? (
                               <button
                                 type="button"
                                 onClick={() => handlePlayItemAudio(item)}
                                 className={`inline-flex items-center justify-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
                                   playingItemIndex === item.index
-                                    ? 'bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/30 scale-105 ring-2 ring-amber-400/50'
-                                    : 'bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700 hover:border-amber-500/40'
+                                    ? "bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/30 scale-105 ring-2 ring-amber-400/50"
+                                    : "bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700 hover:border-amber-500/40"
                                 }`}
-                                title={playingItemIndex === item.index ? 'Dừng phát' : 'Nghe thử câu thoại này'}
+                                title={
+                                  playingItemIndex === item.index
+                                    ? "Dừng phát"
+                                    : "Nghe thử câu thoại này"
+                                }
                               >
                                 {playingItemIndex === item.index ? (
                                   <>
@@ -2274,7 +2528,9 @@ export default function App() {
                                 )}
                               </button>
                             ) : (
-                              <span className="text-slate-600 font-mono text-[11px]">—</span>
+                              <span className="text-slate-600 font-mono text-[11px]">
+                                —
+                              </span>
                             )}
                           </td>
                         </tr>
@@ -2315,13 +2571,23 @@ export default function App() {
                     {/* Filter tabs (Only visible when expanded) */}
                     {isLogsExpanded && (
                       <div className="flex items-center bg-slate-900 rounded-lg p-0.5 border border-slate-800 text-[11px]">
-                        {(['ALL', 'INFO', 'SUCCESS', 'WARNING', 'ERROR'] as const).map((lvl) => (
+                        {(
+                          [
+                            "ALL",
+                            "INFO",
+                            "SUCCESS",
+                            "WARNING",
+                            "ERROR",
+                          ] as const
+                        ).map((lvl) => (
                           <button
                             key={lvl}
                             type="button"
                             onClick={() => setLogFilter(lvl)}
                             className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors cursor-pointer ${
-                              logFilter === lvl ? 'bg-amber-500 text-slate-950 font-bold' : 'text-slate-400 hover:text-white'
+                              logFilter === lvl
+                                ? "bg-amber-500 text-slate-950 font-bold"
+                                : "text-slate-400 hover:text-white"
                             }`}
                           >
                             {lvl}
@@ -2346,7 +2612,8 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => {
-                          if (activeJob) setActiveJob({ ...activeJob, logs: [] });
+                          if (activeJob)
+                            setActiveJob({ ...activeJob, logs: [] });
                         }}
                         className="p-1 bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-rose-400 rounded-lg border border-slate-800 cursor-pointer"
                         title="Xóa nhật ký trên màn hình"
@@ -2360,7 +2627,11 @@ export default function App() {
                       type="button"
                       onClick={() => setIsLogsExpanded(!isLogsExpanded)}
                       className="inline-flex items-center gap-1 px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-amber-400 font-semibold rounded-lg border border-slate-700 text-xs transition-colors cursor-pointer"
-                      title={isLogsExpanded ? 'Đóng / Thu gọn Live Logs' : 'Mở rộng khung Live Logs'}
+                      title={
+                        isLogsExpanded
+                          ? "Đóng / Thu gọn Live Logs"
+                          : "Mở rộng khung Live Logs"
+                      }
                     >
                       {isLogsExpanded ? (
                         <>
@@ -2381,10 +2652,13 @@ export default function App() {
                 {!isLogsExpanded ? (
                   <div className="px-4 py-2 bg-slate-950/90 flex items-center justify-between text-[11px] text-slate-400 border-t border-slate-900">
                     <div className="flex items-center gap-2 truncate">
-                      <span className="text-amber-400 font-semibold">[Logs đang đóng]</span>
+                      <span className="text-amber-400 font-semibold">
+                        [Logs đang đóng]
+                      </span>
                       {displayLogs.length > 0 ? (
                         <span className="truncate text-slate-300">
-                          Mới nhất: {displayLogs[displayLogs.length - 1].message}
+                          Mới nhất:{" "}
+                          {displayLogs[displayLogs.length - 1].message}
                         </span>
                       ) : (
                         <span>Chưa có log phát sinh.</span>
@@ -2406,34 +2680,40 @@ export default function App() {
                   >
                     {displayLogs.length === 0 ? (
                       <div className="text-slate-500 py-8 text-center italic">
-                        Chưa có nhật ký hoạt động. Nhấn "Bắt đầu xử lý" để theo dõi các sự kiện theo thời gian thực.
+                        Chưa có nhật ký hoạt động. Nhấn "Bắt đầu xử lý" để theo
+                        dõi các sự kiện theo thời gian thực.
                       </div>
                     ) : (
                       displayLogs.map((log) => (
-                        <div key={log.id} className="flex items-start gap-2 leading-relaxed">
-                          <span className="text-slate-500 shrink-0">[{log.timestamp}]</span>
+                        <div
+                          key={log.id}
+                          className="flex items-start gap-2 leading-relaxed"
+                        >
+                          <span className="text-slate-500 shrink-0">
+                            [{log.timestamp}]
+                          </span>
                           <span
                             className={`px-1 py-0.2 rounded font-bold shrink-0 text-[10px] ${
-                              log.level === 'SUCCESS'
-                                ? 'bg-emerald-500/20 text-emerald-400'
-                                : log.level === 'WARNING'
-                                ? 'bg-amber-500/20 text-amber-400'
-                                : log.level === 'ERROR'
-                                ? 'bg-rose-500/20 text-rose-400'
-                                : 'bg-sky-500/20 text-sky-400'
+                              log.level === "SUCCESS"
+                                ? "bg-emerald-500/20 text-emerald-400"
+                                : log.level === "WARNING"
+                                  ? "bg-amber-500/20 text-amber-400"
+                                  : log.level === "ERROR"
+                                    ? "bg-rose-500/20 text-rose-400"
+                                    : "bg-sky-500/20 text-sky-400"
                             }`}
                           >
                             [{log.level}]
                           </span>
                           <span
                             className={`${
-                              log.level === 'ERROR'
-                                ? 'text-rose-300 font-semibold'
-                                : log.level === 'WARNING'
-                                ? 'text-amber-200'
-                                : log.level === 'SUCCESS'
-                                ? 'text-emerald-200'
-                                : 'text-slate-300'
+                              log.level === "ERROR"
+                                ? "text-rose-300 font-semibold"
+                                : log.level === "WARNING"
+                                  ? "text-amber-200"
+                                  : log.level === "SUCCESS"
+                                    ? "text-emerald-200"
+                                    : "text-slate-300"
                             }`}
                           >
                             {log.message}
@@ -2451,12 +2731,16 @@ export default function App() {
         {/* ========================================================= */}
         {/* TAB 2: SINGLE TEXT TTS STUDIO (Preserves previous feature) */}
         {/* ========================================================= */}
-        {activeTab === 'single' && (
+        {activeTab === "single" && (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
             <div className="lg:col-span-8 bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4 shadow-xl">
               <div className="flex items-center justify-between">
-                <h2 className="text-sm font-semibold text-white">Chuyển văn bản nhanh (Single TTS)</h2>
-                <span className="text-xs text-slate-400">{singleText.length} ký tự</span>
+                <h2 className="text-sm font-semibold text-white">
+                  Chuyển văn bản nhanh (Single TTS)
+                </h2>
+                <span className="text-xs text-slate-400">
+                  {singleText.length} ký tự
+                </span>
               </div>
 
               {/* Voice & Project Settings in Tab 2 */}
@@ -2464,21 +2748,25 @@ export default function App() {
                 <div className="flex items-center gap-2.5">
                   <div
                     className={`w-7 h-7 rounded-lg flex items-center justify-center font-bold text-[11px] shrink-0 ${
-                      selectedVoice.gender === 'female'
-                        ? 'bg-rose-500/15 text-rose-300 border border-rose-500/30'
-                        : 'bg-sky-500/15 text-sky-300 border border-sky-500/30'
+                      selectedVoice.gender === "female"
+                        ? "bg-rose-500/15 text-rose-300 border border-rose-500/30"
+                        : "bg-sky-500/15 text-sky-300 border border-sky-500/30"
                     }`}
                   >
-                    {selectedVoice.gender === 'female' ? 'Nữ' : 'Nam'}
+                    {selectedVoice.gender === "female" ? "Nữ" : "Nam"}
                   </div>
                   <div>
                     <div className="flex items-center gap-1.5">
-                      <span className="font-bold text-white">{selectedVoice.name}</span>
+                      <span className="font-bold text-white">
+                        {selectedVoice.name}
+                      </span>
                       <span className="text-[10px] text-emerald-400 bg-emerald-500/15 px-1.5 py-0.2 rounded border border-emerald-500/30 font-medium">
                         Offline 100%
                       </span>
                     </div>
-                    <span className="text-[11px] text-slate-400 font-mono">{selectedVoice.tag}</span>
+                    <span className="text-[11px] text-slate-400 font-mono">
+                      {selectedVoice.tag}
+                    </span>
                   </div>
                 </div>
 
@@ -2492,8 +2780,12 @@ export default function App() {
                       title="Nạp cấu hình dự án (giọng + tốc độ)"
                     >
                       {projectPresets.map((p) => (
-                        <option key={p.id} value={p.id} className="bg-slate-900 text-white">
-                          {p.isDefault ? '' : '★ '}
+                        <option
+                          key={p.id}
+                          value={p.id}
+                          className="bg-slate-900 text-white"
+                        >
+                          {p.isDefault ? "" : "★ "}
                           {p.name}
                         </option>
                       ))}
@@ -2531,7 +2823,9 @@ export default function App() {
                 <div className="space-y-1">
                   <div className="flex justify-between">
                     <span className="text-slate-300">Tốc độ đọc:</span>
-                    <span className="text-amber-400 font-mono">{singleSpeed.toFixed(2)}x</span>
+                    <span className="text-amber-400 font-mono">
+                      {singleSpeed.toFixed(2)}x
+                    </span>
                   </div>
                   <input
                     type="range"
@@ -2547,7 +2841,9 @@ export default function App() {
                 <div className="space-y-1">
                   <div className="flex justify-between">
                     <span className="text-slate-300">Nghỉ ngắt câu:</span>
-                    <span className="text-amber-400 font-mono">{singleSilence.toFixed(2)}s</span>
+                    <span className="text-amber-400 font-mono">
+                      {singleSilence.toFixed(2)}s
+                    </span>
                   </div>
                   <input
                     type="range"
@@ -2555,7 +2851,9 @@ export default function App() {
                     max="1.0"
                     step="0.05"
                     value={singleSilence}
-                    onChange={(e) => setSingleSilence(parseFloat(e.target.value))}
+                    onChange={(e) =>
+                      setSingleSilence(parseFloat(e.target.value))
+                    }
                     className="w-full accent-amber-500 h-1.5 bg-slate-800 rounded cursor-pointer"
                   />
                 </div>
@@ -2575,7 +2873,10 @@ export default function App() {
                 ) : (
                   <>
                     <Sparkles className="w-4 h-4" />
-                    <span>Tạo Giọng Đọc {selectedVoice.name} ({singleFormat.toUpperCase()})</span>
+                    <span>
+                      Tạo Giọng Đọc {selectedVoice.name} (
+                      {singleFormat.toUpperCase()})
+                    </span>
                   </>
                 )}
               </button>
@@ -2596,14 +2897,25 @@ export default function App() {
             </div>
 
             <div className="lg:col-span-4 bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-3 text-xs text-slate-400">
-              <h3 className="text-sm font-semibold text-white">Về giọng đọc Hoài My:</h3>
+              <h3 className="text-sm font-semibold text-white">
+                Về giọng đọc Hoài My:
+              </h3>
               <p className="leading-relaxed">
-                Mô hình <code className="text-amber-400 font-mono text-[11px]">hoaimy-vietnamese-vi-medium-ljkjhi</code> được tối ưu chuyên sâu cho tiếng Việt, phát âm tròn vành rõ chữ, cảm xúc ấm áp và mượt mà.
+                Mô hình{" "}
+                <code className="text-amber-400 font-mono text-[11px]">
+                  hoaimy-vietnamese-vi-medium-ljkjhi
+                </code>{" "}
+                được tối ưu chuyên sâu cho tiếng Việt, phát âm tròn vành rõ chữ,
+                cảm xúc ấm áp và mượt mà.
               </p>
               <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 text-[11px] space-y-1">
-                <div className="text-slate-300 font-medium">Khả năng tự động đồng bộ:</div>
+                <div className="text-slate-300 font-medium">
+                  Khả năng tự động đồng bộ:
+                </div>
                 <p>
-                  Khi dùng chế độ Phụ đề SRT, hệ thống tự động đo thời lượng câu và co giãn tốc độ (atempo) để khớp thời điểm bắt đầu và kết thúc của từng cảnh video.
+                  Khi dùng chế độ Phụ đề SRT, hệ thống tự động đo thời lượng câu
+                  và co giãn tốc độ (atempo) để khớp thời điểm bắt đầu và kết
+                  thúc của từng cảnh video.
                 </p>
               </div>
             </div>
@@ -2638,7 +2950,8 @@ export default function App() {
                     </span>
                   </div>
                   <p className="text-[11px] text-slate-400 hidden sm:block">
-                    Nghe thử giọng mẫu và chọn giọng phù hợp cho dự án phụ đề & lồng tiếng
+                    Nghe thử giọng mẫu và chọn giọng phù hợp cho dự án phụ đề &
+                    lồng tiếng
                   </p>
                 </div>
               </div>
@@ -2668,7 +2981,7 @@ export default function App() {
                 {voiceSearchQuery && (
                   <button
                     type="button"
-                    onClick={() => setVoiceSearchQuery('')}
+                    onClick={() => setVoiceSearchQuery("")}
                     className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white text-xs cursor-pointer p-0.5"
                   >
                     ✕
@@ -2680,22 +2993,22 @@ export default function App() {
               <div className="flex items-center gap-1.5 overflow-x-auto text-xs">
                 <button
                   type="button"
-                  onClick={() => setVoiceGenderFilter('all')}
+                  onClick={() => setVoiceGenderFilter("all")}
                   className={`px-2.5 py-1 rounded-lg font-semibold transition-all cursor-pointer text-xs ${
-                    voiceGenderFilter === 'all'
-                      ? 'bg-amber-500 text-slate-950 font-bold shadow-sm shadow-amber-500/20'
-                      : 'bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700 border border-slate-700/60'
+                    voiceGenderFilter === "all"
+                      ? "bg-amber-500 text-slate-950 font-bold shadow-sm shadow-amber-500/20"
+                      : "bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700 border border-slate-700/60"
                   }`}
                 >
                   Tất cả ({voices.length})
                 </button>
                 <button
                   type="button"
-                  onClick={() => setVoiceGenderFilter('female')}
+                  onClick={() => setVoiceGenderFilter("female")}
                   className={`px-2.5 py-1 rounded-lg font-semibold transition-all cursor-pointer flex items-center gap-1 text-xs ${
-                    voiceGenderFilter === 'female'
-                      ? 'bg-rose-500 text-white font-bold shadow-sm shadow-rose-500/20'
-                      : 'bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700 border border-slate-700/60'
+                    voiceGenderFilter === "female"
+                      ? "bg-rose-500 text-white font-bold shadow-sm shadow-rose-500/20"
+                      : "bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700 border border-slate-700/60"
                   }`}
                 >
                   <span className="w-1.5 h-1.5 rounded-full bg-rose-400" />
@@ -2703,11 +3016,11 @@ export default function App() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setVoiceGenderFilter('male')}
+                  onClick={() => setVoiceGenderFilter("male")}
                   className={`px-2.5 py-1 rounded-lg font-semibold transition-all cursor-pointer flex items-center gap-1 text-xs ${
-                    voiceGenderFilter === 'male'
-                      ? 'bg-sky-500 text-slate-950 font-bold shadow-sm shadow-sky-500/20'
-                      : 'bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700 border border-slate-700/60'
+                    voiceGenderFilter === "male"
+                      ? "bg-sky-500 text-slate-950 font-bold shadow-sm shadow-sky-500/20"
+                      : "bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700 border border-slate-700/60"
                   }`}
                 >
                   <span className="w-1.5 h-1.5 rounded-full bg-sky-400" />
@@ -2715,11 +3028,11 @@ export default function App() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setVoiceGenderFilter('recommended')}
+                  onClick={() => setVoiceGenderFilter("recommended")}
                   className={`px-2.5 py-1 rounded-lg font-semibold transition-all cursor-pointer flex items-center gap-1 text-xs ${
-                    voiceGenderFilter === 'recommended'
-                      ? 'bg-amber-400 text-slate-950 font-bold shadow-sm shadow-amber-400/20'
-                      : 'bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700 border border-slate-700/60'
+                    voiceGenderFilter === "recommended"
+                      ? "bg-amber-400 text-slate-950 font-bold shadow-sm shadow-amber-400/20"
+                      : "bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700 border border-slate-700/60"
                   }`}
                 >
                   <Sparkles className="w-3 h-3 text-amber-400" />
@@ -2733,9 +3046,13 @@ export default function App() {
               <table className="w-full text-left text-xs border-collapse">
                 <thead className="sticky top-0 z-20 bg-slate-950 shadow-sm">
                   <tr className="bg-slate-950 text-slate-400 border-b border-slate-800 text-[11px] font-mono">
-                    <th className="py-2.5 px-4 sm:w-[38%] min-w-[200px]">Tên giọng đọc</th>
+                    <th className="py-2.5 px-4 sm:w-[38%] min-w-[200px]">
+                      Tên giọng đọc
+                    </th>
                     <th className="py-2.5 px-4 w-28 text-center">Giới tính</th>
-                    <th className="py-2.5 px-4 sm:w-[28%] min-w-[150px]">Tags / Phân loại</th>
+                    <th className="py-2.5 px-4 sm:w-[28%] min-w-[150px]">
+                      Tags / Phân loại
+                    </th>
                     <th className="py-2.5 px-4 w-32 text-center">Nghe thử</th>
                     <th className="py-2.5 px-4 w-32 text-center">Chọn dùng</th>
                   </tr>
@@ -2743,8 +3060,12 @@ export default function App() {
                 <tbody className="divide-y divide-slate-800/60">
                   {filteredVoices.length === 0 ? (
                     <tr>
-                      <td colSpan={5} className="py-8 text-center text-slate-500 italic">
-                        Không tìm thấy giọng đọc nào phù hợp với bộ lọc tìm kiếm.
+                      <td
+                        colSpan={5}
+                        className="py-8 text-center text-slate-500 italic"
+                      >
+                        Không tìm thấy giọng đọc nào phù hợp với bộ lọc tìm
+                        kiếm.
                       </td>
                     </tr>
                   ) : (
@@ -2757,7 +3078,7 @@ export default function App() {
                         <tr
                           key={v.id}
                           className={`hover:bg-slate-800/50 transition-colors h-10 ${
-                            isCurrent ? 'bg-amber-500/10' : ''
+                            isCurrent ? "bg-amber-500/10" : ""
                           }`}
                         >
                           {/* 1. Cột Tên: Tên + Badges (Bỏ hoàn toàn description, ID và text) */}
@@ -2765,7 +3086,9 @@ export default function App() {
                             <div className="flex items-center gap-2">
                               <span
                                 className={`font-semibold text-xs sm:text-[13px] truncate max-w-[340px] sm:max-w-none ${
-                                  isCurrent ? 'text-amber-300 font-bold' : 'text-slate-100'
+                                  isCurrent
+                                    ? "text-amber-300 font-bold"
+                                    : "text-slate-100"
                                 }`}
                               >
                                 {v.name}
@@ -2788,17 +3111,21 @@ export default function App() {
                           <td className="py-1.5 px-4 text-center whitespace-nowrap">
                             <span
                               className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-[11px] font-semibold ${
-                                v.gender === 'female'
-                                  ? 'bg-rose-500/15 text-rose-300 border border-rose-500/25'
-                                  : 'bg-sky-500/15 text-sky-300 border border-sky-500/25'
+                                v.gender === "female"
+                                  ? "bg-rose-500/15 text-rose-300 border border-rose-500/25"
+                                  : "bg-sky-500/15 text-sky-300 border border-sky-500/25"
                               }`}
                             >
                               <span
                                 className={`w-1.5 h-1.5 rounded-full ${
-                                  v.gender === 'female' ? 'bg-rose-400' : 'bg-sky-400'
+                                  v.gender === "female"
+                                    ? "bg-rose-400"
+                                    : "bg-sky-400"
                                 }`}
                               />
-                              <span>{v.gender === 'female' ? 'Nữ' : 'Nam'}</span>
+                              <span>
+                                {v.gender === "female" ? "Nữ" : "Nam"}
+                              </span>
                             </span>
                           </td>
 
@@ -2817,10 +3144,14 @@ export default function App() {
                               disabled={isLoadingPreview}
                               className={`inline-flex items-center gap-1 px-3 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
                                 isPreviewing
-                                  ? 'bg-amber-500 text-slate-950 font-bold shadow-sm shadow-amber-500/30 ring-1 ring-amber-400'
-                                  : 'bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700 hover:border-amber-500/40'
+                                  ? "bg-amber-500 text-slate-950 font-bold shadow-sm shadow-amber-500/30 ring-1 ring-amber-400"
+                                  : "bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700 hover:border-amber-500/40"
                               }`}
-                              title={isPreviewing ? 'Dừng phát' : 'Nghe thử câu thoại mẫu'}
+                              title={
+                                isPreviewing
+                                  ? "Dừng phát"
+                                  : "Nghe thử câu thoại mẫu"
+                              }
                             >
                               {isLoadingPreview ? (
                                 <>
@@ -2871,8 +3202,12 @@ export default function App() {
             <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-4 py-2.5 sm:px-5 bg-slate-950/80 border-t border-slate-800 shrink-0">
               <div className="flex items-center gap-2 text-xs">
                 <span className="text-slate-400">Giọng đang chọn:</span>
-                <span className="font-bold text-amber-400">{selectedVoice.name}</span>
-                <span className="text-slate-500 font-mono">({selectedVoice.tag})</span>
+                <span className="font-bold text-amber-400">
+                  {selectedVoice.name}
+                </span>
+                <span className="text-slate-500 font-mono">
+                  ({selectedVoice.tag})
+                </span>
               </div>
 
               <button
@@ -2912,7 +3247,7 @@ export default function App() {
                 type="button"
                 onClick={() => {
                   setShowSavePresetModal(false);
-                  setNewPresetName('');
+                  setNewPresetName("");
                 }}
                 className="w-8 h-8 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
                 title="Đóng modal"
@@ -2947,7 +3282,9 @@ export default function App() {
               <div className="p-3.5 bg-slate-950/80 border border-slate-800 rounded-xl space-y-2 text-xs">
                 <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider flex items-center justify-between">
                   <span>Thông số sẽ lưu vào cấu hình này:</span>
-                  <span className="text-[10px] text-amber-400 font-mono">Tự động nạp</span>
+                  <span className="text-[10px] text-amber-400 font-mono">
+                    Tự động nạp
+                  </span>
                 </div>
                 <div className="space-y-1.5 text-[11px] font-mono">
                   <div className="flex items-center justify-between text-slate-200">
@@ -2965,24 +3302,30 @@ export default function App() {
                   <div className="flex items-center justify-between text-slate-200">
                     <span className="text-slate-400">Ưu tiên timeline:</span>
                     <span className="text-slate-300">
-                      {speedPriority === 'strict'
-                        ? 'Ép chặt timeline'
-                        : speedPriority === 'natural'
-                        ? 'Tự nhiên'
-                        : 'Cân bằng'}
+                      {speedPriority === "strict"
+                        ? "Ép chặt timeline"
+                        : speedPriority === "natural"
+                          ? "Tự nhiên"
+                          : "Cân bằng"}
                     </span>
                   </div>
                   <div className="flex items-center justify-between text-slate-200">
                     <span className="text-slate-400">Đệm khoảng lặng:</span>
-                    <span className="text-slate-300">{padSilence ? 'Bật đệm' : 'Tắt'}</span>
+                    <span className="text-slate-300">
+                      {padSilence ? "Bật đệm" : "Tắt"}
+                    </span>
                   </div>
                   <div className="flex items-center justify-between text-slate-200">
                     <span className="text-slate-400">Xử lý song song:</span>
-                    <span className="text-slate-300">Batch {effectiveBatchSize} câu/lần</span>
+                    <span className="text-slate-300">
+                      Batch {effectiveBatchSize} câu/lần
+                    </span>
                   </div>
                   <div className="flex items-center justify-between text-slate-200">
                     <span className="text-slate-400">Định dạng file:</span>
-                    <span className="text-slate-300 uppercase">{outputFormat}</span>
+                    <span className="text-slate-300 uppercase">
+                      {outputFormat}
+                    </span>
                   </div>
                 </div>
               </div>
@@ -2992,7 +3335,7 @@ export default function App() {
                   type="button"
                   onClick={() => {
                     setShowSavePresetModal(false);
-                    setNewPresetName('');
+                    setNewPresetName("");
                   }}
                   className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold transition-colors cursor-pointer"
                 >
@@ -3033,7 +3376,8 @@ export default function App() {
                     </span>
                   </h2>
                   <p className="text-xs text-slate-400">
-                    Đổi tên, xóa cấu hình, xuất file JSON hoặc nhập cấu hình vào Studio
+                    Đổi tên, xóa cấu hình, xuất file JSON hoặc nhập cấu hình vào
+                    Studio
                   </p>
                 </div>
               </div>
@@ -3110,8 +3454,8 @@ export default function App() {
                       key={preset.id}
                       className={`p-3.5 sm:p-4 rounded-2xl border transition-all ${
                         isSelected
-                          ? 'bg-amber-500/10 border-amber-500/40 ring-1 ring-amber-500/30'
-                          : 'bg-slate-950/60 border-slate-800 hover:border-slate-700'
+                          ? "bg-amber-500/10 border-amber-500/40 ring-1 ring-amber-500/30"
+                          : "bg-slate-950/60 border-slate-800 hover:border-slate-700"
                       }`}
                     >
                       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -3123,17 +3467,23 @@ export default function App() {
                                 type="text"
                                 autoFocus
                                 value={editingPresetName}
-                                onChange={(e) => setEditingPresetName(e.target.value)}
+                                onChange={(e) =>
+                                  setEditingPresetName(e.target.value)
+                                }
                                 onKeyDown={(e) => {
-                                  if (e.key === 'Enter') handleSaveRenamePreset(preset.id);
-                                  if (e.key === 'Escape') setEditingPresetId(null);
+                                  if (e.key === "Enter")
+                                    handleSaveRenamePreset(preset.id);
+                                  if (e.key === "Escape")
+                                    setEditingPresetId(null);
                                 }}
                                 className="flex-1 bg-slate-900 border border-amber-500 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-amber-500 font-medium"
                                 placeholder="Nhập tên mới..."
                               />
                               <button
                                 type="button"
-                                onClick={() => handleSaveRenamePreset(preset.id)}
+                                onClick={() =>
+                                  handleSaveRenamePreset(preset.id)
+                                }
                                 className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-lg text-xs cursor-pointer shadow-sm"
                               >
                                 Lưu
@@ -3176,20 +3526,26 @@ export default function App() {
                             </span>
                             <span>·</span>
                             <span className="text-emerald-400 font-semibold">
-                              {preset.minSpeed.toFixed(2)}x - {preset.maxSpeed.toFixed(2)}x
+                              {preset.minSpeed.toFixed(2)}x -{" "}
+                              {preset.maxSpeed.toFixed(2)}x
                             </span>
                             <span>·</span>
                             <span>
-                              {preset.speedPriority === 'strict'
-                                ? 'Ép timeline'
-                                : preset.speedPriority === 'natural'
-                                ? 'Tự nhiên'
-                                : 'Cân bằng'}
+                              {preset.speedPriority === "strict"
+                                ? "Ép timeline"
+                                : preset.speedPriority === "natural"
+                                  ? "Tự nhiên"
+                                  : "Cân bằng"}
                             </span>
                             <span>·</span>
-                            <span>{preset.padSilence ? 'Đệm silence' : 'Không đệm'}</span>
+                            <span>
+                              {preset.padSilence ? "Đệm silence" : "Không đệm"}
+                            </span>
                             <span>·</span>
-                            <span>Batch {preset.customBatchSize || preset.batchSizeChoice}</span>
+                            <span>
+                              Batch{" "}
+                              {preset.customBatchSize || preset.batchSizeChoice}
+                            </span>
                             <span>·</span>
                             <span className="uppercase text-slate-300 bg-slate-900 px-1.5 py-0.2 rounded border border-slate-800">
                               {preset.outputFormat}
@@ -3287,7 +3643,8 @@ export default function App() {
             </div>
 
             <p className="text-xs text-slate-400">
-              Mã nguồn Node.js TypeScript nạp trực tiếp mô hình Hoài My đã yêu cầu:
+              Mã nguồn Node.js TypeScript nạp trực tiếp mô hình Hoài My đã yêu
+              cầu:
             </p>
 
             <div className="relative bg-slate-950 rounded-xl border border-slate-800 p-4 font-mono text-xs text-emerald-300 overflow-x-auto">
@@ -3310,7 +3667,7 @@ const { audio, sampleRate } = await tts.synthesize("Ca ca, lớn quá, thật nh
                 type="button"
                 onClick={() => {
                   navigator.clipboard.writeText(
-                    `import { PiperNativeTTS } from "pipertts";\n\n// Nạp mô hình 100% Offline không cần internet\nconst tts = await PiperNativeTTS.load({\n  modelPath: "./models/hoaimy-vietnamese-vi-medium-ljkjhi.onnx",\n  espeakBinary: "espeak-ng",\n});\n\nconst { audio } = await tts.synthesize("Ca ca, lớn quá, thật nhiều đồ của tiên gia.");`
+                    `import { PiperNativeTTS } from "pipertts";\n\n// Nạp mô hình 100% Offline không cần internet\nconst tts = await PiperNativeTTS.load({\n  modelPath: "./models/hoaimy-vietnamese-vi-medium-ljkjhi.onnx",\n  espeakBinary: "espeak-ng",\n});\n\nconst { audio } = await tts.synthesize("Ca ca, lớn quá, thật nhiều đồ của tiên gia.");`,
                   );
                   setCopiedCode(true);
                   setTimeout(() => setCopiedCode(false), 2000);
@@ -3354,7 +3711,10 @@ const { audio, sampleRate } = await tts.synthesize("Ca ca, lớn quá, thật nh
             <span>·</span>
             <span>Xuất MP3 & WAV hoàn chỉnh</span>
           </div>
-          <div>Hỗ trợ tiếng Việt tự nhiên với chuẩn ngữ âm espeak-ng & FFmpeg atempo</div>
+          <div>
+            Hỗ trợ tiếng Việt tự nhiên với chuẩn ngữ âm espeak-ng & FFmpeg
+            atempo
+          </div>
         </div>
       </footer>
 
@@ -3388,9 +3748,15 @@ const { audio, sampleRate } = await tts.synthesize("Ca ca, lớn quá, thật nh
             <UploadCloud className="w-10 h-10" />
           </div>
           <div className="text-center space-y-1.5">
-            <h3 className="text-2xl font-black text-white">Thả tệp phụ đề vào đây</h3>
-            <p className="text-sm text-amber-300 font-medium">Hỗ trợ tệp phụ đề .SRT hoặc .TXT tiếng Việt</p>
-            <p className="text-xs text-slate-400">Hệ thống sẽ tự động phân tích và đồng bộ timeline ngay lập tức</p>
+            <h3 className="text-2xl font-black text-white">
+              Thả tệp phụ đề vào đây
+            </h3>
+            <p className="text-sm text-amber-300 font-medium">
+              Hỗ trợ tệp phụ đề .SRT hoặc .TXT tiếng Việt
+            </p>
+            <p className="text-xs text-slate-400">
+              Hệ thống sẽ tự động phân tích và đồng bộ timeline ngay lập tức
+            </p>
           </div>
         </div>
       )}
@@ -3400,7 +3766,7 @@ const { audio, sampleRate } = await tts.synthesize("Ca ca, lớn quá, thật nh
       {/* Thanh dock luôn ghim đáy màn hình như Navbar dưới đáy     */}
       {/* Tách riêng: Progress bar, % hoàn thành & Nút bắt đầu xử lý*/}
       {/* ========================================================= */}
-      {activeTab === 'subtitles' && (
+      {activeTab === "subtitles" && (
         <div
           role="region"
           aria-label="Thanh điều khiển tiến độ và xử lý phụ đề"
@@ -3422,36 +3788,49 @@ const { audio, sampleRate } = await tts.synthesize("Ca ca, lớn quá, thật nh
                         className="text-xs font-bold text-white hover:text-amber-300 truncate max-w-[150px] sm:max-w-[220px] transition-colors cursor-pointer text-left flex items-center gap-1.5 group"
                         title="Bấm để mở bảng chọn giọng đọc"
                       >
-                        <span className="truncate group-hover:underline">{selectedVoice.name}</span>
+                        <span className="truncate group-hover:underline">
+                          {selectedVoice.name}
+                        </span>
                         <span className="text-[10px] text-amber-400 font-semibold bg-amber-500/15 px-1.5 py-0.2 rounded border border-amber-500/30 group-hover:bg-amber-500/25 shrink-0">
                           Đổi giọng
                         </span>
                       </button>
                       <span
                         className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                          activeJob?.status === 'running'
-                            ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30 animate-pulse'
-                            : activeJob?.status === 'completed'
-                            ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                            : activeJob?.status === 'paused'
-                            ? 'bg-sky-500/20 text-sky-300 border border-sky-500/30'
-                            : 'bg-slate-800 text-slate-300 border border-slate-700'
+                          activeJob?.status === "running"
+                            ? "bg-amber-500/20 text-amber-300 border border-amber-500/30 animate-pulse"
+                            : activeJob?.status === "completed"
+                              ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+                              : activeJob?.status === "paused"
+                                ? "bg-sky-500/20 text-sky-300 border border-sky-500/30"
+                                : "bg-slate-800 text-slate-300 border border-slate-700"
                         }`}
                       >
-                        {activeJob?.status === 'running' && 'Đang chạy song song'}
-                        {activeJob?.status === 'completed' && 'Hoàn thành 100%'}
-                        {activeJob?.status === 'paused' && 'Đang tạm dừng'}
-                        {(!activeJob || activeJob?.status === 'idle') && 'Sẵn sàng'}
+                        {activeJob?.status === "running" &&
+                          "Đang chạy song song"}
+                        {activeJob?.status === "completed" && "Hoàn thành 100%"}
+                        {activeJob?.status === "paused" && "Đang tạm dừng"}
+                        {(!activeJob || activeJob?.status === "idle") &&
+                          "Sẵn sàng"}
                       </span>
                     </div>
                     <div className="text-[11px] text-slate-400 font-mono mt-0.5 flex items-center gap-2">
-                      <span className="text-amber-400 font-semibold">{subtitles.length} câu</span>
+                      <span className="text-amber-400 font-semibold">
+                        {subtitles.length} câu
+                      </span>
                       <span>·</span>
-                      <span>Batch {activeJob?.options.batchSize ?? effectiveBatchSize} câu/đợt</span>
+                      <span>
+                        Batch{" "}
+                        {activeJob?.options.batchSize ?? effectiveBatchSize}{" "}
+                        câu/đợt
+                      </span>
                       {uploadedFileName && (
                         <>
                           <span>·</span>
-                          <span className="truncate max-w-[120px] text-slate-300 hidden sm:inline" title={uploadedFileName}>
+                          <span
+                            className="truncate max-w-[120px] text-slate-300 hidden sm:inline"
+                            title={uploadedFileName}
+                          >
                             {uploadedFileName}
                           </span>
                         </>
@@ -3469,24 +3848,26 @@ const { audio, sampleRate } = await tts.synthesize("Ca ca, lớn quá, thật nh
                       {completionPercent}%
                     </span>
                     <span className="text-slate-400 text-[11px]">
-                      ({completedSentencesCount}/{totalSentencesCount} câu hoàn tất)
+                      ({completedSentencesCount}/{totalSentencesCount} câu hoàn
+                      tất)
                     </span>
                   </div>
                   <div className="text-[11px] text-slate-400">
-                    {activeJob?.status === 'running' && (
+                    {activeJob?.status === "running" && (
                       <span className="text-amber-400 font-medium">
-                        {activeJob.overallProgress.estimatedRemainingMs !== undefined
+                        {activeJob.overallProgress.estimatedRemainingMs !==
+                        undefined
                           ? `Còn ~${(activeJob.overallProgress.estimatedRemainingMs / 1000).toFixed(0)}s`
                           : `Đã chạy ${(activeJob.overallProgress.elapsedMs / 1000).toFixed(1)}s`}
                       </span>
                     )}
-                    {activeJob?.status === 'completed' && (
+                    {activeJob?.status === "completed" && (
                       <span className="text-emerald-400 flex items-center gap-1 font-semibold">
                         <CheckCircle2 className="w-3.5 h-3.5" />
                         Master audio sẵn sàng
                       </span>
                     )}
-                    {(!activeJob || activeJob?.status === 'idle') && (
+                    {(!activeJob || activeJob?.status === "idle") && (
                       <span className="text-slate-400">Chờ bắt đầu xử lý</span>
                     )}
                   </div>
@@ -3496,13 +3877,15 @@ const { audio, sampleRate } = await tts.synthesize("Ca ca, lớn quá, thật nh
                 <div className="w-full bg-slate-900 rounded-full h-3 overflow-hidden p-0.5 border border-slate-700/80 shadow-inner relative">
                   <div
                     className={`h-full rounded-full transition-all duration-300 relative ${
-                      activeJob?.status === 'completed'
-                        ? 'bg-gradient-to-r from-emerald-500 to-emerald-400 shadow-[0_0_14px_rgba(16,185,129,0.5)]'
-                        : 'bg-gradient-to-r from-amber-500 via-amber-400 to-emerald-400 shadow-[0_0_14px_rgba(245,158,11,0.5)]'
+                      activeJob?.status === "completed"
+                        ? "bg-gradient-to-r from-emerald-500 to-emerald-400 shadow-[0_0_14px_rgba(16,185,129,0.5)]"
+                        : "bg-gradient-to-r from-amber-500 via-amber-400 to-emerald-400 shadow-[0_0_14px_rgba(245,158,11,0.5)]"
                     }`}
-                    style={{ width: `${Math.min(100, Math.max(0, completionPercent))}%` }}
+                    style={{
+                      width: `${Math.min(100, Math.max(0, completionPercent))}%`,
+                    }}
                   >
-                    {activeJob?.status === 'running' && (
+                    {activeJob?.status === "running" && (
                       <div className="absolute inset-0 bg-white/25 animate-pulse" />
                     )}
                   </div>
@@ -3511,7 +3894,7 @@ const { audio, sampleRate } = await tts.synthesize("Ca ca, lớn quá, thật nh
 
               {/* Vùng Phải: Nút Bắt Đầu Xử Lý & Các Điều Khiển Phụ (Requirement 2) */}
               <div className="flex items-center justify-end gap-2 shrink-0">
-                {activeJob?.status === 'running' ? (
+                {activeJob?.status === "running" ? (
                   <>
                     <button
                       type="button"
@@ -3536,7 +3919,7 @@ const { audio, sampleRate } = await tts.synthesize("Ca ca, lớn quá, thật nh
                       <span>Đang xử lý ({completionPercent}%)</span>
                     </div>
                   </>
-                ) : activeJob?.status === 'paused' ? (
+                ) : activeJob?.status === "paused" ? (
                   <>
                     <button
                       type="button"
@@ -3557,26 +3940,27 @@ const { audio, sampleRate } = await tts.synthesize("Ca ca, lớn quá, thật nh
                   </>
                 ) : (
                   <>
-                    {activeJob?.status === 'completed' && activeJob.masterAudio && (
-                      <button
-                        type="button"
-                        onClick={handlePlayMasterAudio}
-                        className="px-3.5 py-2.5 bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-emerald-500/40 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-md"
-                        title="Nghe file master hoàn chỉnh"
-                      >
-                        {masterPlaying ? (
-                          <>
-                            <Pause className="w-4 h-4 fill-current" />
-                            <span>Dừng</span>
-                          </>
-                        ) : (
-                          <>
-                            <Play className="w-4 h-4 fill-current text-emerald-400" />
-                            <span>Nghe Master</span>
-                          </>
-                        )}
-                      </button>
-                    )}
+                    {activeJob?.status === "completed" &&
+                      activeJob.masterAudio && (
+                        <button
+                          type="button"
+                          onClick={handlePlayMasterAudio}
+                          className="px-3.5 py-2.5 bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-emerald-500/40 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-md"
+                          title="Nghe file master hoàn chỉnh"
+                        >
+                          {masterPlaying ? (
+                            <>
+                              <Pause className="w-4 h-4 fill-current" />
+                              <span>Dừng</span>
+                            </>
+                          ) : (
+                            <>
+                              <Play className="w-4 h-4 fill-current text-emerald-400" />
+                              <span>Nghe Master</span>
+                            </>
+                          )}
+                        </button>
+                      )}
 
                     {/* Nút Bắt Đầu Xử Lý Chính */}
                     <button
@@ -3585,7 +3969,7 @@ const { audio, sampleRate } = await tts.synthesize("Ca ca, lớn quá, thật nh
                       onClick={handleStartProcessing}
                       className="px-5 sm:px-6 py-2.5 bg-gradient-to-r from-amber-500 to-amber-400 hover:from-amber-400 hover:to-amber-300 active:scale-95 text-slate-950 font-black rounded-xl text-xs sm:text-sm flex items-center gap-2 shadow-xl shadow-amber-500/25 disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none transition-all cursor-pointer"
                     >
-                      {activeJob?.status === 'completed' ? (
+                      {activeJob?.status === "completed" ? (
                         <>
                           <RotateCcw className="w-4 h-4" />
                           <span>Chạy Lại ({subtitles.length} câu)</span>
