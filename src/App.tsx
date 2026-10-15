@@ -41,7 +41,10 @@ import {
   Search,
   X,
   User,
-  UserCheck
+  UserCheck,
+  Bookmark,
+  Save,
+  BookmarkCheck
 } from 'lucide-react';
 
 import { SubtitleItem, TimelineJob, TimelineJobOptions, LogEntry } from './types/subtitles';
@@ -56,6 +59,88 @@ import {
   SAMPLE_DIALOGUE_SRT,
   SAMPLE_TEST_50_SRT,
 } from './utils/sampleData';
+
+export interface ProjectPreset {
+  id: string;
+  name: string;
+  isDefault?: boolean;
+  voiceId: string;
+  batchSizeChoice: '1' | '2' | '4' | '8' | '16' | 'custom';
+  customBatchSize: number;
+  maxSpeed: number;
+  minSpeed: number;
+  speedPriority: 'balanced' | 'strict' | 'natural';
+  padSilence: boolean;
+  outputFormat: 'mp3' | 'wav';
+}
+
+const DEFAULT_PRESETS: ProjectPreset[] = [
+  {
+    id: 'preset-balanced',
+    name: 'Mặc định - Cân bằng (Khuyên dùng)',
+    isDefault: true,
+    voiceId: 'local:hoaimy-vietnamese-vi-medium-ljkjhi',
+    batchSizeChoice: '4',
+    customBatchSize: 4,
+    maxSpeed: 1.5,
+    minSpeed: 0.8,
+    speedPriority: 'balanced',
+    padSilence: true,
+    outputFormat: 'mp3',
+  },
+  {
+    id: 'preset-fast-action',
+    name: 'Phim & Video Nhanh (1.0x - 1.8x, Batch 6)',
+    isDefault: true,
+    voiceId: 'local:hoaimy-vietnamese-vi-medium-ljkjhi',
+    batchSizeChoice: 'custom',
+    customBatchSize: 6,
+    maxSpeed: 1.8,
+    minSpeed: 1.0,
+    speedPriority: 'strict',
+    padSilence: true,
+    outputFormat: 'mp3',
+  },
+  {
+    id: 'preset-podcast',
+    name: 'Kể Chuyện / Podcast (Tự Nhiên 0.85x - 1.2x)',
+    isDefault: true,
+    voiceId: 'local:hoaimy-vietnamese-vi-nmh19xx',
+    batchSizeChoice: '2',
+    customBatchSize: 2,
+    maxSpeed: 1.2,
+    minSpeed: 0.85,
+    speedPriority: 'natural',
+    padSilence: true,
+    outputFormat: 'mp3',
+  },
+  {
+    id: 'preset-documentary',
+    name: 'Tài Liệu / Bản Tin (Thanh Niên Tự Tin)',
+    isDefault: true,
+    voiceId: 'local:thanh-nien-tu-tin-vietnamese-vi-medium',
+    batchSizeChoice: '4',
+    customBatchSize: 4,
+    maxSpeed: 1.35,
+    minSpeed: 0.9,
+    speedPriority: 'balanced',
+    padSilence: true,
+    outputFormat: 'mp3',
+  },
+  {
+    id: 'preset-csa-voice',
+    name: 'CSA Voice v3 (Ngọc Lan / Đa nhân vật, WAV)',
+    isDefault: true,
+    voiceId: 'local:vi_VN-csa-voice-piper-v3-medium:speaker-0',
+    batchSizeChoice: '4',
+    customBatchSize: 4,
+    maxSpeed: 1.4,
+    minSpeed: 0.85,
+    speedPriority: 'balanced',
+    padSilence: true,
+    outputFormat: 'wav',
+  },
+];
 
 interface VoiceOption {
   id: string;
@@ -109,6 +194,25 @@ export default function App() {
   const [videoDurationStr, setVideoDurationStr] = useState<string>('');
   const [outputFormat, setOutputFormat] = useState<'mp3' | 'wav'>('mp3');
   const [showSettingsDrawer, setShowSettingsDrawer] = useState<boolean>(true);
+
+  // Project Settings Presets (Requirement 2)
+  const [projectPresets, setProjectPresets] = useState<ProjectPreset[]>(() => {
+    try {
+      const saved = localStorage.getItem('hoaimy_project_presets');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const customOnly = parsed.filter((p: ProjectPreset) => !p.isDefault);
+          return [...DEFAULT_PRESETS, ...customOnly];
+        }
+      }
+    } catch {}
+    return DEFAULT_PRESETS;
+  });
+  const [selectedPresetId, setSelectedPresetId] = useState<string>('preset-balanced');
+  const [presetFeedback, setPresetFeedback] = useState<string | null>(null);
+  const [showSavePresetModal, setShowSavePresetModal] = useState<boolean>(false);
+  const [newPresetName, setNewPresetName] = useState<string>('');
 
   // Layout expansion states (Requirement 3)
   const [isLeftPanelExpanded, setIsLeftPanelExpanded] = useState<boolean>(true);
@@ -579,6 +683,101 @@ export default function App() {
     setPreviewVoiceId(null);
   };
 
+  // Preset Handlers (Lưu & Nạp Project Settings: Giọng đọc, Timeline & Tốc độ)
+  const handleApplyPreset = (presetId: string) => {
+    const preset = projectPresets.find((p) => p.id === presetId);
+    if (!preset) return;
+    setSelectedPresetId(preset.id);
+    setSelectedVoiceId(preset.voiceId);
+    setBatchSizeChoice(preset.batchSizeChoice);
+    setCustomBatchSize(preset.customBatchSize);
+    setMaxSpeed(preset.maxSpeed);
+    setMinSpeed(preset.minSpeed);
+    setSpeedPriority(preset.speedPriority);
+    setPadSilence(preset.padSilence);
+    setOutputFormat(preset.outputFormat);
+    setSingleSpeed(Math.min(1.8, Math.max(0.6, (preset.minSpeed + preset.maxSpeed) / 2)));
+
+    setPresetFeedback(`Đã tự động điền cấu hình: "${preset.name}"`);
+    setTimeout(() => setPresetFeedback(null), 3000);
+  };
+
+  const handleSaveCurrentAsPreset = (name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+
+    const newPreset: ProjectPreset = {
+      id: `custom-${Date.now()}`,
+      name: trimmed,
+      isDefault: false,
+      voiceId: selectedVoiceId,
+      batchSizeChoice,
+      customBatchSize: effectiveBatchSize,
+      maxSpeed,
+      minSpeed,
+      speedPriority,
+      padSilence,
+      outputFormat,
+    };
+
+    const updated = [...projectPresets, newPreset];
+    setProjectPresets(updated);
+    setSelectedPresetId(newPreset.id);
+    try {
+      localStorage.setItem('hoaimy_project_presets', JSON.stringify(updated));
+    } catch {}
+
+    setShowSavePresetModal(false);
+    setNewPresetName('');
+    setPresetFeedback(`Đã lưu cấu hình dự án: "${trimmed}"`);
+    setTimeout(() => setPresetFeedback(null), 3500);
+  };
+
+  const handleUpdateCurrentPreset = () => {
+    const preset = projectPresets.find((p) => p.id === selectedPresetId);
+    if (!preset || preset.isDefault) return;
+
+    const updated = projectPresets.map((p) =>
+      p.id === selectedPresetId
+        ? {
+            ...p,
+            voiceId: selectedVoiceId,
+            batchSizeChoice,
+            customBatchSize: effectiveBatchSize,
+            maxSpeed,
+            minSpeed,
+            speedPriority,
+            padSilence,
+            outputFormat,
+          }
+        : p
+    );
+    setProjectPresets(updated);
+    try {
+      localStorage.setItem('hoaimy_project_presets', JSON.stringify(updated));
+    } catch {}
+
+    setPresetFeedback(`Đã cập nhật cấu hình: "${preset.name}"`);
+    setTimeout(() => setPresetFeedback(null), 3000);
+  };
+
+  const handleDeletePreset = (presetId: string) => {
+    const preset = projectPresets.find((p) => p.id === presetId);
+    if (!preset || preset.isDefault) return;
+
+    const updated = projectPresets.filter((p) => p.id !== presetId);
+    setProjectPresets(updated);
+    try {
+      localStorage.setItem('hoaimy_project_presets', JSON.stringify(updated));
+    } catch {}
+
+    if (selectedPresetId === presetId) {
+      handleApplyPreset('preset-balanced');
+    }
+    setPresetFeedback(`Đã xóa cấu hình: "${preset.name}"`);
+    setTimeout(() => setPresetFeedback(null), 3000);
+  };
+
   const processSubtitleFile = (file: File) => {
     if (!file) return;
     const name = file.name.toLowerCase();
@@ -755,6 +954,9 @@ export default function App() {
       recommended: true,
     };
 
+  const selectedPreset =
+    projectPresets.find((p) => p.id === selectedPresetId) || projectPresets[0];
+
   const femaleVoicesCount = voices.filter((v) => v.gender === 'female').length;
   const maleVoicesCount = voices.filter((v) => v.gender === 'male').length;
   const recommendedVoicesCount = voices.filter((v) => v.recommended).length;
@@ -886,6 +1088,114 @@ export default function App() {
                     <PanelLeftClose className="w-3.5 h-3.5 text-amber-400" />
                     <span>Ẩn Cột</span>
                   </button>
+                </div>
+
+                {/* 0. Project Settings Card (Lưu & Nạp Cấu Hình Dự Án - Requirement 2) */}
+                <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 shadow-xl space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                      <Bookmark className="w-4 h-4 text-amber-400" />
+                      Cấu hình Dự án
+                    </span>
+                    <span className="text-[10px] text-amber-400 font-medium bg-amber-400/10 px-2 py-0.5 rounded border border-amber-400/20 font-mono">
+                      Tự động điền
+                    </span>
+                  </div>
+
+                  {/* Dropdown Selector */}
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between text-[11px] text-slate-300">
+                      <span className="font-medium">Chọn cấu hình lưu sẵn:</span>
+                      <span className="text-[10px] text-slate-400 font-mono">
+                        {selectedPreset?.isDefault ? 'Mẫu chuẩn' : 'Cá nhân'}
+                      </span>
+                    </div>
+                    <select
+                      value={selectedPresetId}
+                      onChange={(e) => handleApplyPreset(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-700/80 hover:border-amber-500/60 rounded-xl p-2.5 text-xs text-slate-100 font-medium focus:ring-2 focus:ring-amber-500/40 focus:outline-none transition-colors cursor-pointer"
+                    >
+                      <optgroup label="── Cấu hình mẫu hệ thống ──">
+                        {projectPresets
+                          .filter((p) => p.isDefault)
+                          .map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.name}
+                            </option>
+                          ))}
+                      </optgroup>
+                      {projectPresets.some((p) => !p.isDefault) && (
+                        <optgroup label="── Cấu hình cá nhân của bạn ──">
+                          {projectPresets
+                            .filter((p) => !p.isDefault)
+                            .map((p) => (
+                              <option key={p.id} value={p.id}>
+                                ★ {p.name}
+                              </option>
+                            ))}
+                        </optgroup>
+                      )}
+                    </select>
+                  </div>
+
+                  {/* Preset Summary Strip */}
+                  <div className="p-2.5 bg-slate-950/70 border border-slate-800/80 rounded-xl text-[11px] space-y-1 font-mono">
+                    <div className="flex items-center justify-between text-slate-300">
+                      <span className="truncate font-semibold text-amber-400">
+                        {selectedVoice.name}
+                      </span>
+                      <span className="text-[10px] bg-slate-800 px-1.5 py-0.2 rounded text-slate-300 uppercase">
+                        {outputFormat}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between text-[10px] text-slate-400 pt-1 border-t border-slate-900">
+                      <span>Tốc độ: {minSpeed.toFixed(2)}x - {maxSpeed.toFixed(2)}x</span>
+                      <span>Batch: {effectiveBatchSize}</span>
+                      <span>{speedPriority === 'strict' ? 'Timeline' : speedPriority === 'natural' ? 'Tự nhiên' : 'Cân bằng'}</span>
+                    </div>
+                  </div>
+
+                  {/* Preset Action Buttons */}
+                  <div className="flex items-center gap-2 pt-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setShowSavePresetModal(true)}
+                      className="flex-1 py-1.5 px-3 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                      title="Lưu lại cấu hình giọng đọc, tốc độ và timeline hiện tại thành cấu hình dự án mới"
+                    >
+                      <Save className="w-3.5 h-3.5 text-amber-400" />
+                      <span>Lưu cấu hình mới...</span>
+                    </button>
+
+                    {!selectedPreset?.isDefault && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={handleUpdateCurrentPreset}
+                          className="py-1.5 px-2.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 rounded-xl text-xs font-semibold flex items-center justify-center gap-1 transition-colors cursor-pointer"
+                          title="Cập nhật thông số hiện tại vào cấu hình cá nhân này"
+                        >
+                          <BookmarkCheck className="w-3.5 h-3.5 text-emerald-400" />
+                          <span>Lưu đè</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeletePreset(selectedPresetId)}
+                          className="p-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 rounded-xl transition-colors cursor-pointer"
+                          title="Xóa cấu hình cá nhân này"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </>
+                    )}
+                  </div>
+
+                  {presetFeedback && (
+                    <div className="text-[11px] text-emerald-300 font-medium px-2.5 py-1 bg-emerald-500/15 rounded-xl border border-emerald-500/30 animate-in fade-in flex items-center gap-1.5">
+                      <Check className="w-3 h-3 text-emerald-400 shrink-0" />
+                      <span>{presetFeedback}</span>
+                    </div>
+                  )}
                 </div>
 
                 {/* 1. Voice Selection Card (Mở Panel Bảng Chọn Giọng Đọc) */}
@@ -1985,7 +2295,7 @@ export default function App() {
                 <span className="text-xs text-slate-400">{singleText.length} ký tự</span>
               </div>
 
-              {/* Voice Selector in Tab 2 */}
+              {/* Voice & Project Settings in Tab 2 */}
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 bg-slate-950/80 rounded-xl border border-slate-800 text-xs">
                 <div className="flex items-center gap-2.5">
                   <div
@@ -2007,14 +2317,34 @@ export default function App() {
                     <span className="text-[11px] text-slate-400 font-mono">{selectedVoice.tag}</span>
                   </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setShowVoiceModal(true)}
-                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-amber-400 font-semibold rounded-lg border border-slate-700 hover:border-amber-500/40 transition-colors flex items-center gap-1.5 self-start sm:self-auto cursor-pointer"
-                >
-                  <UserCheck className="w-3.5 h-3.5" />
-                  <span>Đổi giọng đọc ({voices.length} giọng)</span>
-                </button>
+
+                <div className="flex items-center gap-2 flex-wrap">
+                  <div className="flex items-center gap-1.5 bg-slate-900 px-2 py-1 rounded-lg border border-slate-800">
+                    <Bookmark className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                    <select
+                      value={selectedPresetId}
+                      onChange={(e) => handleApplyPreset(e.target.value)}
+                      className="bg-transparent text-xs text-slate-200 focus:outline-none cursor-pointer max-w-[160px] sm:max-w-[210px] truncate"
+                      title="Nạp cấu hình dự án (giọng + tốc độ)"
+                    >
+                      {projectPresets.map((p) => (
+                        <option key={p.id} value={p.id} className="bg-slate-900 text-white">
+                          {p.isDefault ? '' : '★ '}
+                          {p.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setShowVoiceModal(true)}
+                    className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-amber-400 font-semibold rounded-lg border border-slate-700 hover:border-amber-500/40 transition-colors flex items-center gap-1.5 self-start sm:self-auto cursor-pointer"
+                  >
+                    <UserCheck className="w-3.5 h-3.5" />
+                    <span>Đổi giọng đọc ({voices.length})</span>
+                  </button>
+                </div>
               </div>
 
               <textarea
@@ -2113,30 +2443,35 @@ export default function App() {
       {/* MODAL: BẢNG DANH SÁCH GIỌNG ĐỌC (VOICE SELECTION TABLE)   */}
       {/* Các cột: Tên, Giới tính, Tag, Nghe thử, Chọn dùng         */}
       {/* ========================================================= */}
+      {/* ========================================================= */}
+      {/* MODAL: BẢNG DANH SÁCH GIỌNG ĐỌC (VOICE SELECTION TABLE)   */}
+      {/* Các cột: Tên, Giới tính, Tag, Nghe thử, Chọn dùng         */}
+      {/* Gọn gàng, loại bỏ description/ID/text để xem nhiều giọng  */}
+      {/* ========================================================= */}
       {showVoiceModal && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-6 animate-in fade-in duration-200">
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-5xl w-full max-h-[92vh] flex flex-col shadow-2xl overflow-hidden relative">
-            {/* Modal Header */}
-            <div className="flex items-start justify-between gap-4 p-5 sm:p-6 border-b border-slate-800/90 bg-slate-950/60">
-              <div className="flex items-center gap-3">
-                <div className="w-11 h-11 rounded-2xl bg-amber-500 text-slate-950 flex items-center justify-center font-black shadow-lg shadow-amber-500/25 shrink-0">
-                  <Radio className="w-6 h-6" />
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-2 sm:p-4 animate-in fade-in duration-200">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-4xl w-full max-h-[92vh] flex flex-col shadow-2xl overflow-hidden relative">
+            {/* Modal Header (Compact) */}
+            <div className="flex items-center justify-between gap-3 px-4 py-3 sm:px-5 sm:py-3.5 border-b border-slate-800 bg-slate-950/70 shrink-0">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-amber-500 text-slate-950 flex items-center justify-center font-black shadow-md shadow-amber-500/20 shrink-0">
+                  <Radio className="w-4 h-4" />
                 </div>
                 <div>
                   <div className="flex items-center gap-2 flex-wrap">
-                    <h2 className="text-base sm:text-lg font-bold text-white tracking-tight">
-                      Bảng Danh Sách Giọng Đọc Tiếng Việt
+                    <h2 className="text-sm sm:text-base font-bold text-white tracking-tight">
+                      Bảng Chọn Giọng Đọc Tiếng Việt
                     </h2>
-                    <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                      Piper TTS ({voices.length} giọng)
+                    <span className="px-2 py-0.2 rounded-full text-[11px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                      {voices.length} giọng Piper TTS
                     </span>
-                    <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1">
+                    <span className="px-2 py-0.2 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1">
                       <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                      100% Offline (Không Cần Mạng)
+                      100% Offline
                     </span>
                   </div>
-                  <p className="text-xs text-slate-400 mt-0.5">
-                    Toàn bộ mô hình chạy trực tiếp từ thư mục local <code className="text-amber-400 font-mono">/models</code>. Nghe thử mẫu âm thanh và chọn giọng đọc chuẩn ngữ điệu.
+                  <p className="text-[11px] text-slate-400 hidden sm:block">
+                    Nghe thử giọng mẫu và chọn giọng phù hợp cho dự án phụ đề & lồng tiếng
                   </p>
                 </div>
               </div>
@@ -2144,24 +2479,24 @@ export default function App() {
               <button
                 type="button"
                 onClick={handleCloseVoiceModal}
-                className="w-9 h-9 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white flex items-center justify-center transition-colors cursor-pointer shrink-0 border border-slate-700/60"
+                className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white flex items-center justify-center transition-colors cursor-pointer shrink-0 border border-slate-700/60"
                 title="Đóng bảng chọn giọng đọc (ESC)"
               >
-                <X className="w-5 h-5" />
+                <X className="w-4 h-4" />
               </button>
             </div>
 
-            {/* Toolbar: Search input & Filter pills */}
-            <div className="p-4 sm:px-6 bg-slate-900/95 border-b border-slate-800 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+            {/* Toolbar: Search input & Filter pills (Compact) */}
+            <div className="px-4 py-2.5 sm:px-5 bg-slate-900 border-b border-slate-800 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 shrink-0">
               {/* Search input */}
-              <div className="relative flex-1 max-w-md">
-                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <div className="relative flex-1 max-w-sm">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                 <input
                   type="text"
                   value={voiceSearchQuery}
                   onChange={(e) => setVoiceSearchQuery(e.target.value)}
-                  placeholder="Tìm theo tên (Hoài My, Ban Mai...), vùng miền (Bắc/Nam), CSA..."
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-8 py-2 text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-amber-500/50 focus:border-amber-500/60 transition-all font-medium"
+                  placeholder="Tìm theo tên giọng (Hoài My, Ban Mai...), tags..."
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg pl-8 pr-7 py-1.5 text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-amber-500 focus:border-amber-500 transition-all font-medium"
                 />
                 {voiceSearchQuery && (
                   <button
@@ -2175,13 +2510,13 @@ export default function App() {
               </div>
 
               {/* Gender / Filter pills */}
-              <div className="flex items-center gap-1.5 overflow-x-auto text-xs pb-1 sm:pb-0">
+              <div className="flex items-center gap-1.5 overflow-x-auto text-xs">
                 <button
                   type="button"
                   onClick={() => setVoiceGenderFilter('all')}
-                  className={`px-3 py-1.5 rounded-xl font-semibold transition-all cursor-pointer ${
+                  className={`px-2.5 py-1 rounded-lg font-semibold transition-all cursor-pointer text-xs ${
                     voiceGenderFilter === 'all'
-                      ? 'bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/20'
+                      ? 'bg-amber-500 text-slate-950 font-bold shadow-sm shadow-amber-500/20'
                       : 'bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700 border border-slate-700/60'
                   }`}
                 >
@@ -2190,58 +2525,58 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => setVoiceGenderFilter('female')}
-                  className={`px-3 py-1.5 rounded-xl font-semibold transition-all cursor-pointer flex items-center gap-1.5 ${
+                  className={`px-2.5 py-1 rounded-lg font-semibold transition-all cursor-pointer flex items-center gap-1 text-xs ${
                     voiceGenderFilter === 'female'
-                      ? 'bg-rose-500 text-white font-bold shadow-md shadow-rose-500/20'
+                      ? 'bg-rose-500 text-white font-bold shadow-sm shadow-rose-500/20'
                       : 'bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700 border border-slate-700/60'
                   }`}
                 >
-                  <span className="w-2 h-2 rounded-full bg-rose-400" />
+                  <span className="w-1.5 h-1.5 rounded-full bg-rose-400" />
                   <span>Nữ ({femaleVoicesCount})</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => setVoiceGenderFilter('male')}
-                  className={`px-3 py-1.5 rounded-xl font-semibold transition-all cursor-pointer flex items-center gap-1.5 ${
+                  className={`px-2.5 py-1 rounded-lg font-semibold transition-all cursor-pointer flex items-center gap-1 text-xs ${
                     voiceGenderFilter === 'male'
-                      ? 'bg-sky-500 text-slate-950 font-bold shadow-md shadow-sky-500/20'
+                      ? 'bg-sky-500 text-slate-950 font-bold shadow-sm shadow-sky-500/20'
                       : 'bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700 border border-slate-700/60'
                   }`}
                 >
-                  <span className="w-2 h-2 rounded-full bg-sky-400" />
+                  <span className="w-1.5 h-1.5 rounded-full bg-sky-400" />
                   <span>Nam ({maleVoicesCount})</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => setVoiceGenderFilter('recommended')}
-                  className={`px-3 py-1.5 rounded-xl font-semibold transition-all cursor-pointer flex items-center gap-1.5 ${
+                  className={`px-2.5 py-1 rounded-lg font-semibold transition-all cursor-pointer flex items-center gap-1 text-xs ${
                     voiceGenderFilter === 'recommended'
-                      ? 'bg-amber-400 text-slate-950 font-bold shadow-md shadow-amber-400/20'
+                      ? 'bg-amber-400 text-slate-950 font-bold shadow-sm shadow-amber-400/20'
                       : 'bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700 border border-slate-700/60'
                   }`}
                 >
-                  <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                  <Sparkles className="w-3 h-3 text-amber-400" />
                   <span>Khuyên dùng ({recommendedVoicesCount})</span>
                 </button>
               </div>
             </div>
 
-            {/* Table Area (Scrollable with sticky header) */}
-            <div className="flex-1 overflow-x-auto overflow-y-auto max-h-[50vh] p-3 sm:p-6 bg-slate-950/40 scrollbar-thin">
+            {/* Table Area (Compact single-line rows: Hiển thị 12-16 giọng cùng lúc, chỉ Tên, Giới tính, Tags, Nghe thử, Chọn dùng) */}
+            <div className="flex-1 overflow-x-auto overflow-y-auto max-h-[70vh] p-1 sm:p-2 bg-slate-950/40 scrollbar-thin">
               <table className="w-full text-left text-xs border-collapse">
-                <thead className="sticky top-0 z-20 bg-slate-950 shadow-md">
+                <thead className="sticky top-0 z-20 bg-slate-950 shadow-sm">
                   <tr className="bg-slate-950 text-slate-400 border-b border-slate-800 text-[11px] font-mono">
-                    <th className="py-3 px-3.5 w-64">Tên</th>
-                    <th className="py-3 px-3 w-28 text-center">Giới tính</th>
-                    <th className="py-3 px-3.5 min-w-[200px]">Tag / Phân loại</th>
-                    <th className="py-3 px-3.5 min-w-[240px]">Nghe thử</th>
-                    <th className="py-3 px-3.5 w-32 text-center">Chọn dùng</th>
+                    <th className="py-2 px-3 min-w-[200px]">Tên giọng đọc</th>
+                    <th className="py-2 px-3 w-24 text-center">Giới tính</th>
+                    <th className="py-2 px-3 min-w-[140px]">Tags / Phân loại</th>
+                    <th className="py-2 px-3 w-28 text-center">Nghe thử</th>
+                    <th className="py-2 px-3 w-28 text-center">Chọn dùng</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-800/80">
+                <tbody className="divide-y divide-slate-800/60">
                   {filteredVoices.length === 0 ? (
                     <tr>
-                      <td colSpan={5} className="py-12 text-center text-slate-500 italic">
+                      <td colSpan={5} className="py-8 text-center text-slate-500 italic">
                         Không tìm thấy giọng đọc nào phù hợp với bộ lọc tìm kiếm.
                       </td>
                     </tr>
@@ -2254,131 +2589,105 @@ export default function App() {
                       return (
                         <tr
                           key={v.id}
-                          className={`hover:bg-slate-800/40 transition-colors ${
+                          className={`hover:bg-slate-800/50 transition-colors h-10 ${
                             isCurrent ? 'bg-amber-500/10' : ''
                           }`}
                         >
-                          {/* 1. Cột Tên */}
-                          <td className="py-3.5 px-3.5">
-                            <div className="flex items-start gap-2.5">
-                              <div
-                                className={`w-8 h-8 rounded-xl flex items-center justify-center font-bold text-xs shrink-0 mt-0.5 shadow-sm ${
-                                  v.gender === 'female'
-                                    ? 'bg-rose-500/15 text-rose-300 border border-rose-500/30'
-                                    : 'bg-sky-500/15 text-sky-300 border border-sky-500/30'
+                          {/* 1. Cột Tên: Tên + Badges (Bỏ hoàn toàn description, ID và text) */}
+                          <td className="py-1 px-3 whitespace-nowrap">
+                            <div className="flex items-center gap-2">
+                              <span
+                                className={`font-semibold text-xs sm:text-[13px] truncate max-w-[260px] ${
+                                  isCurrent ? 'text-amber-300 font-bold' : 'text-slate-100'
                                 }`}
                               >
-                                {v.gender === 'female' ? 'Nữ' : 'Nam'}
-                              </div>
-                              <div className="min-w-0">
-                                <div className="flex items-center gap-1.5 flex-wrap">
-                                  <span className="font-bold text-white text-xs sm:text-sm">
-                                    {v.name}
-                                  </span>
-                                  {v.recommended && (
-                                    <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                                      Khuyên dùng
-                                    </span>
-                                  )}
-                                  <span className="px-1.5 py-0.2 rounded text-[9px] font-medium bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
-                                    Offline
-                                  </span>
-                                  {isCurrent && (
-                                    <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1">
-                                      <Check className="w-2.5 h-2.5" />
-                                      Đang chọn
-                                    </span>
-                                  )}
-                                </div>
-                                <p className="text-[11px] text-slate-400 mt-0.5 leading-relaxed">
-                                  {v.description}
-                                </p>
-                              </div>
+                                {v.name}
+                              </span>
+                              {v.recommended && (
+                                <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30 shrink-0">
+                                  Khuyên dùng
+                                </span>
+                              )}
+                              {isCurrent && (
+                                <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1 shrink-0">
+                                  <Check className="w-2.5 h-2.5" />
+                                  Đang chọn
+                                </span>
+                              )}
                             </div>
                           </td>
 
-                          {/* 2. Cột Giới tính */}
-                          <td className="py-3.5 px-3 text-center">
+                          {/* 2. Cột Giới tính (Gọn gàng) */}
+                          <td className="py-1 px-3 text-center whitespace-nowrap">
                             <span
-                              className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold ${
+                              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold ${
                                 v.gender === 'female'
                                   ? 'bg-rose-500/15 text-rose-300 border border-rose-500/25'
                                   : 'bg-sky-500/15 text-sky-300 border border-sky-500/25'
                               }`}
                             >
-                              <User className="w-3 h-3" />
+                              <span
+                                className={`w-1.5 h-1.5 rounded-full ${
+                                  v.gender === 'female' ? 'bg-rose-400' : 'bg-sky-400'
+                                }`}
+                              />
                               <span>{v.gender === 'female' ? 'Nữ' : 'Nam'}</span>
                             </span>
                           </td>
 
-                          {/* 3. Cột Tag */}
-                          <td className="py-3.5 px-3.5">
-                            <div className="space-y-1">
-                              <span className="inline-block px-2 py-0.5 rounded-lg text-[11px] font-mono font-medium bg-slate-900 text-slate-300 border border-slate-800">
-                                {v.tag}
-                              </span>
-                              <div className="text-[10px] text-slate-500 font-mono">
-                                ID: {v.modelId} {v.speakerId !== undefined ? `· spk:${v.speakerId}` : ''}
-                              </div>
-                            </div>
+                          {/* 3. Cột Tag (Gọn gàng, bỏ ID) */}
+                          <td className="py-1 px-3 whitespace-nowrap">
+                            <span className="inline-block px-2 py-0.5 rounded text-[11px] font-mono font-medium bg-slate-900 text-slate-300 border border-slate-800">
+                              {v.tag}
+                            </span>
                           </td>
 
-                          {/* 4. Cột Nghe thử */}
-                          <td className="py-3.5 px-3.5">
-                            <div className="space-y-1.5">
-                              <button
-                                type="button"
-                                onClick={() => handlePreviewVoice(v)}
-                                disabled={isLoadingPreview}
-                                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
-                                  isPreviewing
-                                    ? 'bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/30 scale-105 ring-2 ring-amber-400/50'
-                                    : 'bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700 hover:border-amber-500/40'
-                                }`}
-                                title={isPreviewing ? 'Dừng phát mẫu' : 'Nghe thử câu thoại mẫu'}
-                              >
-                                {isLoadingPreview ? (
-                                  <>
-                                    <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-400" />
-                                    <span>Đang tạo âm...</span>
-                                  </>
-                                ) : isPreviewing ? (
-                                  <>
-                                    <Pause className="w-3.5 h-3.5 fill-current text-slate-950" />
-                                    <span>Dừng nghe</span>
-                                    <span className="flex items-center gap-0.5 ml-1">
-                                      <span className="w-1 h-3 bg-slate-950 animate-pulse" />
-                                      <span className="w-1 h-2 bg-slate-950 animate-pulse delay-75" />
-                                      <span className="w-1 h-3.5 bg-slate-950 animate-pulse delay-150" />
-                                    </span>
-                                  </>
-                                ) : (
-                                  <>
-                                    <Play className="w-3.5 h-3.5 fill-current text-amber-400 ml-0.5" />
-                                    <span>Nghe thử</span>
-                                  </>
-                                )}
-                              </button>
-                              <p className="text-[10px] text-slate-400 italic line-clamp-1 max-w-[280px]">
-                                "{v.sampleText}"
-                              </p>
-                            </div>
+                          {/* 4. Cột Nghe thử (Bỏ câu text) */}
+                          <td className="py-1 px-3 text-center whitespace-nowrap">
+                            <button
+                              type="button"
+                              onClick={() => handlePreviewVoice(v)}
+                              disabled={isLoadingPreview}
+                              className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                                isPreviewing
+                                  ? 'bg-amber-500 text-slate-950 font-bold shadow-sm shadow-amber-500/30 ring-1 ring-amber-400'
+                                  : 'bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700 hover:border-amber-500/40'
+                              }`}
+                              title={isPreviewing ? 'Dừng phát' : 'Nghe thử câu thoại mẫu'}
+                            >
+                              {isLoadingPreview ? (
+                                <>
+                                  <RefreshCw className="w-3 h-3 animate-spin text-amber-400" />
+                                  <span>Đang tạo...</span>
+                                </>
+                              ) : isPreviewing ? (
+                                <>
+                                  <Pause className="w-3 h-3 fill-current text-slate-950" />
+                                  <span>Dừng</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Play className="w-3 h-3 fill-current text-amber-400 ml-0.5" />
+                                  <span>Nghe thử</span>
+                                </>
+                              )}
+                            </button>
                           </td>
 
                           {/* 5. Cột Chọn dùng */}
-                          <td className="py-3.5 px-3.5 text-center">
+                          <td className="py-1 px-3 text-center whitespace-nowrap">
                             {isCurrent ? (
-                              <span className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shadow-sm">
-                                <Check className="w-3.5 h-3.5" />
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shadow-sm">
+                                <Check className="w-3 h-3" />
                                 <span>Đang Dùng</span>
                               </span>
                             ) : (
                               <button
                                 type="button"
                                 onClick={() => handleSelectVoice(v.id)}
-                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-amber-500 hover:bg-amber-400 text-slate-950 transition-all cursor-pointer shadow-md shadow-amber-500/20 active:scale-95"
+                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold bg-amber-500 hover:bg-amber-400 text-slate-950 transition-all cursor-pointer shadow-sm shadow-amber-500/20 active:scale-95"
                               >
-                                <UserCheck className="w-3.5 h-3.5" />
+                                <UserCheck className="w-3 h-3" />
                                 <span>Chọn dùng</span>
                               </button>
                             )}
@@ -2391,8 +2700,8 @@ export default function App() {
               </table>
             </div>
 
-            {/* Modal Footer */}
-            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-4 sm:px-6 bg-slate-950/80 border-t border-slate-800">
+            {/* Modal Footer (Compact) */}
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-4 py-2.5 sm:px-5 bg-slate-950/80 border-t border-slate-800 shrink-0">
               <div className="flex items-center gap-2 text-xs">
                 <span className="text-slate-400">Giọng đang chọn:</span>
                 <span className="font-bold text-amber-400">{selectedVoice.name}</span>
@@ -2402,11 +2711,136 @@ export default function App() {
               <button
                 type="button"
                 onClick={handleCloseVoiceModal}
-                className="px-5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-xl transition-colors cursor-pointer border border-slate-700"
+                className="px-4 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-lg transition-colors cursor-pointer border border-slate-700"
               >
                 Xác nhận & Đóng
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* MODAL: LƯU CẤU HÌNH DỰ ÁN (PROJECT SETTINGS PRESETS)      */}
+      {/* Tự động điền giọng đọc, cấu hình timeline & tốc độ        */}
+      {/* ========================================================= */}
+      {showSavePresetModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-150">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-md w-full p-6 space-y-5 shadow-2xl relative">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-amber-500/15 text-amber-400 border border-amber-500/25 flex items-center justify-center font-bold">
+                  <Bookmark className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white tracking-tight">
+                    Lưu Cấu Hình Dự Án Mới
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    Lưu lại giọng đọc, tốc độ & timeline để tự động điền lần sau
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowSavePresetModal(false);
+                  setNewPresetName('');
+                }}
+                className="w-8 h-8 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
+                title="Đóng modal"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Form Input */}
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleSaveCurrentAsPreset(newPresetName);
+              }}
+              className="space-y-4"
+            >
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                  Đặt tên cấu hình dự án:
+                </label>
+                <input
+                  type="text"
+                  autoFocus
+                  value={newPresetName}
+                  onChange={(e) => setNewPresetName(e.target.value)}
+                  placeholder="Ví dụ: Phim Hành Động 1.35x, Truyện Ma Đêm Khuya..."
+                  className="w-full bg-slate-950 border border-slate-700 focus:border-amber-500 focus:ring-2 focus:ring-amber-500/40 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder:text-slate-500 focus:outline-none transition-all font-medium"
+                />
+              </div>
+
+              {/* Preview of current settings that will be saved */}
+              <div className="p-3.5 bg-slate-950/80 border border-slate-800 rounded-xl space-y-2 text-xs">
+                <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider flex items-center justify-between">
+                  <span>Thông số sẽ lưu vào cấu hình này:</span>
+                  <span className="text-[10px] text-amber-400 font-mono">Tự động nạp</span>
+                </div>
+                <div className="space-y-1.5 text-[11px] font-mono">
+                  <div className="flex items-center justify-between text-slate-200">
+                    <span className="text-slate-400">Giọng đọc:</span>
+                    <span className="font-bold text-amber-400 truncate max-w-[200px]">
+                      {selectedVoice.name}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between text-slate-200">
+                    <span className="text-slate-400">Dải tốc độ:</span>
+                    <span className="text-emerald-400 font-bold">
+                      {minSpeed.toFixed(2)}x - {maxSpeed.toFixed(2)}x
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between text-slate-200">
+                    <span className="text-slate-400">Ưu tiên timeline:</span>
+                    <span className="text-slate-300">
+                      {speedPriority === 'strict'
+                        ? 'Ép chặt timeline'
+                        : speedPriority === 'natural'
+                        ? 'Tự nhiên'
+                        : 'Cân bằng'}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between text-slate-200">
+                    <span className="text-slate-400">Đệm khoảng lặng:</span>
+                    <span className="text-slate-300">{padSilence ? 'Bật đệm' : 'Tắt'}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-slate-200">
+                    <span className="text-slate-400">Xử lý song song:</span>
+                    <span className="text-slate-300">Batch {effectiveBatchSize} câu/lần</span>
+                  </div>
+                  <div className="flex items-center justify-between text-slate-200">
+                    <span className="text-slate-400">Định dạng file:</span>
+                    <span className="text-slate-300 uppercase">{outputFormat}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowSavePresetModal(false);
+                    setNewPresetName('');
+                  }}
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold transition-colors cursor-pointer"
+                >
+                  Hủy bỏ
+                </button>
+                <button
+                  type="submit"
+                  disabled={!newPresetName.trim()}
+                  className="px-5 py-2 bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-slate-950 rounded-xl text-xs font-bold transition-all cursor-pointer shadow-lg shadow-amber-500/20 flex items-center gap-1.5"
+                >
+                  <Save className="w-3.5 h-3.5" />
+                  <span>Lưu Cấu Hình Dự Án</span>
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
