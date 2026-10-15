@@ -237,7 +237,7 @@ export default function App() {
 
   // Single Text TTS State (Tab 2)
   const [singleText, setSingleText] = useState<string>(
-    "Xin chào! Tôi là Hoài My. Đây là giọng đọc tiếng Việt tự nhiên được phát triển từ công nghệ Piper TTS.",
+    "Xin chào! Đây là Piper TTS Studio - hệ thống tổng hợp giọng đọc tiếng Việt tự nhiên 100% Offline, hỗ trợ nhiều giọng đọc và đồng bộ timeline phụ đề.",
   );
   const [singleSpeed, setSingleSpeed] = useState<number>(1.0);
   const [singleSilence, setSingleSilence] = useState<number>(0.2);
@@ -1349,21 +1349,20 @@ export default function App() {
       <header className="border-b border-slate-800/80 bg-slate-900/60 backdrop-blur sticky top-0 z-40">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-500 to-rose-600 flex items-center justify-center shadow-lg shadow-amber-500/20 text-white font-bold text-lg tracking-tight">
-              HM
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-500 via-orange-500 to-rose-600 flex items-center justify-center shadow-lg shadow-amber-500/20 text-white font-black text-sm tracking-tighter">
+              TTS
             </div>
             <div>
               <div className="flex items-center gap-2">
                 <h1 className="font-semibold text-base sm:text-lg text-white tracking-tight">
-                  Hoài My Piper TTS Studio
+                  Piper TTS Studio
                 </h1>
                 <span className="text-xs text-amber-400 font-mono font-medium">
-                  Timeline Sync
+                  Multi-Voice & SRT
                 </span>
               </div>
               <p className="text-xs text-slate-400 hidden sm:block">
-                Đồng bộ phụ đề SRT sang Audio TTS khớp Timestamp chuẩn giọng
-                Hoài My
+                Studio tổng hợp giọng nói & đồng bộ phụ đề đa giọng đọc tiếng Việt 100% Offline
               </p>
             </div>
           </div>
@@ -2327,7 +2326,7 @@ export default function App() {
                           },
                           {
                             id: 2,
-                            name: "Khởi tạo PiperTTS và tải model Hoài My",
+                            name: "Khởi tạo PiperTTS và tải mô hình giọng đọc",
                             status: "pending",
                           },
                           {
@@ -3287,16 +3286,14 @@ export default function App() {
             </div>
 
             <div className="lg:col-span-4 bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-3 text-xs text-slate-400">
-              <h3 className="text-sm font-semibold text-white">
-                Về giọng đọc Hoài My:
+              <h3 className="text-sm font-semibold text-white flex items-center justify-between">
+                <span>Về Piper TTS Studio:</span>
+                <span className="text-[11px] font-mono text-amber-400 font-semibold px-2 py-0.5 rounded bg-amber-500/10 border border-amber-500/20">
+                  {selectedVoice.name}
+                </span>
               </h3>
               <p className="leading-relaxed">
-                Mô hình{" "}
-                <code className="text-amber-400 font-mono text-[11px]">
-                  hoaimy-vietnamese-vi-medium-ljkjhi
-                </code>{" "}
-                được tối ưu chuyên sâu cho tiếng Việt, phát âm tròn vành rõ chữ,
-                cảm xúc ấm áp và mượt mà.
+                Piper TTS Studio chạy <span className="text-amber-300 font-semibold">100% Offline</span> với mô hình ONNX nội suy âm thanh chất lượng cao. Đang kích hoạt giọng <strong className="text-white">{selectedVoice.name}</strong> ({selectedVoice.gender === "female" ? "Nữ" : "Nam"}, {selectedVoice.tag || "Tiếng Việt"}).
               </p>
               <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 text-[11px] space-y-1">
                 <div className="text-slate-300 font-medium">
@@ -4020,7 +4017,7 @@ export default function App() {
               <div className="flex items-center gap-2">
                 <Code className="w-5 h-5 text-amber-400" />
                 <h3 className="font-semibold text-white text-base">
-                  Mã nguồn nạp mô hình Hoài My với PiperTTS
+                  Mã nguồn tích hợp Piper TTS Studio
                 </h3>
               </div>
               <button
@@ -4033,21 +4030,20 @@ export default function App() {
             </div>
 
             <p className="text-xs text-slate-400">
-              Mã nguồn Node.js TypeScript nạp trực tiếp mô hình Hoài My đã yêu
-              cầu:
+              Mã nguồn Node.js TypeScript nạp trực tiếp mô hình giọng đọc đã chọn với PiperTTS:
             </p>
 
             <div className="relative bg-slate-950 rounded-xl border border-slate-800 p-4 font-mono text-xs text-emerald-300 overflow-x-auto">
               <pre>{`import { PiperNativeTTS } from "pipertts";
 
-// Khởi tạo và nạp mô hình Hoài My tiếng Việt 100% Offline (Không cần mạng)
+// Khởi tạo và nạp mô hình PiperTTS tiếng Việt 100% Offline (Không cần mạng)
 const tts = await PiperNativeTTS.load({
-  modelPath: "./models/hoaimy-vietnamese-vi-medium-ljkjhi.onnx",
+  modelPath: "./models/vietnamese-voice-model.onnx",
   espeakBinary: "espeak-ng",
 });
 
 // Chuyển đổi văn bản thành giọng nói
-const { audio, sampleRate } = await tts.synthesize("Ca ca, lớn quá, thật nhiều đồ của tiên gia.", {
+const { audio, sampleRate } = await tts.synthesize("Xin chào! Đây là Piper TTS Studio tiếng Việt.", {
   outputFormat: "wav",
   sentenceSilence: 0.2,
   lengthScale: 1.0,
@@ -4057,7 +4053,7 @@ const { audio, sampleRate } = await tts.synthesize("Ca ca, lớn quá, thật nh
                 type="button"
                 onClick={() => {
                   navigator.clipboard.writeText(
-                    `import { PiperNativeTTS } from "pipertts";\n\n// Nạp mô hình 100% Offline không cần internet\nconst tts = await PiperNativeTTS.load({\n  modelPath: "./models/hoaimy-vietnamese-vi-medium-ljkjhi.onnx",\n  espeakBinary: "espeak-ng",\n});\n\nconst { audio } = await tts.synthesize("Ca ca, lớn quá, thật nhiều đồ của tiên gia.");`,
+                    `import { PiperNativeTTS } from "pipertts";\n\n// Nạp mô hình 100% Offline không cần internet\nconst tts = await PiperNativeTTS.load({\n  modelPath: "./models/vietnamese-voice-model.onnx",\n  espeakBinary: "espeak-ng",\n});\n\nconst { audio } = await tts.synthesize("Xin chào! Đây là Piper TTS Studio tiếng Việt.");`,
                   );
                   setCopiedCode(true);
                   setTimeout(() => setCopiedCode(false), 2000);
@@ -4095,7 +4091,9 @@ const { audio, sampleRate } = await tts.synthesize("Ca ca, lớn quá, thật nh
       <footer className="border-t border-slate-900 py-6 mt-12 mb-20 bg-slate-950/80 text-xs text-slate-400">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 flex flex-col sm:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-2">
-            <span>Hoài My Piper TTS Studio</span>
+            <span>Piper TTS Studio</span>
+            <span>·</span>
+            <span>Đa giọng đọc tiếng Việt</span>
             <span>·</span>
             <span>Đồng bộ phụ đề Timeline SRT</span>
             <span>·</span>

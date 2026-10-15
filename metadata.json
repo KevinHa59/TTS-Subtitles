@@ -1,6 +1,6 @@
 {
-  "name": "Hoài My Piper TTS - Giọng Đọc Tiếng Việt",
-  "description": "Chuyển đổi văn bản tiếng Việt thành giọng nói tự nhiên với Piper TTS giọng Hoài My, tùy chỉnh tốc độ, ngữ điệu và tải xuống file MP3.",
+  "name": "Piper TTS Studio - Đa Giọng Đọc Tiếng Việt",
+  "description": "Studio chuyển đổi văn bản và phụ đề thành giọng nói tự nhiên đa giọng đọc (Hoài My, Ban Mai, Minh Quang...) với Piper TTS 100% Offline.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

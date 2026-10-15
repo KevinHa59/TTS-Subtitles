@@ -612,7 +612,7 @@ function updateOverallProgress(job: TimelineJob) {
 
 const DEFAULT_STAGES: ProcessingStage[] = [
   { id: 1, name: "Upload và phân tích file phụ đề", status: "completed" },
-  { id: 2, name: "Khởi tạo PiperTTS và tải model Hoài My", status: "pending" },
+  { id: 2, name: "Khởi tạo PiperTTS và tải mô hình giọng đọc", status: "pending" },
   { id: 3, name: "Tạo audio TTS cho từng câu", status: "pending" },
   { id: 4, name: "Đo thời lượng audio thực tế", status: "pending" },
   { id: 5, name: "Tự động điều chỉnh tốc độ đọc (atempo)", status: "pending" },
@@ -784,8 +784,8 @@ async function runJobProcessor(job: TimelineJob) {
     updateJobStage(job, 2, "running", `Đang kết nối mô hình ${job.model}...`);
     addJobLog(job, "INFO", `Khởi tạo mô hình PiperTTS: ${job.model}`);
     const tts = await getOrLoadModel(job.model);
-    updateJobStage(job, 2, "completed", "Mô hình Hoài My đã sẵn sàng");
-    addJobLog(job, "SUCCESS", "Mô hình PiperTTS Hoài My đã sẵn sàng.");
+    updateJobStage(job, 2, "completed", `Mô hình ${job.model} đã sẵn sàng`);
+    addJobLog(job, "SUCCESS", `Mô hình PiperTTS (${job.model}) đã sẵn sàng.`);
 
     // Stage 3 & 4 & 5 & 6: Process items
     updateJobStage(job, 3, "running");
@@ -1449,7 +1449,7 @@ app.get(
 
     const logLines = [
       `============================================================`,
-      `HOÀI MY PIPER TTS - NHẬT KÝ ĐỒNG BỘ TIMELINE PHỤ ĐỀ`,
+      `PIPER TTS STUDIO - NHẬT KÝ ĐỒNG BỘ TIMELINE PHỤ ĐỀ`,
       `Dự án ID: ${job.id}`,
       `Mô hình: ${job.model}`,
       `Tổng số câu: ${job.items.length}`,
@@ -1680,7 +1680,7 @@ async function startServer() {
     console.log(
       `\n==================================================================`,
     );
-    console.log(`  HOÀI MY PIPER TTS - MÁY CHỦ SẴN SÀNG`);
+    console.log(`  PIPER TTS STUDIO - MÁY CHỦ SẴN SÀNG`);
     console.log(`  Truy cập ứng dụng tại: http://localhost:${PORT}`);
     if (checkFfmpegAvailable()) {
       console.log(`  [FFmpeg] FFmpeg đã được kích hoạt thành công.`);
@@ -1701,7 +1701,7 @@ async function startServer() {
         `  [eSpeak NG] CẢNH BÁO: Chưa tìm thấy eSpeak NG trong PATH hoặc Program Files.`,
       );
       console.log(
-        `  (Để PiperTTS Hoài My phát âm chuẩn tiếng Việt có dấu, vui lòng cài eSpeak NG)`,
+        `  (Để PiperTTS phát âm chuẩn tiếng Việt có dấu, vui lòng cài eSpeak NG)`,
       );
     }
     console.log(
