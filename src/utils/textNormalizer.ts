@@ -43,6 +43,32 @@ export function normalizeVietnameseDollars(text: string): string {
     .replace(/(\d+)\s*(?:\$|usd)(?=$|[^\p{L}\p{N}])/giu, "$1 đô la");
 }
 
+export function normalizeVietnameseUnits(text: string): string {
+  const units: [string, string][] = [
+    ["km", "ki-lô-mét"],
+    ["cm", "xen-ti-mét"],
+    ["mm", "mi-li-mét"],
+    ["kg", "ki-lô-gam"],
+    ["mg", "mi-li-gam"],
+    ["ml", "mi-li-lít"],
+    ["m", "mét"],
+    ["g", "gam"],
+    ["l", "lít"],
+  ];
+
+  return units.reduce(
+    (result, [symbol, spoken]) =>
+      result.replace(
+        new RegExp(
+          `(\\d+(?:[.,]\\d+)?)\\s*${symbol}(?=$|[^\\p{L}\\p{N}])`,
+          "giu",
+        ),
+        `$1 ${spoken}`,
+      ),
+    text,
+  );
+}
+
 /**
  * Chuẩn hóa số tiếng Việt:
  * - Dấu chấm phân cách hàng nghìn: "5.000" -> "5000", "1.250.000" -> "1250000"
@@ -74,6 +100,8 @@ export function normalizeVietnameseNumbers(text: string): string {
     /(\d+)\s*(?:đ|vnđ|vnd|đồng)(?=$|[^\p{L}\p{N}])/gui,
     "$1 đồng"
   );
+
+  res = normalizeVietnameseUnits(res);
 
   // 5. Phần trăm
   res = res.replace(/(\d+)\s*%/g, "$1 phần trăm");

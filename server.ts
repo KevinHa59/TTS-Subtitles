@@ -16,7 +16,10 @@ import {
   DEFAULT_MODEL,
   LOCAL_MODEL_FILES,
 } from "./voice-catalog";
-import { normalizeVietnameseDollars } from "./src/utils/textNormalizer";
+import {
+  normalizeVietnameseDollars,
+  normalizeVietnameseUnits,
+} from "./src/utils/textNormalizer";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -391,6 +394,8 @@ function normalizeVietnameseText(
       /(\d+)\s*(?:đ|vnđ|vnd|đồng)(?=$|[^\p{L}\p{N}])/gui,
       "$1 đồng",
     );
+
+    text = normalizeVietnameseUnits(text);
 
     // 4.5. Phần trăm: 50% -> 50 phần trăm
     text = text.replace(/(\d+)\s*%/g, "$1 phần trăm");
