@@ -121,7 +121,9 @@ function setupEspeakEnvironment() {
     const espeakDir = path.dirname(espeakBin);
     if (!process.env.PATH?.toLowerCase().includes(espeakDir.toLowerCase())) {
       process.env.PATH = `${espeakDir}${path.delimiter}${process.env.PATH || ""}`;
-      console.log(`[PiperTTS] Đã thêm thư mục eSpeak NG vào PATH: ${espeakDir}`);
+      console.log(
+        `[PiperTTS] Đã thêm thư mục eSpeak NG vào PATH: ${espeakDir}`,
+      );
     }
   }
 
@@ -227,13 +229,15 @@ function resolveLocalModelPath(modelId: string): string | null {
 
     // Exact name match case-insensitive
     const exactMatch = files.find(
-      (f) => f.toLowerCase() === `${cleanId.toLowerCase()}.onnx`
+      (f) => f.toLowerCase() === `${cleanId.toLowerCase()}.onnx`,
     );
     if (exactMatch) return path.join(MODELS_DIR, exactMatch);
 
     // Starts with cleanId
     const prefixMatch = files.find(
-      (f) => f.toLowerCase().startsWith(cleanId.toLowerCase()) && f.endsWith(".onnx")
+      (f) =>
+        f.toLowerCase().startsWith(cleanId.toLowerCase()) &&
+        f.endsWith(".onnx"),
     );
     if (prefixMatch) return path.join(MODELS_DIR, prefixMatch);
 
@@ -241,7 +245,9 @@ function resolveLocalModelPath(modelId: string): string | null {
     const baseName = cleanId.split("-")[0];
     if (baseName && baseName.length >= 3) {
       const baseMatch = files.find(
-        (f) => f.toLowerCase().includes(baseName.toLowerCase()) && f.endsWith(".onnx")
+        (f) =>
+          f.toLowerCase().includes(baseName.toLowerCase()) &&
+          f.endsWith(".onnx"),
       );
       if (baseMatch) return path.join(MODELS_DIR, baseMatch);
     }
@@ -250,10 +256,13 @@ function resolveLocalModelPath(modelId: string): string | null {
   }
 
   // 4. Default fallback: check if Hoài My default model is available
-  const defaultCandidate = path.join(MODELS_DIR, "hoaimy-vietnamese-vi-medium-ljkjhi.onnx");
+  const defaultCandidate = path.join(
+    MODELS_DIR,
+    "hoaimy-vietnamese-vi-medium-ljkjhi.onnx",
+  );
   if (fs.existsSync(defaultCandidate)) {
     console.warn(
-      `[PiperTTS] Không tìm thấy file .onnx riêng cho "${modelId}", tự động dùng mô hình Hoài My có sẵn để tiếp tục offline.`
+      `[PiperTTS] Không tìm thấy file .onnx riêng cho "${modelId}", tự động dùng mô hình Hoài My có sẵn để tiếp tục offline.`,
     );
     return defaultCandidate;
   }
@@ -280,13 +289,17 @@ async function getOrLoadModel(modelId: string) {
   }
 
   const loadPromise = (async () => {
-    console.log(`[PiperTTS] Loading local model "${normalizedModelId}" (input: ${modelId})...`);
+    console.log(
+      `[PiperTTS] Loading local model "${normalizedModelId}" (input: ${modelId})...`,
+    );
     const startTime = Date.now();
     const espeakBin = resolveEspeakPath();
     const localOnnxPath = resolveLocalModelPath(modelId);
 
     if (localOnnxPath && fs.existsSync(localOnnxPath)) {
-      console.log(`[PiperTTS] Loading local ONNX file: "${localOnnxPath}" (100% offline, zero internet calls)`);
+      console.log(
+        `[PiperTTS] Loading local ONNX file: "${localOnnxPath}" (100% offline, zero internet calls)`,
+      );
       const tts = await PiperNativeTTS.load({
         modelPath: localOnnxPath,
         espeakBinary: espeakBin,
@@ -300,7 +313,7 @@ async function getOrLoadModel(modelId: string) {
     }
 
     throw new Error(
-      `Không tìm thấy file mô hình (.onnx) cho "${modelId}" trong thư mục "${MODELS_DIR}". Vui lòng đảm bảo bạn đã lưu file .onnx vào thư mục models/ để sử dụng offline 100%.`
+      `Không tìm thấy file mô hình (.onnx) cho "${modelId}" trong thư mục "${MODELS_DIR}". Vui lòng đảm bảo bạn đã lưu file .onnx vào thư mục models/ để sử dụng offline 100%.`,
     );
   })();
 
@@ -312,7 +325,10 @@ async function getOrLoadModel(modelId: string) {
 // Preload the default Hoài My voice at server startup (100% Offline)
 (async () => {
   try {
-    console.log("[PiperTTS] Preloading default model (100% offline):", DEFAULT_MODEL);
+    console.log(
+      "[PiperTTS] Preloading default model (100% offline):",
+      DEFAULT_MODEL,
+    );
     await getOrLoadModel(DEFAULT_MODEL);
     console.log(
       "[PiperTTS] Default model Hoài My is ready for instant offline synthesis!",
@@ -612,7 +628,11 @@ function updateOverallProgress(job: TimelineJob) {
 
 const DEFAULT_STAGES: ProcessingStage[] = [
   { id: 1, name: "Upload và phân tích file phụ đề", status: "completed" },
-  { id: 2, name: "Khởi tạo PiperTTS và tải mô hình giọng đọc", status: "pending" },
+  {
+    id: 2,
+    name: "Khởi tạo PiperTTS và tải mô hình giọng đọc",
+    status: "pending",
+  },
   { id: 3, name: "Tạo audio TTS cho từng câu", status: "pending" },
   { id: 4, name: "Đo thời lượng audio thực tế", status: "pending" },
   { id: 5, name: "Tự động điều chỉnh tốc độ đọc (atempo)", status: "pending" },
@@ -882,9 +902,8 @@ async function runJobProcessor(job: TimelineJob) {
             const maxSpeed = job.options.maxSpeed || 1.5;
             const minSpeed = job.options.minSpeed || 0.8;
             const speedFloor = Math.max(1.0, minSpeed);
-            const neededSpeed = origDur > 0 && targetDur > 0
-              ? origDur / targetDur
-              : 1.0;
+            const neededSpeed =
+              origDur > 0 && targetDur > 0 ? origDur / targetDur : 1.0;
             let appliedSpeed = Math.max(
               speedFloor,
               Math.min(maxSpeed, neededSpeed),
@@ -915,17 +934,14 @@ async function runJobProcessor(job: TimelineJob) {
               try {
                 const ffmpegBin = resolveFfmpegPath();
                 const filterStr = buildAtempoFilter(appliedSpeed);
-                const res = spawnSync(
-                  ffmpegBin,
-                  [
-                    "-y",
-                    "-i",
-                    origWavPath,
-                    "-filter:a",
-                    filterStr,
-                    adjustedWavPath,
-                  ],
-                );
+                const res = spawnSync(ffmpegBin, [
+                  "-y",
+                  "-i",
+                  origWavPath,
+                  "-filter:a",
+                  filterStr,
+                  adjustedWavPath,
+                ]);
                 if (res.error) throw res.error;
                 if (res.status !== 0 || !fs.existsSync(adjustedWavPath)) {
                   throw new Error(
@@ -949,7 +965,9 @@ async function runJobProcessor(job: TimelineJob) {
             item.status = "completed";
             item.audioUrl = `/api/subtitles/job/${job.id}/item-audio/${item.index}`;
 
-            const completedCount = job.items.filter((it) => it.status === "completed").length;
+            const completedCount = job.items.filter(
+              (it) => it.status === "completed",
+            ).length;
             const totalCount = job.items.length;
             addJobLog(
               job,
@@ -1015,12 +1033,7 @@ async function runJobProcessor(job: TimelineJob) {
 
 // Create a new timeline job
 app.post("/api/subtitles/job/create", (req: Request, res: Response) => {
-  const {
-    items,
-    options = {},
-    model = DEFAULT_MODEL,
-    speakerId,
-  } = req.body;
+  const { items, options = {}, model = DEFAULT_MODEL, speakerId } = req.body;
 
   if (!items || !Array.isArray(items) || items.length === 0) {
     return res
@@ -1260,10 +1273,14 @@ app.post(
         try {
           const ffmpegBin = resolveFfmpegPath();
           const filterStr = buildAtempoFilter(appliedSpeed);
-          const res = spawnSync(
-            ffmpegBin,
-            ["-y", "-i", origWavPath, "-filter:a", filterStr, adjustedWavPath],
-          );
+          const res = spawnSync(ffmpegBin, [
+            "-y",
+            "-i",
+            origWavPath,
+            "-filter:a",
+            filterStr,
+            adjustedWavPath,
+          ]);
           if (res.error) throw res.error;
           if (res.status !== 0 || !fs.existsSync(adjustedWavPath)) {
             throw new Error(
