@@ -16,6 +16,33 @@ export interface NormalizationOptions {
   customRules?: PronunciationRule[];
 }
 
+export function normalizeVietnameseDollars(text: string): string {
+  const scales = ["", "nghìn", "triệu", "tỷ", "nghìn tỷ", "triệu tỷ"];
+
+  return text
+    .replace(
+      /\$\s*(\d{1,3}(?:[.,]\d{3})+)(?!\d|[.,]\d)(?:\s*USD(?=$|[^\p{L}\p{N}]))?/giu,
+      (_, amount: string) => {
+        const groups = amount.split(/[.,]/);
+        if (groups.length > scales.length) {
+          return `${amount.replace(/[.,]/g, "")} đô la`;
+        }
+
+        const parts = groups
+          .map((group, index) => ({
+            value: Number(group),
+            scale: scales[groups.length - index - 1],
+          }))
+          .filter(({ value }) => value > 0)
+          .map(({ value, scale }) => `${value}${scale ? ` ${scale}` : ""}`);
+
+        return `${parts.join(" ") || "0"} đô la`;
+      },
+    )
+    .replace(/\$\s*(\d+)(?=$|[^\p{L}\p{N}.,])/gu, "$1 đô la")
+    .replace(/(\d+)\s*(?:\$|usd)(?=$|[^\p{L}\p{N}])/giu, "$1 đô la");
+}
+
 /**
  * Chuẩn hóa số tiếng Việt:
  * - Dấu chấm phân cách hàng nghìn: "5.000" -> "5000", "1.250.000" -> "1250000"
@@ -29,7 +56,7 @@ export interface NormalizationOptions {
 export function normalizeVietnameseNumbers(text: string): string {
   if (!text) return "";
 
-  let res = text;
+  let res = normalizeVietnameseDollars(text);
 
   // 1. Dấu chấm hàng nghìn (5.000 -> 5000, 1.250.000 -> 1250000, 50.000 -> 50000)
   // Chỉ khớp khi có đúng 3 chữ số sau dấu chấm
@@ -47,9 +74,6 @@ export function normalizeVietnameseNumbers(text: string): string {
     /(\d+)\s*(?:đ|vnđ|vnd|đồng)(?=$|[^\p{L}\p{N}])/gui,
     "$1 đồng"
   );
-
-  // 4. Đô la Mỹ
-  res = res.replace(/(\d+)\s*(?:\$|usd)\b/gui, "$1 đô la");
 
   // 5. Phần trăm
   res = res.replace(/(\d+)\s*%/g, "$1 phần trăm");

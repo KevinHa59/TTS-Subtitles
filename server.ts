@@ -16,6 +16,7 @@ import {
   DEFAULT_MODEL,
   LOCAL_MODEL_FILES,
 } from "./voice-catalog";
+import { normalizeVietnameseDollars } from "./src/utils/textNormalizer";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -372,6 +373,8 @@ function normalizeVietnameseText(
 
   // 4. Chuẩn hóa số và tiền tệ tiếng Việt (Khắc phục triệt để lỗi "5.000" bị đọc thành "5 không không không")
   if (options?.normalizeNumbers !== false) {
+    text = normalizeVietnameseDollars(text);
+
     // 4.1. Dấu chấm hàng nghìn: 5.000 -> 5000, 1.250.000 -> 1250000, 50.000 -> 50000
     // Khớp khi có đúng 3 chữ số sau dấu chấm và không phải là số thập phân
     text = text.replace(/\b(\d{1,3})(?:\.(\d{3}))+(?!\d)/g, (match) =>
@@ -388,9 +391,6 @@ function normalizeVietnameseText(
       /(\d+)\s*(?:đ|vnđ|vnd|đồng)(?=$|[^\p{L}\p{N}])/gui,
       "$1 đồng",
     );
-
-    // 4.4. Đô la Mỹ: 100$ hoặc 100 USD -> 100 đô la
-    text = text.replace(/(\d+)\s*(?:\$|usd)\b/gui, "$1 đô la");
 
     // 4.5. Phần trăm: 50% -> 50 phần trăm
     text = text.replace(/(\d+)\s*%/g, "$1 phần trăm");
@@ -425,6 +425,14 @@ function normalizeVietnameseText(
     .replace(/\.{3,}/g, "...")
     .replace(/[ \t]+/g, " ")
     .trim();
+}
+
+function applyVietnameseRPronunciation(text: string, espeakVoice: string): string {
+  if (!/^vi(?:[-_]|$)/i.test(espeakVoice)) return text;
+  return text.replace(
+    /(^|[^\p{L}\p{N}\[])r(?=[\p{L}])/giu,
+    "$1\uE000",
+  );
 }
 
 function createWavHeader(
@@ -941,7 +949,11 @@ async function runJobProcessor(job: TimelineJob) {
               normalizeNumbers: job.options.normalizeNumbers,
               customReplacements: job.options.customReplacements,
             });
-            const synthRes = await tts.synthesize(cleanedText, {
+            const synthesisText = applyVietnameseRPronunciation(
+              cleanedText,
+              tts.getConfig().espeakVoice,
+            );
+            const synthRes = await tts.synthesize(synthesisText, {
               outputFormat: "wav",
               speakerId: job.speakerId,
             });
@@ -1317,7 +1329,11 @@ app.post(
         normalizeNumbers: job.options.normalizeNumbers,
         customReplacements: job.options.customReplacements,
       });
-      const synthRes = await tts.synthesize(cleanedText, {
+      const synthesisText = applyVietnameseRPronunciation(
+        cleanedText,
+        tts.getConfig().espeakVoice,
+      );
+      const synthRes = await tts.synthesize(synthesisText, {
         outputFormat: "wav",
         speakerId: job.speakerId,
       });
@@ -1648,13 +1664,17 @@ app.post("/api/tts", async (req: Request, res: Response) => {
       customReplacements: req.body.customReplacements,
     });
     const tts = await getOrLoadModel(model);
+    const synthesisText = applyVietnameseRPronunciation(
+      cleanedText,
+      tts.getConfig().espeakVoice,
+    );
 
     const numSpeed = Math.max(0.5, Math.min(2.0, Number(speed) || 1.0));
     const lengthScale = 1.0 / numSpeed;
     const outputFormat = format === "wav" ? "wav" : "mp3";
 
     const startTime = Date.now();
-    const synthResult = await tts.synthesize(cleanedText, {
+    const synthResult = await tts.synthesize(synthesisText, {
       lengthScale,
       speakerId,
       sentenceSilence: Math.max(
@@ -1716,7 +1736,11 @@ app.post("/api/tts/download", async (req: Request, res: Response) => {
       normalizeNumbers: req.body.normalizeNumbers !== false,
       customReplacements: req.body.customReplacements,
     });
-    const synthResult = await tts.synthesize(cleanedText, {
+    const synthesisText = applyVietnameseRPronunciation(
+      cleanedText,
+      tts.getConfig().espeakVoice,
+    );
+    const synthResult = await tts.synthesize(synthesisText, {
       lengthScale,
       speakerId,
       sentenceSilence: Math.max(

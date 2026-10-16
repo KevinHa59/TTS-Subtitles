@@ -68,10 +68,11 @@ const patchedRunner = `function runEspeakIpa(voice, text, espeakBinary = "espeak
                 finish(reject, new Error(\`PiperNative: espeak-ng failed for voice "\${voice}": \${errorText || \`exit code \${code}\`}\`));
                 return;
             }
-            finish(resolve, Buffer.concat(stdout).toString("utf8"));
+            const output = Buffer.concat(stdout).toString("utf8");
+            finish(resolve, text.includes(String.fromCharCode(0xe000)) ? output.replace(/ɹ (?=ˈ)/g, "ɹ") : output);
         });
         child.stdin.on("error", (error) => finish(reject, error));
-        child.stdin.end(text, "utf8");
+        child.stdin.end(text.replace(/\\uE000/g, "[[r]]"), "utf8");
     });
 }`;
 const cliCallPattern =
