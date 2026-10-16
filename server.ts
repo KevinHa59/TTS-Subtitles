@@ -322,8 +322,17 @@ async function getOrLoadModel(modelId: string) {
   }
 })();
 
-function normalizeVietnameseText(input: string): string {
+interface TextNormalizationOptions {
+  normalizeNumbers?: boolean;
+  customReplacements?: { from: string; to: string }[];
+}
+
+function normalizeVietnameseText(
+  input: string,
+  options?: TextNormalizationOptions,
+): string {
   if (!input) return "";
+
   // 1. Chuẩn hóa NFC: Biến đổi toàn bộ ký tự Unicode tổ hợp (NFD) thành Unicode dựng sẵn (NFC).
   // Điều này cực kỳ quan trọng để eSpeak-NG nhận dạng đúng nguyên âm tiếng Việt có dấu thanh điệu.
   let text = input.normalize("NFC");
@@ -333,7 +342,59 @@ function normalizeVietnameseText(input: string): string {
     text = text.slice(1);
   }
 
-  // 3. Chuẩn hóa dấu câu và khoảng trắng
+  // 3. Áp dụng quy tắc từ điển thay thế tùy chỉnh nếu có
+  if (options?.customReplacements && Array.isArray(options.customReplacements)) {
+    for (const rule of options.customReplacements) {
+      if (rule.from && rule.from.trim()) {
+        try {
+          const escaped = rule.from.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          text = text.replace(new RegExp(escaped, "gi"), rule.to || "");
+        } catch {}
+      }
+    }
+  }
+
+  // 4. Chuẩn hóa số và tiền tệ tiếng Việt (Khắc phục triệt để lỗi "5.000" bị đọc thành "5 không không không")
+  if (options?.normalizeNumbers !== false) {
+    // 4.1. Dấu chấm hàng nghìn: 5.000 -> 5000, 1.250.000 -> 1250000, 50.000 -> 50000
+    // Khớp khi có đúng 3 chữ số sau dấu chấm và không phải là số thập phân
+    text = text.replace(/\b(\d{1,3})(?:\.(\d{3}))+(?!\d)/g, (match) =>
+      match.replace(/\./g, ""),
+    );
+
+    // 4.2. Dấu phẩy hàng nghìn: 5,000 -> 5000, 1,000,000 -> 1000000
+    text = text.replace(/\b(\d{1,3})(?:,(\d{3}))+(?!\d)/g, (match) =>
+      match.replace(/,/g, ""),
+    );
+
+    // 4.3. Tiền tệ tiếng Việt: 5000đ, 5.000 VNĐ, 50.000 đồng -> 50000 đồng
+    text = text.replace(
+      /(\d+)\s*(?:đ|vnđ|vnd|đồng)(?=$|[^\p{L}\p{N}])/gui,
+      "$1 đồng",
+    );
+
+    // 4.4. Đô la Mỹ: 100$ hoặc 100 USD -> 100 đô la
+    text = text.replace(/(\d+)\s*(?:\$|usd)\b/gui, "$1 đô la");
+
+    // 4.5. Phần trăm: 50% -> 50 phần trăm
+    text = text.replace(/(\d+)\s*%/g, "$1 phần trăm");
+
+    // 4.6. Viết tắt nghìn/triệu thông dụng: 50k -> 50 nghìn, 2tr -> 2 triệu
+    text = text.replace(/\b(\d+)\s*k(?=$|[^\p{L}\p{N}])/gui, "$1 nghìn");
+    text = text.replace(/\b(\d+)\s*tr(?=$|[^\p{L}\p{N}])/gui, "$1 triệu");
+
+    // 4.7. Số thập phân: 3.5 -> 3 phẩy 5, 0.75 -> 0 phẩy 75
+    text = text.replace(/\b(\d+)\.(\d{1,2})\b/g, "$1 phẩy $2");
+    text = text.replace(/\b(\d+),(\d{1,2})\b/g, "$1 phẩy $2");
+
+    // 4.8. Ngày tháng năm: 20/10/2026 -> ngày 20 tháng 10 năm 2026
+    text = text.replace(
+      /\b(\d{1,2})\/(\d{1,2})\/(\d{4})\b/g,
+      "ngày $1 tháng $2 năm $3",
+    );
+  }
+
+  // 5. Chuẩn hóa dấu câu và khoảng trắng
   return text
     .replace(/，/g, ", ")
     .replace(/。/g, ". ")
@@ -477,6 +538,8 @@ interface TimelineJobOptions {
   padSilence: boolean;
   videoDuration?: number;
   outputFormat: "mp3" | "wav";
+  normalizeNumbers?: boolean;
+  customReplacements?: { from: string; to: string }[];
 }
 
 interface TimelineJob {
@@ -854,7 +917,10 @@ async function runJobProcessor(job: TimelineJob) {
       await Promise.all(
         currentBatch.map(async (item) => {
           try {
-            const cleanedText = normalizeVietnameseText(item.text);
+            const cleanedText = normalizeVietnameseText(item.text, {
+              normalizeNumbers: job.options.normalizeNumbers,
+              customReplacements: job.options.customReplacements,
+            });
             const synthRes = await tts.synthesize(cleanedText, {
               outputFormat: "wav",
               speakerId: job.speakerId,
@@ -1076,6 +1142,10 @@ app.post("/api/subtitles/job/create", (req: Request, res: Response) => {
         ? Number(options.videoDuration)
         : undefined,
       outputFormat: options.outputFormat === "wav" ? "wav" : "mp3",
+      normalizeNumbers: options.normalizeNumbers !== false,
+      customReplacements: Array.isArray(options.customReplacements)
+        ? options.customReplacements
+        : [],
     },
   };
 
@@ -1230,7 +1300,10 @@ app.post(
 
     try {
       const tts = await getOrLoadModel(job.model);
-      const cleanedText = normalizeVietnameseText(item.text);
+      const cleanedText = normalizeVietnameseText(item.text, {
+        normalizeNumbers: job.options.normalizeNumbers,
+        customReplacements: job.options.customReplacements,
+      });
       const synthRes = await tts.synthesize(cleanedText, {
         outputFormat: "wav",
         speakerId: job.speakerId,
@@ -1553,7 +1626,10 @@ app.post("/api/tts", async (req: Request, res: Response) => {
       });
     }
 
-    const cleanedText = normalizeVietnameseText(text);
+    const cleanedText = normalizeVietnameseText(text, {
+      normalizeNumbers: req.body.normalizeNumbers !== false,
+      customReplacements: req.body.customReplacements,
+    });
     const tts = await getOrLoadModel(model);
 
     const numSpeed = Math.max(0.5, Math.min(2.0, Number(speed) || 1.0));
@@ -1619,7 +1695,10 @@ app.post("/api/tts/download", async (req: Request, res: Response) => {
     const lengthScale = 1.0 / numSpeed;
     const outputFormat = format === "wav" ? "wav" : "mp3";
 
-    const cleanedText = normalizeVietnameseText(text);
+    const cleanedText = normalizeVietnameseText(text, {
+      normalizeNumbers: req.body.normalizeNumbers !== false,
+      customReplacements: req.body.customReplacements,
+    });
     const synthResult = await tts.synthesize(cleanedText, {
       lengthScale,
       speakerId,
