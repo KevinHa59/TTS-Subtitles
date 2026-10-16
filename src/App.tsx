@@ -52,6 +52,14 @@ import {
   SkipBack,
   SkipForward,
   Quote,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
+  Bell,
+  BellRing,
+  BellOff,
+  BookOpen,
+  Plus,
 } from "lucide-react";
 
 import {
@@ -60,6 +68,12 @@ import {
   TimelineJobOptions,
   LogEntry,
 } from "./types/subtitles";
+import {
+  PronunciationRule,
+  normalizeVietnameseText,
+  normalizeVietnameseNumbers,
+  playAiStudioCompletionChime,
+} from "./utils/textNormalizer";
 import {
   parseSrtContent,
   formatSecondsToSrtTime,
@@ -84,6 +98,10 @@ export interface ProjectPreset {
   speedPriority: "balanced" | "strict" | "natural";
   padSilence: boolean;
   outputFormat: "mp3" | "wav";
+  normalizeNumbers?: boolean;
+  soundOnComplete?: boolean;
+  soundOnlyUnfocused?: boolean;
+  customPronunciationRules?: PronunciationRule[];
 }
 
 const DEFAULT_PRESETS: ProjectPreset[] = [
@@ -99,6 +117,10 @@ const DEFAULT_PRESETS: ProjectPreset[] = [
     speedPriority: "balanced",
     padSilence: true,
     outputFormat: "mp3",
+    normalizeNumbers: true,
+    soundOnComplete: true,
+    soundOnlyUnfocused: true,
+    customPronunciationRules: [],
   },
 ];
 
@@ -206,6 +228,46 @@ export default function App() {
   const [isWindowDragging, setIsWindowDragging] = useState<boolean>(false);
   const [dragFeedback, setDragFeedback] = useState<string | null>(null);
   const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
+
+  // Pronunciation Normalization & Rules (Requirement 1)
+  const [normalizeNumbers, setNormalizeNumbers] = useState<boolean>(true);
+  const [customPronunciationRules, setCustomPronunciationRules] = useState<
+    PronunciationRule[]
+  >(() => {
+    try {
+      const saved = localStorage.getItem("pipertts_custom_pronunciation_rules");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch {}
+    return [];
+  });
+  const [showPronunciationModal, setShowPronunciationModal] =
+    useState<boolean>(false);
+  const [newRuleFrom, setNewRuleFrom] = useState<string>("");
+  const [newRuleTo, setNewRuleTo] = useState<string>("");
+  const [previewTestText, setPreviewTestText] = useState<string>(
+    "Giá vé là 5.000đ cho 3.5 giờ, có 50.000 người tham gia.",
+  );
+
+  // Voice sorting by name (Requirement 2)
+  const [voiceSortOrder, setVoiceSortOrder] = useState<
+    "none" | "asc" | "desc"
+  >("none");
+
+  // Notification sound & panel (Requirement 3)
+  const [soundNotificationEnabled, setSoundNotificationEnabled] =
+    useState<boolean>(true);
+  const [soundOnlyWhenUnfocused, setSoundOnlyWhenUnfocused] =
+    useState<boolean>(true);
+  const [showCompletionBanner, setShowCompletionBanner] =
+    useState<boolean>(false);
+  const [lastCompletedJobInfo, setLastCompletedJobInfo] = useState<{
+    id: string;
+    count: number;
+    duration: number;
+  } | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const effectiveBatchSize =
@@ -395,6 +457,43 @@ export default function App() {
           masterAudio: data.masterAudio,
         };
       });
+
+      // Requirement 3: Âm thanh panel thông báo như của AI Studio khi hoàn thành xử lý phụ đề nếu app không được focus
+      const isUnfocused = document.hidden || !document.hasFocus();
+      if (!soundOnlyWhenUnfocused || isUnfocused) {
+        if (soundNotificationEnabled) {
+          playAiStudioCompletionChime();
+        }
+      }
+
+      // Show completion toast banner
+      setShowCompletionBanner(true);
+      setLastCompletedJobInfo({
+        id: data.id || "",
+        count: subtitles.length,
+        duration: data.masterAudio?.duration || 0,
+      });
+
+      // Browser title alert if unfocused
+      if (isUnfocused) {
+        const originalTitle = document.title;
+        document.title = "🔔 (Đã xong!) " + originalTitle;
+        const handleWindowFocus = () => {
+          document.title = originalTitle;
+          window.removeEventListener("focus", handleWindowFocus);
+        };
+        window.addEventListener("focus", handleWindowFocus);
+
+        // Native Notification if granted
+        if ("Notification" in window && Notification.permission === "granted") {
+          try {
+            new Notification("Piper TTS Studio", {
+              body: `Đã hoàn thành xử lý ${subtitles.length} câu phụ đề! File Master Audio đã sẵn sàng.`,
+              icon: "/favicon.ico",
+            });
+          } catch {}
+        }
+      }
     });
 
     es.onerror = () => {
@@ -405,6 +504,15 @@ export default function App() {
   // Create & Start processing
   const handleStartProcessing = async () => {
     if (subtitles.length === 0) return;
+
+    // Request notification permission smoothly if enabled
+    if (
+      soundNotificationEnabled &&
+      "Notification" in window &&
+      Notification.permission === "default"
+    ) {
+      Notification.requestPermission().catch(() => {});
+    }
 
     let videoDur: number | undefined = undefined;
     if (videoDurationStr.trim()) {
@@ -437,6 +545,10 @@ export default function App() {
             padSilence,
             videoDuration: videoDur,
             outputFormat,
+            normalizeNumbers,
+            customReplacements: customPronunciationRules
+              .filter((r) => r.active)
+              .map((r) => ({ from: r.from, to: r.to })),
           },
         }),
       });
@@ -858,6 +970,18 @@ export default function App() {
     setSpeedPriority(preset.speedPriority);
     setPadSilence(preset.padSilence);
     setOutputFormat(preset.outputFormat);
+    if (preset.normalizeNumbers !== undefined) {
+      setNormalizeNumbers(preset.normalizeNumbers);
+    }
+    if (preset.soundOnComplete !== undefined) {
+      setSoundNotificationEnabled(preset.soundOnComplete);
+    }
+    if (preset.soundOnlyUnfocused !== undefined) {
+      setSoundOnlyWhenUnfocused(preset.soundOnlyUnfocused);
+    }
+    if (Array.isArray(preset.customPronunciationRules)) {
+      setCustomPronunciationRules(preset.customPronunciationRules);
+    }
     setSingleSpeed(
       Math.min(1.8, Math.max(0.6, (preset.minSpeed + preset.maxSpeed) / 2)),
     );
@@ -882,6 +1006,10 @@ export default function App() {
       speedPriority,
       padSilence,
       outputFormat,
+      normalizeNumbers,
+      soundOnComplete: soundNotificationEnabled,
+      soundOnlyUnfocused: soundOnlyWhenUnfocused,
+      customPronunciationRules,
     };
 
     const updated = [...projectPresets, newPreset];
@@ -913,6 +1041,10 @@ export default function App() {
             speedPriority,
             padSilence,
             outputFormat,
+            normalizeNumbers,
+            soundOnComplete: soundNotificationEnabled,
+            soundOnlyUnfocused: soundOnlyWhenUnfocused,
+            customPronunciationRules,
           }
         : p,
     );
@@ -977,10 +1109,14 @@ export default function App() {
   const handleExportPresets = () => {
     try {
       const exportData = {
-        app: "HoaiMy_PiperTTS_Studio",
+        app: "PiperTTS_Studio",
         exportedAt: new Date().toISOString(),
-        version: "1.0",
+        version: "2.0",
         presets: projectPresets,
+        customPronunciationRules,
+        normalizeNumbers,
+        soundNotificationEnabled,
+        soundOnlyWhenUnfocused,
       };
 
       const jsonStr = JSON.stringify(exportData, null, 2);
@@ -1025,6 +1161,20 @@ export default function App() {
           rawList = parsed;
         } else if (parsed && Array.isArray(parsed.presets)) {
           rawList = parsed.presets;
+          if (Array.isArray(parsed.customPronunciationRules)) {
+            setCustomPronunciationRules((prev) => [
+              ...prev,
+              ...parsed.customPronunciationRules.filter(
+                (r: any) => !prev.some((p) => p.from === r.from),
+              ),
+            ]);
+          }
+          if (typeof parsed.normalizeNumbers === "boolean") {
+            setNormalizeNumbers(parsed.normalizeNumbers);
+          }
+          if (typeof parsed.soundNotificationEnabled === "boolean") {
+            setSoundNotificationEnabled(parsed.soundNotificationEnabled);
+          }
         } else {
           throw new Error("Định dạng file JSON không chứa mảng presets hợp lệ");
         }
@@ -1051,6 +1201,21 @@ export default function App() {
             padSilence:
               typeof item.padSilence === "boolean" ? item.padSilence : true,
             outputFormat: item.outputFormat === "wav" ? "wav" : "mp3",
+            normalizeNumbers:
+              typeof item.normalizeNumbers === "boolean"
+                ? item.normalizeNumbers
+                : true,
+            soundOnComplete:
+              typeof item.soundOnComplete === "boolean"
+                ? item.soundOnComplete
+                : true,
+            soundOnlyUnfocused:
+              typeof item.soundOnlyUnfocused === "boolean"
+                ? item.soundOnlyUnfocused
+                : true,
+            customPronunciationRules: Array.isArray(item.customPronunciationRules)
+              ? item.customPronunciationRules
+              : [],
           });
         }
 
@@ -1223,6 +1388,10 @@ export default function App() {
           speed: singleSpeed,
           sentenceSilence: singleSilence,
           format: singleFormat,
+          normalizeNumbers,
+          customReplacements: customPronunciationRules
+            .filter((r) => r.active)
+            .map((r) => ({ from: r.from, to: r.to })),
         }),
       });
       const data = await res.json();
@@ -1302,6 +1471,29 @@ export default function App() {
     }
     return true;
   });
+
+  // Sorted voices for Table (Requirement 2: sort by name when clicking header)
+  const sortedVoices = useMemo(() => {
+    const list = [...filteredVoices];
+    if (voiceSortOrder === "asc") {
+      list.sort((a, b) =>
+        a.name.localeCompare(b.name, "vi", { sensitivity: "base" }),
+      );
+    } else if (voiceSortOrder === "desc") {
+      list.sort((a, b) =>
+        b.name.localeCompare(a.name, "vi", { sensitivity: "base" }),
+      );
+    }
+    return list;
+  }, [filteredVoices, voiceSortOrder]);
+
+  const handleToggleVoiceSort = () => {
+    setVoiceSortOrder((prev) => {
+      if (prev === "none") return "asc";
+      if (prev === "asc") return "desc";
+      return "none";
+    });
+  };
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-amber-500/30 selection:text-amber-200">
@@ -2071,6 +2263,110 @@ export default function App() {
                       </div>
                     </div>
                   )}
+                </div>
+
+                {/* 4. Pronunciation & Text Normalizer Card (Requirement 1) */}
+                <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 shadow-xl space-y-3 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                      <BookOpen className="w-4 h-4 text-amber-400" />
+                      Chuẩn Hóa & Sửa Phát Âm
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setShowPronunciationModal(true)}
+                      className="text-[10px] text-amber-400 hover:text-amber-300 font-semibold bg-amber-400/10 hover:bg-amber-400/20 px-2 py-0.5 rounded border border-amber-400/30 flex items-center gap-1 transition-colors cursor-pointer"
+                      title="Mở từ điển tùy chỉnh phát âm và hướng dẫn phụ âm R"
+                    >
+                      <Sliders className="w-3 h-3" />
+                      <span>Từ điển ({customPronunciationRules.length})</span>
+                    </button>
+                  </div>
+
+                  {/* Toggle: Sửa số có chấm hàng nghìn */}
+                  <label className="flex items-start gap-2.5 p-2.5 bg-slate-950/80 rounded-xl border border-slate-800 cursor-pointer hover:border-slate-700 transition-colors">
+                    <input
+                      type="checkbox"
+                      checked={normalizeNumbers}
+                      onChange={(e) => setNormalizeNumbers(e.target.checked)}
+                      className="mt-0.5 rounded border-slate-700 text-amber-500 focus:ring-amber-500 accent-amber-500"
+                    />
+                    <div className="space-y-0.5">
+                      <span className="text-slate-200 font-semibold block text-[11px]">
+                        Tự động sửa số có dấu chấm (5.000 ➔ 5000)
+                      </span>
+                      <p className="text-[10px] text-slate-400 leading-relaxed">
+                        Sửa lỗi &ldquo;5.000&rdquo; bị đọc thành &ldquo;5 không không không&rdquo;, đọc đúng &ldquo;năm nghìn&rdquo;, số thập phân (3.5 ➔ 3 phẩy 5) và tiền tệ (5.000đ ➔ 5000 đồng).
+                      </p>
+                    </div>
+                  </label>
+
+                  {/* Quick Pronunciation Note on Hoài My & letter R */}
+                  <div className="p-2.5 bg-slate-950/50 rounded-xl border border-slate-800/80 text-[11px] text-slate-400 space-y-1">
+                    <div className="flex items-center justify-between text-slate-300 font-medium">
+                      <span>Phát âm chữ &ldquo;R&rdquo; (Giọng Hoài My):</span>
+                      <span className="text-[10px] text-amber-400">Giọng Bắc</span>
+                    </div>
+                    <p className="text-[10px] leading-relaxed">
+                      Giọng Hoài My nói tiếng Hà Nội nên các âm &ldquo;r/d/gi&rdquo; tự nhiên đồng âm. Để đọc chuẩn &ldquo;R&rdquo; rung uốn lưỡi, hãy chọn giọng <strong>Việt Thảo (Miền Nam)</strong> hoặc mở <strong>Từ điển</strong> để thay thế.
+                    </p>
+                  </div>
+                </div>
+
+                {/* 5. Notification Sound & Panel Card (Requirement 3) */}
+                <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 shadow-xl space-y-3 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                      <BellRing className="w-4 h-4 text-amber-400" />
+                      Âm Báo Hoàn Thành (AI Studio)
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => playAiStudioCompletionChime()}
+                      className="text-[10px] text-emerald-400 hover:text-emerald-300 font-semibold bg-emerald-500/10 hover:bg-emerald-500/20 px-2 py-0.5 rounded border border-emerald-500/30 flex items-center gap-1 transition-colors cursor-pointer"
+                      title="Bấm để nghe thử âm thanh chuông hoàn thành AI Studio"
+                    >
+                      <Volume2 className="w-3 h-3" />
+                      <span>Nghe thử âm báo</span>
+                    </button>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="flex items-center justify-between p-2.5 bg-slate-950/80 rounded-xl border border-slate-800 cursor-pointer hover:border-slate-700 transition-colors">
+                      <span className="text-slate-300 font-medium text-[11px]">
+                        Phát chuông khi xử lý xong phụ đề
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={soundNotificationEnabled}
+                        onChange={(e) =>
+                          setSoundNotificationEnabled(e.target.checked)
+                        }
+                        className="rounded border-slate-700 text-amber-500 focus:ring-amber-500 accent-amber-500"
+                      />
+                    </label>
+
+                    {soundNotificationEnabled && (
+                      <label className="flex items-center justify-between p-2.5 bg-slate-950/60 rounded-xl border border-slate-800/80 cursor-pointer hover:border-slate-700 transition-colors">
+                        <div className="space-y-0.5">
+                          <span className="text-slate-300 font-medium block text-[11px]">
+                            Chỉ phát khi không focus (ở tab khác)
+                          </span>
+                          <span className="text-[10px] text-slate-400 block">
+                            Tự động nhắc bạn quay lại khi phụ đề đã tạo xong
+                          </span>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={soundOnlyWhenUnfocused}
+                          onChange={(e) =>
+                            setSoundOnlyWhenUnfocused(e.target.checked)
+                          }
+                          className="rounded border-slate-700 text-amber-500 focus:ring-amber-500 accent-amber-500"
+                        />
+                      </label>
+                    )}
+                  </div>
                 </div>
 
                 {/* Subtitle Warnings list if any */}
@@ -3433,8 +3729,32 @@ export default function App() {
               <table className="w-full text-left text-xs border-collapse">
                 <thead className="sticky top-0 z-20 bg-slate-950 shadow-sm">
                   <tr className="bg-slate-950 text-slate-400 border-b border-slate-800 text-[11px] font-mono">
-                    <th className="py-2.5 px-4 sm:w-[38%] min-w-[200px]">
-                      Tên giọng đọc
+                    <th
+                      onClick={handleToggleVoiceSort}
+                      className="py-2.5 px-4 sm:w-[38%] min-w-[200px] cursor-pointer hover:text-amber-300 transition-colors select-none group"
+                      title="Nhấn để sắp xếp danh sách giọng theo Tên (A-Z hoặc Z-A)"
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold text-slate-300 group-hover:text-amber-300">
+                          Tên giọng đọc
+                        </span>
+                        {voiceSortOrder === "asc" ? (
+                          <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-400 bg-amber-500/20 px-1.5 py-0.5 rounded border border-amber-500/30">
+                            <ArrowUp className="w-3 h-3" />
+                            <span>A ➔ Z</span>
+                          </span>
+                        ) : voiceSortOrder === "desc" ? (
+                          <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-400 bg-amber-500/20 px-1.5 py-0.5 rounded border border-amber-500/30">
+                            <ArrowDown className="w-3 h-3" />
+                            <span>Z ➔ A</span>
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-slate-500 group-hover:text-amber-400 transition-colors text-[10px]">
+                            <ArrowUpDown className="w-3 h-3" />
+                            <span className="hidden sm:inline">Sắp xếp</span>
+                          </span>
+                        )}
+                      </div>
                     </th>
                     <th className="py-2.5 px-4 w-28 text-center">Giới tính</th>
                     <th className="py-2.5 px-4 sm:w-[28%] min-w-[150px]">
@@ -3445,7 +3765,7 @@ export default function App() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800/60">
-                  {filteredVoices.length === 0 ? (
+                  {sortedVoices.length === 0 ? (
                     <tr>
                       <td
                         colSpan={5}
@@ -3456,7 +3776,7 @@ export default function App() {
                       </td>
                     </tr>
                   ) : (
-                    filteredVoices.map((v) => {
+                    sortedVoices.map((v) => {
                       const isCurrent = v.id === selectedVoiceId;
                       const isPreviewing = previewVoiceId === v.id;
                       const isLoadingPreview = previewLoadingVoiceId === v.id;
@@ -4081,6 +4401,333 @@ const { audio, sampleRate } = await tts.synthesize("Xin chào! Đây là Piper T
                 className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded-xl transition-colors"
               >
                 Đóng
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* FLOATING AI STUDIO COMPLETION PANEL (Requirement 3)       */}
+      {/* Xuất hiện khi hoàn tất xử lý phụ đề                       */}
+      {/* ========================================================= */}
+      {showCompletionBanner && (
+        <aside
+          role="status"
+          aria-live="polite"
+          aria-label="Thông báo hoàn tất xử lý phụ đề"
+          className="fixed top-20 right-4 sm:right-6 z-50 max-w-sm sm:max-w-md w-full bg-slate-900/95 backdrop-blur-xl border border-amber-500/50 rounded-2xl p-4 shadow-2xl shadow-black/80 space-y-3 animate-in fade-in slide-in-from-top-3 duration-300 ring-1 ring-amber-500/20"
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center justify-center shrink-0 shadow-md shadow-emerald-500/20">
+                <CheckCircle2 className="w-5 h-5 animate-pulse" />
+              </div>
+              <div>
+                <h4 className="text-xs sm:text-sm font-bold text-white tracking-tight flex items-center gap-1.5">
+                  <span>Hoàn tất xử lý phụ đề!</span>
+                  <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+                    100%
+                  </span>
+                </h4>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  Đã tạo xong {lastCompletedJobInfo?.count || subtitles.length}{" "}
+                  câu thoại. File Master Audio đã sẵn sàng.
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowCompletionBanner(false)}
+              className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+              title="Đóng thông báo"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          <div className="flex items-center gap-2 pt-1 border-t border-slate-800">
+            <button
+              type="button"
+              onClick={() => {
+                handlePlayMasterAudio();
+                setShowCompletionBanner(false);
+              }}
+              className="flex-1 py-2 px-3 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 shadow-md shadow-amber-500/20 transition-all cursor-pointer"
+            >
+              <Play className="w-3.5 h-3.5 fill-current" />
+              <span>Nghe Master Audio ngay</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowCompletionBanner(false)}
+              className="py-2 px-3 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-xl text-xs font-semibold transition-colors cursor-pointer border border-slate-700"
+            >
+              Đóng
+            </button>
+          </div>
+        </aside>
+      )}
+
+      {/* ========================================================= */}
+      {/* MODAL: BỘ CHUẨN HÓA PHÁT ÂM & TỪ ĐIỂN TIẾNG VIỆT (Req 1)  */}
+      {/* Sửa số có dấu chấm (5.000), chữ R, từ viết tắt            */}
+      {/* ========================================================= */}
+      {showPronunciationModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-200">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-2xl w-full max-h-[90vh] flex flex-col shadow-2xl overflow-hidden relative">
+            {/* Header */}
+            <div className="p-4 sm:px-6 bg-slate-950 border-b border-slate-800 flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-amber-500 text-slate-950 flex items-center justify-center font-bold">
+                  <BookOpen className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-white text-base">
+                    Bộ Chuẩn Hóa Phát Âm & Từ Điển Tiếng Việt
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    Sửa phát âm số có dấu chấm, tiền tệ, phụ âm & từ ngữ tùy
+                    chỉnh
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowPronunciationModal(false)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="p-4 sm:p-6 overflow-y-auto space-y-5 text-xs text-slate-300">
+              {/* Card 1: Số có chấm & tiền tệ */}
+              <div className="p-3.5 bg-slate-950 rounded-xl border border-slate-800 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-white text-sm flex items-center gap-1.5">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                    1. Tự động sửa số có dấu chấm hàng nghìn
+                  </span>
+                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                    Đã tích hợp
+                  </span>
+                </div>
+                <p className="text-slate-400 leading-relaxed text-xs">
+                  Khi người dùng viết{" "}
+                  <code className="text-amber-400 font-mono bg-slate-900 px-1 py-0.5 rounded">
+                    5.000
+                  </code>
+                  , eSpeak-NG thường ngắt dấu chấm và phát âm thành{" "}
+                  <em>&ldquo;5 không không không&rdquo;</em>. Bộ chuẩn hóa tự
+                  động biến đổi thành{" "}
+                  <code className="text-emerald-400 font-mono bg-slate-900 px-1 py-0.5 rounded">
+                    5000
+                  </code>{" "}
+                  để Piper phát âm chuẩn <strong>&ldquo;năm nghìn&rdquo;</strong>
+                  .
+                </p>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pt-1 font-mono text-[11px]">
+                  <div className="p-2 bg-slate-900/80 rounded border border-slate-800 text-slate-300">
+                    <span className="text-rose-400 line-through">5.000</span> ➔{" "}
+                    <span className="text-emerald-400 font-bold">5000</span>{" "}
+                    (năm nghìn)
+                  </div>
+                  <div className="p-2 bg-slate-900/80 rounded border border-slate-800 text-slate-300">
+                    <span className="text-rose-400 line-through">5.000đ</span> ➔{" "}
+                    <span className="text-emerald-400 font-bold">
+                      5000 đồng
+                    </span>
+                  </div>
+                  <div className="p-2 bg-slate-900/80 rounded border border-slate-800 text-slate-300">
+                    <span className="text-rose-400 line-through">3.5</span> ➔{" "}
+                    <span className="text-emerald-400 font-bold">3 phẩy 5</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Card 2: Phát âm chữ R của giọng Hoài My */}
+              <div className="p-3.5 bg-slate-950 rounded-xl border border-slate-800 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-white text-sm flex items-center gap-1.5">
+                    <Info className="w-4 h-4 text-amber-400" />
+                    2. Về giọng Hoài My và phụ âm &ldquo;R&rdquo;
+                  </span>
+                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                    Đặc trưng thổ ngữ
+                  </span>
+                </div>
+                <p className="text-slate-400 leading-relaxed text-xs">
+                  Giọng Hoài My và các giọng nữ/nam miền Bắc được huấn luyện từ
+                  người bản xứ Hà Nội. Trong tiếng Bắc, phụ âm{" "}
+                  <strong>r</strong>, <strong>d</strong>, <strong>gi</strong>{" "}
+                  đồng âm /z/ (ví dụ <em>&ldquo;ra vào&rdquo;</em> đọc là{" "}
+                  <em>&ldquo;da vào&rdquo;</em>, <em>&ldquo;rất tốt&rdquo;</em>{" "}
+                  đọc là <em>&ldquo;dất tốt&rdquo;</em>).
+                </p>
+                <div className="p-2.5 bg-amber-500/10 border border-amber-500/20 rounded-lg text-amber-200 text-xs">
+                  💡 <strong>Gợi ý:</strong> Nếu bạn cần phát âm chuẩn chữ{" "}
+                  <strong>&ldquo;R&rdquo;</strong> uốn lưỡi / rung rõ ràng
+                  (không đọc thành &ldquo;d&rdquo;), hãy chọn giọng{" "}
+                  <strong>Việt Thảo (Miền Nam)</strong> hoặc{" "}
+                  <strong>CSA Voice</strong> trong danh sách giọng!
+                </div>
+              </div>
+
+              {/* Card 3: Từ điển quy tắc thay thế tùy chỉnh */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-white text-sm">
+                    3. Quy tắc từ điển thay thế tùy chỉnh (
+                    {customPronunciationRules.length})
+                  </span>
+                  <span className="text-[11px] text-slate-400">
+                    Tự động lưu vào cấu hình dự án
+                  </span>
+                </div>
+
+                {/* Form thêm quy tắc */}
+                <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 flex flex-col sm:flex-row items-center gap-2">
+                  <input
+                    type="text"
+                    value={newRuleFrom}
+                    onChange={(e) => setNewRuleFrom(e.target.value)}
+                    placeholder="Từ gốc (vd: 5.000, AI, USA...)"
+                    className="w-full sm:flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white placeholder:text-slate-500 font-mono focus:ring-1 focus:ring-amber-500"
+                  />
+                  <span className="text-slate-500 font-bold shrink-0">➔</span>
+                  <input
+                    type="text"
+                    value={newRuleTo}
+                    onChange={(e) => setNewRuleTo(e.target.value)}
+                    placeholder="Thay bằng (vd: năm nghìn, trí tuệ nhân tạo, Mỹ...)"
+                    className="w-full sm:flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white placeholder:text-slate-500 font-mono focus:ring-1 focus:ring-amber-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!newRuleFrom.trim()) return;
+                      setCustomPronunciationRules((prev) => [
+                        ...prev,
+                        {
+                          id: `rule-${Date.now()}`,
+                          from: newRuleFrom.trim(),
+                          to: newRuleTo.trim(),
+                          active: true,
+                        },
+                      ]);
+                      setNewRuleFrom("");
+                      setNewRuleTo("");
+                    }}
+                    className="w-full sm:w-auto px-4 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-lg text-xs flex items-center justify-center gap-1 shrink-0 cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Thêm</span>
+                  </button>
+                </div>
+
+                {/* Danh sách quy tắc */}
+                {customPronunciationRules.length > 0 ? (
+                  <div className="max-h-40 overflow-y-auto space-y-1.5 pr-1">
+                    {customPronunciationRules.map((r) => (
+                      <div
+                        key={r.id}
+                        className="p-2 bg-slate-950/80 rounded-lg border border-slate-800 flex items-center justify-between gap-2 text-xs font-mono"
+                      >
+                        <div className="flex items-center gap-2 truncate">
+                          <input
+                            type="checkbox"
+                            checked={r.active}
+                            onChange={(e) => {
+                              const checked = e.target.checked;
+                              setCustomPronunciationRules((prev) =>
+                                prev.map((item) =>
+                                  item.id === r.id
+                                    ? { ...item, active: checked }
+                                    : item,
+                                ),
+                              );
+                            }}
+                            className="rounded border-slate-700 text-amber-500 focus:ring-amber-500 accent-amber-500"
+                          />
+                          <span
+                            className={
+                              r.active
+                                ? "text-amber-300 font-semibold"
+                                : "text-slate-500 line-through"
+                            }
+                          >
+                            &ldquo;{r.from}&rdquo;
+                          </span>
+                          <span className="text-slate-500">➔</span>
+                          <span
+                            className={
+                              r.active
+                                ? "text-emerald-300"
+                                : "text-slate-500"
+                            }
+                          >
+                            &ldquo;{r.to}&rdquo;
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCustomPronunciationRules((prev) =>
+                              prev.filter((item) => item.id !== r.id),
+                            );
+                          }}
+                          className="text-slate-500 hover:text-rose-400 p-1 cursor-pointer"
+                          title="Xóa quy tắc này"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-slate-500 italic text-[11px]">
+                    Chưa có quy tắc thay thế thủ công nào. Bạn có thể thêm bất
+                    kỳ từ ngữ nào muốn đổi cách đọc ở trên.
+                  </p>
+                )}
+              </div>
+
+              {/* Live Preview Test Box */}
+              <div className="p-3.5 bg-slate-950/90 rounded-xl border border-slate-800 space-y-2">
+                <span className="font-bold text-slate-300 text-xs block">
+                  🔍 Thử nghiệm xem trước kết quả chuẩn hóa:
+                </span>
+                <input
+                  type="text"
+                  value={previewTestText}
+                  onChange={(e) => setPreviewTestText(e.target.value)}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white placeholder:text-slate-500 font-mono"
+                  placeholder="Nhập câu thử nghiệm (vd: 5.000đ, 3.5kg...)"
+                />
+                <div className="p-2.5 bg-slate-900 rounded-lg border border-slate-800 font-mono text-xs text-emerald-300">
+                  <span className="text-slate-500 text-[10px] block mb-0.5">
+                    Kết quả sau khi chuẩn hóa trước khi đưa vào PiperTTS:
+                  </span>
+                  {normalizeVietnameseText(previewTestText, {
+                    normalizeNumbers,
+                    customRules: customPronunciationRules.filter(
+                      (r) => r.active,
+                    ),
+                  })}
+                </div>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="p-4 bg-slate-950 border-t border-slate-800 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setShowPronunciationModal(false)}
+                className="px-5 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold rounded-xl cursor-pointer shadow"
+              >
+                Lưu & Đóng
               </button>
             </div>
           </div>
