@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import {
   BookOpen,
   Plus,
@@ -24,10 +24,13 @@ import {
   Layers,
   ChevronDown,
   ChevronUp,
-  FolderOpen,
-  Copy,
   Scissors,
   Check,
+  Users,
+  Search,
+  Filter,
+  X,
+  VolumeX,
 } from "lucide-react";
 import { Story, StoryCharacter, StoryParagraph } from "../types/story";
 
@@ -73,9 +76,16 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
 
-  // Raw Content Input for Quick Import
+  // Popup Modal: Thiết Lập Nhân Vật & Khoảng Nghỉ
+  const [showCharacterModal, setShowCharacterModal] = useState(false);
+
+  // Raw Content Input Drawer for Quick Import
   const [rawText, setRawText] = useState("");
   const [showRawInput, setShowRawInput] = useState(false);
+
+  // Table Filter & Search States
+  const [searchQuery, setSearchQuery] = useState("");
+  const [filterCharId, setFilterCharId] = useState<string>("all");
 
   // Audio Playback States
   const [previewingParagraphId, setPreviewingParagraphId] = useState<string | null>(null);
@@ -130,7 +140,6 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
       const story: Story = await res.json();
       setActiveStory(story);
       setRawText(story.rawContent || story.paragraphs.map((p) => p.text).join("\n\n"));
-      // Connect SSE for this story
       connectStorySSE(story.id);
     } catch (err: any) {
       console.error("Lỗi nạp truyện:", err);
@@ -207,10 +216,6 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
         showToast("Lỗi tạo audio: " + data.error, "error");
       } catch {}
     });
-
-    es.onerror = () => {
-      // Reconnection handled automatically by browser EventSource
-    };
   };
 
   useEffect(() => {
@@ -243,7 +248,6 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 2500);
       showToast("Đã lưu truyện thành công!", "success");
-      // Update stories list title
       setStoriesList((prev) =>
         prev.map((s) => (s.id === updated.id ? { ...s, title: updated.title, paragraphsCount: updated.paragraphs.length } : s))
       );
@@ -332,7 +336,6 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
       return;
     }
 
-    // Split based on one or more blank lines: \n\s*\n+
     const rawParagraphs = rawText
       .split(/\n\s*\n+/)
       .map((p) => p.trim())
@@ -346,7 +349,6 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
     const defaultCharId = activeStory.characters[0]?.id || "char_default";
 
     const newParagraphs: StoryParagraph[] = rawParagraphs.map((text, idx) => {
-      // Try to preserve character assignment if existing paragraph at same index
       const existing = activeStory.paragraphs[idx];
       return {
         id: existing?.id || `p_${Date.now()}_${idx + 1}`,
@@ -362,7 +364,7 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
       rawContent: rawText,
       paragraphs: newParagraphs,
       status: "idle",
-      masterAudio: undefined, // invalidate previous master when content changes
+      masterAudio: undefined,
     };
 
     setActiveStory(updated);
@@ -421,7 +423,7 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
     }
     setPreviewingCharId(char.id);
     try {
-      const sample = `Xin chào! Tôi là ${char.name}, sử dụng giọng đọc này để kể truyện cùng bạn.`;
+      const sample = `Xin chào! Tôi là ${char.name}, đọc với giọng này.`;
       const res = await fetch(`/api/stories/${activeStory?.id || "temp"}/preview-paragraph`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -451,7 +453,6 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
       previewAudioRef.current.pause();
     }
 
-    // If paragraph has generated audio already, play directly
     if (p.audioUrl) {
       setPreviewingParagraphId(p.id);
       const audio = new Audio(p.audioUrl);
@@ -462,7 +463,6 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
       return;
     }
 
-    // Otherwise generate on the fly
     setPreviewingParagraphId(p.id);
     const char = activeStory?.characters.find((c) => c.id === p.characterId) || activeStory?.characters[0];
     try {
@@ -489,7 +489,7 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
     }
   };
 
-  // Paragraph manipulations: Split, Merge, Add, Delete, Move Up, Move Down
+  // Paragraph manipulations
   const handleParagraphTextChange = (id: string, text: string) => {
     if (!activeStory) return;
     setActiveStory({
@@ -522,7 +522,6 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
     };
     const updated = [...activeStory.paragraphs];
     updated.splice(idx + 1, 0, newPara);
-    // Reindex
     const reindexed = updated.map((p, i) => ({ ...p, index: i + 1 }));
     setActiveStory({ ...activeStory, paragraphs: reindexed });
   };
@@ -550,7 +549,6 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
     setActiveStory({ ...activeStory, paragraphs: reindexed });
   };
 
-  // Merge paragraph with the next one
   const handleMergeNext = (idx: number) => {
     if (!activeStory) return;
     if (idx >= activeStory.paragraphs.length - 1) return;
@@ -566,7 +564,6 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
     showToast(`Đã gộp đoạn #${idx + 1} và #${idx + 2} thành công!`, "info");
   };
 
-  // Split paragraph in two
   const handleSplitParagraph = (idx: number) => {
     if (!activeStory) return;
     const current = activeStory.paragraphs[idx];
@@ -576,7 +573,6 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
       return;
     }
 
-    // Split roughly at middle sentence or punctuation (. ? !)
     const splitMatch = text.slice(Math.floor(text.length * 0.3)).search(/[.?!]\s+/);
     let splitPos = -1;
     if (splitMatch !== -1) {
@@ -604,7 +600,6 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
     showToast(`Đã tách đoạn #${idx + 1} thành 2 đoạn!`, "info");
   };
 
-  // Bulk assign all paragraphs to a character
   const handleBulkAssign = (charId: string) => {
     if (!activeStory) return;
     const char = activeStory.characters.find((c) => c.id === charId);
@@ -620,7 +615,7 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
     showToast(`Đã gán toàn bộ các đoạn cho: ${char?.name || "Nhân vật"}`, "info");
   };
 
-  // Trigger story audio generation
+  // Generate story audio
   const handleGenerateAudio = async () => {
     if (!activeStory) return;
     if (activeStory.paragraphs.length === 0) {
@@ -628,7 +623,6 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
       return;
     }
 
-    // Save state first
     await handleSaveStory();
 
     try {
@@ -675,8 +669,19 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
     return `${m}:${s < 10 ? "0" : ""}${s}`;
   };
 
+  // Filtered paragraphs based on search and character selection
+  const filteredParagraphs = useMemo(() => {
+    if (!activeStory) return [];
+    return activeStory.paragraphs.filter((p) => {
+      const matchSearch =
+        !searchQuery.trim() || p.text.toLowerCase().includes(searchQuery.toLowerCase());
+      const matchChar = filterCharId === "all" || p.characterId === filterCharId;
+      return matchSearch && matchChar;
+    });
+  }, [activeStory?.paragraphs, searchQuery, filterCharId]);
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 pb-40">
       {/* Toast Notification */}
       {toastMessage && (
         <div
@@ -699,16 +704,18 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
         </div>
       )}
 
-      {/* TOP HEADER CONTROLS FOR STORYTELLING */}
-      <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 w-full md:w-auto">
-          <div className="flex items-center gap-2">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-500 via-orange-500 to-rose-600 flex items-center justify-center text-white shadow-lg shadow-amber-500/20">
+      {/* ========================================================= */}
+      {/* 1. TOP PANEL: KỂ TRUYỆN ĐA NHÂN VẬT & NÚT THIẾT LẬP NHÂN VẬT */}
+      {/* ========================================================= */}
+      <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xl flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 w-full lg:w-auto">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-500 via-orange-500 to-rose-600 flex items-center justify-center text-white shadow-lg shadow-amber-500/20 shrink-0">
               <BookOpen className="w-5 h-5" />
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <span className="text-xs uppercase font-extrabold tracking-wider px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                <span className="text-xs uppercase font-extrabold tracking-wider px-2.5 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20">
                   Kể Truyện Đa Nhân Vật
                 </span>
                 <span className="text-xs text-slate-400">100% Offline</span>
@@ -728,10 +735,26 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
               </h2>
             </div>
           </div>
+
+          {/* NÚT "THIẾT LẬP NHÂN VẬT" (Requirement 1: nút này ở cùng panel với Kể Truyện Đa Nhân Vật) */}
+          {activeStory && (
+            <button
+              type="button"
+              onClick={() => setShowCharacterModal(true)}
+              className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-gradient-to-r from-amber-500/15 via-orange-500/15 to-rose-500/15 hover:from-amber-500/25 hover:to-rose-500/25 border border-amber-500/30 text-amber-300 font-bold text-xs shadow-md transition-all sm:ml-2"
+              title="Mở popup quản lý nhân vật, gán giọng đọc và cấu hình khoảng nghỉ"
+            >
+              <Users className="w-4 h-4 text-amber-400" />
+              <span>Thiết Lập Nhân Vật</span>
+              <span className="px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-[10px] font-mono">
+                {activeStory.characters.length}
+              </span>
+            </button>
+          )}
         </div>
 
         {/* Quick Actions & Story Selector */}
-        <div className="flex flex-wrap items-center gap-2 w-full md:w-auto justify-end">
+        <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto justify-start lg:justify-end">
           {/* Story Selector Dropdown */}
           <div className="relative">
             <select
@@ -796,7 +819,7 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
             <span className="hidden sm:inline">Xóa</span>
           </button>
 
-          {/* Dọn Dẹp Audio button (Requirement: Nút Dọn Dẹp Audio trên giao diện) */}
+          {/* Dọn Dẹp Audio button */}
           <button
             type="button"
             onClick={onOpenCleanupModal}
@@ -809,158 +832,530 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
         </div>
       </div>
 
+      {/* ========================================================= */}
+      {/* 2 & 3. DANH SÁCH ĐOẠN TRUYỆN: FULL SCREEN WIDTH & DẠNG TABLE */}
+      {/* ========================================================= */}
       {activeStory && (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-          {/* ========================================================= */}
-          {/* CỘT TRÁI: QUẢN LÝ NHÂN VẬT & GIỌNG ĐỌC + CÀI ĐẶT TRUYỆN   */}
-          {/* ========================================================= */}
-          <div className="lg:col-span-4 space-y-6">
-            {/* Box Quản lý Nhân Vật */}
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4 shadow-xl">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <div className="w-7 h-7 rounded-lg bg-amber-500/10 text-amber-400 border border-amber-500/20 flex items-center justify-center font-bold text-xs">
-                    👥
-                  </div>
-                  <div>
-                    <h3 className="text-sm font-bold text-white">Quản Lý Nhân Vật</h3>
-                    <p className="text-[11px] text-slate-400">Gán giọng đọc cho từng nhân vật</p>
-                  </div>
+        <div className="w-full space-y-4">
+          {/* Quick Raw Text Drawer (Dán toàn bộ truyện để chia đoạn) */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <FileText className="w-4 h-4 text-amber-400" />
+                <span className="text-xs sm:text-sm font-bold text-white">
+                  Dán Nội Dung & Tự Động Chia Đoạn
+                </span>
+                <span className="text-[11px] text-slate-400 hidden sm:inline">
+                  (Dựa trên các dòng trống để chia đoạn)
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowRawInput(!showRawInput)}
+                className="flex items-center gap-1 text-xs text-amber-400 hover:text-amber-300 font-medium px-2 py-1 rounded-lg hover:bg-slate-800 transition-colors"
+              >
+                <span>{showRawInput ? "Đóng khung nhập" : "Mở khung dán văn bản"}</span>
+                {showRawInput ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+              </button>
+            </div>
+
+            {showRawInput && (
+              <div className="space-y-3 pt-3 mt-3 border-t border-slate-800">
+                <textarea
+                  rows={6}
+                  value={rawText}
+                  onChange={(e) => setRawText(e.target.value)}
+                  placeholder="Dán toàn bộ nội dung kịch bản truyện tại đây. Giữa các đoạn hãy để 1 dòng trống..."
+                  className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl p-3 text-xs sm:text-sm text-slate-200 focus:outline-none font-mono leading-relaxed resize-y"
+                />
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
+                  <span className="text-[11px] text-slate-400">
+                    Mẹo: Sau khi chia, bạn có thể gán từng đoạn cho các nhân vật khác nhau trong bảng bên dưới.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleSplitFromRawText}
+                    className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold shadow-md shadow-amber-500/20 transition-all shrink-0"
+                  >
+                    <Scissors className="w-3.5 h-3.5" />
+                    <span>Tự Động Phân Chia Đoạn</span>
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  onClick={handleAddCharacter}
-                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-400 text-xs font-semibold transition-all"
-                  title="Thêm nhân vật mới"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>Thêm</span>
-                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Table Toolbar: Search, Filter character, Add Paragraph, Stats */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-3 flex-1">
+              {/* Search Box */}
+              <div className="relative flex-1 min-w-[200px] max-w-md">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Tìm kiếm nội dung đoạn..."
+                  className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl pl-9 pr-3 py-1.5 text-xs text-slate-200 focus:outline-none"
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery("")}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
               </div>
 
-              {/* Characters List */}
-              <div className="space-y-3 max-h-[480px] overflow-y-auto pr-1">
-                {activeStory.characters.map((char) => {
-                  const colorConfig = getColorConfig(char.color);
-                  const isPreviewing = previewingCharId === char.id;
-
-                  return (
-                    <div
-                      key={char.id}
-                      className={`p-3.5 rounded-xl border bg-slate-950/70 space-y-2.5 transition-all ${colorConfig.border}`}
-                    >
-                      {/* Top row: Name & Color & Delete */}
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-2 flex-1">
-                          <span
-                            className={`w-3 h-3 rounded-full shrink-0 ring-2 ${colorConfig.ring} bg-current ${colorConfig.text}`}
-                            title={`Màu đại diện: ${colorConfig.label}`}
-                          />
-                          <input
-                            type="text"
-                            value={char.name}
-                            onChange={(e) => handleUpdateCharacter(char.id, { name: e.target.value })}
-                            className="bg-slate-900 border border-slate-700 focus:border-amber-500 rounded-lg px-2 py-1 text-xs font-bold text-white w-full focus:outline-none"
-                            placeholder="Tên nhân vật..."
-                          />
-                        </div>
-
-                        {/* Color Selector */}
-                        <div className="flex items-center gap-1">
-                          <select
-                            value={char.color || "amber"}
-                            onChange={(e) => handleUpdateCharacter(char.id, { color: e.target.value })}
-                            className="bg-slate-900 border border-slate-700 text-[10px] text-slate-300 rounded px-1.5 py-1 focus:outline-none"
-                            title="Chọn màu phân biệt"
-                          >
-                            {BADGE_COLORS.map((c) => (
-                              <option key={c.value} value={c.value}>
-                                {c.label}
-                              </option>
-                            ))}
-                          </select>
-
-                          {activeStory.characters.length > 1 && (
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteCharacter(char.id)}
-                              className="p-1 rounded hover:bg-rose-950/60 text-slate-500 hover:text-rose-400 transition-colors"
-                              title="Xóa nhân vật này"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Voice Model Selection */}
-                      <div className="space-y-1">
-                        <label className="text-[10px] uppercase font-semibold text-slate-400">
-                          Mô hình giọng đọc (Piper TTS)
-                        </label>
-                        <select
-                          value={char.voiceId}
-                          onChange={(e) => handleUpdateCharacter(char.id, { voiceId: e.target.value })}
-                          className="w-full bg-slate-900 border border-slate-700 text-xs text-amber-300 font-medium rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-amber-500"
-                        >
-                          {voices.map((v) => (
-                            <option key={v.modelId} value={v.modelId}>
-                              {v.name} ({v.tag})
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-
-                      {/* Speed Slider & Preview Button */}
-                      <div className="flex items-center justify-between gap-3 pt-1 text-[11px]">
-                        <div className="flex-1 flex items-center gap-2">
-                          <span className="text-slate-400 shrink-0">Tốc độ:</span>
-                          <input
-                            type="range"
-                            min="0.6"
-                            max="1.8"
-                            step="0.05"
-                            value={char.speed || 1.0}
-                            onChange={(e) => handleUpdateCharacter(char.id, { speed: parseFloat(e.target.value) })}
-                            className="w-full accent-amber-500 cursor-pointer h-1.5 bg-slate-800 rounded-lg"
-                          />
-                          <span className="font-mono text-amber-400 font-bold w-10 text-right">
-                            {(char.speed || 1.0).toFixed(2)}x
-                          </span>
-                        </div>
-
-                        <button
-                          type="button"
-                          onClick={() => handlePreviewVoice(char)}
-                          disabled={isPreviewing}
-                          className="flex items-center gap-1 px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-xs text-slate-300 hover:text-white transition-all shrink-0"
-                          title="Nghe thử giọng nhân vật"
-                        >
-                          <Volume2 className={`w-3.5 h-3.5 text-amber-400 ${isPreviewing ? "animate-pulse" : ""}`} />
-                          <span>{isPreviewing ? "Đang đọc..." : "Thử"}</span>
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
+              {/* Filter by Character */}
+              <div className="flex items-center gap-1.5 text-xs">
+                <Filter className="w-3.5 h-3.5 text-slate-400" />
+                <select
+                  value={filterCharId}
+                  onChange={(e) => setFilterCharId(e.target.value)}
+                  className="bg-slate-950 border border-slate-800 focus:border-amber-500 text-xs text-slate-300 rounded-xl px-2.5 py-1.5 focus:outline-none"
+                >
+                  <option value="all">Tất cả nhân vật ({activeStory.paragraphs.length})</option>
+                  {activeStory.characters.map((c) => {
+                    const count = activeStory.paragraphs.filter((p) => p.characterId === c.id).length;
+                    return (
+                      <option key={c.id} value={c.id}>
+                        {c.name} ({count} đoạn)
+                      </option>
+                    );
+                  })}
+                </select>
               </div>
             </div>
 
-            {/* Box Cài đặt Ghép Nối & Khoảng Nghỉ */}
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4 shadow-xl">
-              <div className="flex items-center gap-2">
-                <div className="w-7 h-7 rounded-lg bg-orange-500/10 text-orange-400 border border-orange-500/20 flex items-center justify-center font-bold text-xs">
-                  ⏱️
+            {/* Right actions: Add Paragraph & Counts */}
+            <div className="flex items-center gap-3 shrink-0 justify-between md:justify-end">
+              <span className="text-xs text-slate-400">
+                Hiển thị: <strong className="text-amber-400 font-mono">{filteredParagraphs.length}</strong> /{" "}
+                <span className="font-mono">{activeStory.paragraphs.length}</span> đoạn
+              </span>
+
+              <button
+                type="button"
+                onClick={() => handleAddParagraphAfter(activeStory.paragraphs.length - 1)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-400 text-xs font-bold transition-all shadow-sm"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Thêm Đoạn Mới</span>
+              </button>
+            </div>
+          </div>
+
+          {/* ========================================================= */}
+          {/* BẢNG DANH SÁCH ĐOẠN TRUYỆN DẠNG TABLE (Requirement 3)       */}
+          {/* ========================================================= */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl shadow-xl overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead className="bg-slate-950/80 border-b border-slate-800 text-[11px] uppercase tracking-wider text-slate-400 font-bold select-none">
+                  <tr>
+                    <th scope="col" className="py-3 px-3 w-14 text-center">
+                      #
+                    </th>
+                    <th scope="col" className="py-3 px-3 w-56 sm:w-64">
+                      Nhân Vật Đọc
+                    </th>
+                    <th scope="col" className="py-3 px-4 min-w-[320px]">
+                      Nội Dung Đoạn Văn
+                    </th>
+                    <th scope="col" className="py-3 px-3 w-32 text-center">
+                      Thời Lượng
+                    </th>
+                    <th scope="col" className="py-3 px-3 w-48 text-right">
+                      Thao Tác
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/60">
+                  {filteredParagraphs.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="py-12 text-center text-slate-500">
+                        Không tìm thấy đoạn văn nào phù hợp.
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredParagraphs.map((p) => {
+                      const actualIdx = activeStory.paragraphs.findIndex((item) => item.id === p.id);
+                      const assignedChar =
+                        activeStory.characters.find((c) => c.id === p.characterId) || activeStory.characters[0];
+                      const colorConfig = getColorConfig(assignedChar?.color);
+                      const isPreviewing = previewingParagraphId === p.id;
+                      const isGenerating = p.status === "generating";
+                      const isCompleted = p.status === "completed";
+
+                      return (
+                        <tr
+                          key={p.id}
+                          className={`hover:bg-slate-800/40 transition-colors ${
+                            isGenerating
+                              ? "bg-amber-500/5 ring-1 ring-inset ring-amber-500/30"
+                              : ""
+                          }`}
+                        >
+                          {/* STT Column */}
+                          <td className="py-3 px-3 text-center align-top">
+                            <span className="inline-flex w-7 h-7 rounded-lg bg-slate-950 border border-slate-800 text-slate-300 font-mono text-xs font-bold items-center justify-center">
+                              #{p.index}
+                            </span>
+                          </td>
+
+                          {/* Character Selector Column */}
+                          <td className="py-3 px-3 align-top">
+                            <div className="relative">
+                              <select
+                                value={p.characterId}
+                                onChange={(e) => handleParagraphCharChange(p.id, e.target.value)}
+                                className={`w-full text-xs font-bold rounded-xl px-2.5 py-1.5 pr-7 border focus:outline-none appearance-none cursor-pointer transition-all shadow-sm ${colorConfig.bg} ${colorConfig.text} ${colorConfig.border}`}
+                                title="Chọn nhân vật đọc đoạn này"
+                              >
+                                {activeStory.characters.map((c) => {
+                                  const voice = voices.find((v) => v.modelId === c.voiceId);
+                                  return (
+                                    <option key={c.id} value={c.id} className="bg-slate-900 text-white">
+                                      👤 {c.name} ({voice ? voice.name : c.voiceId.replace(/^local:/, "")})
+                                    </option>
+                                  );
+                                })}
+                              </select>
+                              <ChevronDown
+                                className={`w-3.5 h-3.5 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none ${colorConfig.text}`}
+                              />
+                            </div>
+                            <div className="mt-1 flex items-center gap-1.5 px-1 text-[10px] text-slate-500">
+                              <span
+                                className={`w-2 h-2 rounded-full ${colorConfig.text} bg-current`}
+                              />
+                              <span className="truncate">
+                                {assignedChar ? `${assignedChar.speed || 1.0}x tốc độ` : ""}
+                              </span>
+                            </div>
+                          </td>
+
+                          {/* Textarea Content Column */}
+                          <td className="py-3 px-4 align-top">
+                            <div className="space-y-1">
+                              <textarea
+                                rows={Math.max(2, Math.min(6, Math.ceil(p.text.length / 90)))}
+                                value={p.text}
+                                onChange={(e) => handleParagraphTextChange(p.id, e.target.value)}
+                                className="w-full bg-slate-950/70 border border-slate-800 focus:border-amber-500 rounded-xl p-2.5 text-xs sm:text-sm text-slate-200 focus:outline-none leading-relaxed resize-y font-normal"
+                                placeholder="Nhập nội dung đoạn truyện..."
+                              />
+                              <div className="flex items-center justify-between text-[10px] text-slate-500 px-1">
+                                <span>
+                                  {p.text.trim().split(/\s+/).filter(Boolean).length} từ · {p.text.length} ký tự
+                                </span>
+                              </div>
+                            </div>
+                          </td>
+
+                          {/* Duration & Status Column */}
+                          <td className="py-3 px-3 text-center align-top">
+                            {isGenerating && (
+                              <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-400 font-semibold text-[11px] animate-pulse">
+                                <RefreshCw className="w-3 h-3 animate-spin" />
+                                <span>Đang đọc...</span>
+                              </div>
+                            )}
+
+                            {isCompleted && (
+                              <div className="inline-flex flex-col items-center">
+                                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 font-bold font-mono text-[11px]">
+                                  <CheckCircle2 className="w-3 h-3" />
+                                  <span>{p.duration ? `${p.duration}s` : "Xong"}</span>
+                                </span>
+                              </div>
+                            )}
+
+                            {!isGenerating && !isCompleted && (
+                              <span className="text-[11px] text-slate-500">Chờ xử lý</span>
+                            )}
+                          </td>
+
+                          {/* Action Buttons Column */}
+                          <td className="py-3 px-3 align-top text-right">
+                            <div className="flex items-center justify-end gap-1">
+                              {/* Preview paragraph */}
+                              <button
+                                type="button"
+                                onClick={() => handlePreviewParagraph(p)}
+                                disabled={isPreviewing || isGenerating}
+                                className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold transition-all ${
+                                  isPreviewing
+                                    ? "bg-amber-500 text-slate-950"
+                                    : "bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white"
+                                }`}
+                                title="Nghe thử riêng đoạn này"
+                              >
+                                <Volume2 className="w-3.5 h-3.5 text-amber-400" />
+                                <span className="hidden sm:inline">
+                                  {isPreviewing ? "Phát..." : "Nghe"}
+                                </span>
+                              </button>
+
+                              {/* Split */}
+                              <button
+                                type="button"
+                                onClick={() => handleSplitParagraph(actualIdx)}
+                                className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
+                                title="Tách đoạn này thành 2 đoạn"
+                              >
+                                <Split className="w-3.5 h-3.5" />
+                              </button>
+
+                              {/* Merge next */}
+                              {actualIdx < activeStory.paragraphs.length - 1 && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleMergeNext(actualIdx)}
+                                  className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
+                                  title="Gộp với đoạn kế tiếp"
+                                >
+                                  <Merge className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+
+                              {/* Move Up */}
+                              <button
+                                type="button"
+                                disabled={actualIdx === 0}
+                                onClick={() => handleMoveParagraph(actualIdx, "up")}
+                                className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
+                                title="Di chuyển lên"
+                              >
+                                <ArrowUp className="w-3.5 h-3.5" />
+                              </button>
+
+                              {/* Move Down */}
+                              <button
+                                type="button"
+                                disabled={actualIdx === activeStory.paragraphs.length - 1}
+                                onClick={() => handleMoveParagraph(actualIdx, "down")}
+                                className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
+                                title="Di chuyển xuống"
+                              >
+                                <ArrowDown className="w-3.5 h-3.5" />
+                              </button>
+
+                              {/* Add after */}
+                              <button
+                                type="button"
+                                onClick={() => handleAddParagraphAfter(actualIdx)}
+                                className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-amber-400 transition-colors"
+                                title="Chèn thêm đoạn ngay sau"
+                              >
+                                <Plus className="w-3.5 h-3.5" />
+                              </button>
+
+                              {/* Delete */}
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteParagraph(actualIdx)}
+                                className="p-1.5 rounded-lg hover:bg-rose-950/60 text-slate-400 hover:text-rose-400 transition-colors"
+                                title="Xóa đoạn này"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* POPUP / MODAL: THIẾT LẬP NHÂN VẬT & KHOẢNG NGHỈ (TABLE)   */}
+      {/* (Requirement 1 & 2: Quản lý nhân vật dạng TABLE trong popup) */}
+      {/* ========================================================= */}
+      {showCharacterModal && activeStory && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-slate-950/80 backdrop-blur-md animate-fadeIn">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-4xl w-full max-h-[90vh] flex flex-col shadow-2xl overflow-hidden relative text-slate-200">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-slate-950/60">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20 flex items-center justify-center">
+                  <Users className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className="text-sm font-bold text-white">Khoảng Nghỉ Giữa Các Đoạn</h3>
-                  <p className="text-[11px] text-slate-400">Khoảng lặng chèn giữa các đoạn khi ghép master</p>
+                  <h3 className="text-base font-bold text-white">
+                    Thiết Lập Nhân Vật & Giọng Đọc Truyện
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    Cấu hình mô hình giọng Piper TTS, tốc độ đọc và khoảng nghỉ giữa các đoạn
+                  </p>
                 </div>
               </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleAddCharacter}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold shadow-md shadow-amber-500/20 transition-all"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Thêm Nhân Vật</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowCharacterModal(false)}
+                  className="p-1.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
 
-              <div className="space-y-3">
+            {/* Modal Body: Scrollable Table of Characters */}
+            <div className="p-6 overflow-y-auto space-y-6 flex-1">
+              {/* TABLE QUẢN LÝ NHÂN VẬT (Requirement 2: dạng TABLE) */}
+              <div className="border border-slate-800 rounded-2xl overflow-hidden bg-slate-950 shadow-inner">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead className="bg-slate-900/90 border-b border-slate-800 text-[11px] uppercase tracking-wider text-slate-400 font-bold">
+                    <tr>
+                      <th scope="col" className="py-3 px-3 w-28">
+                        Màu Sắc
+                      </th>
+                      <th scope="col" className="py-3 px-3 w-44">
+                        Tên Nhân Vật
+                      </th>
+                      <th scope="col" className="py-3 px-3">
+                        Mô Hình Giọng Đọc (Piper TTS)
+                      </th>
+                      <th scope="col" className="py-3 px-3 w-44 text-center">
+                        Tốc Độ Đọc
+                      </th>
+                      <th scope="col" className="py-3 px-3 w-28 text-right">
+                        Thao Tác
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/60">
+                    {activeStory.characters.map((char) => {
+                      const colorConfig = getColorConfig(char.color);
+                      const isPreviewing = previewingCharId === char.id;
+
+                      return (
+                        <tr key={char.id} className="hover:bg-slate-900/40 transition-colors">
+                          {/* Color Selector */}
+                          <td className="py-3 px-3">
+                            <div className="flex items-center gap-2">
+                              <span
+                                className={`w-3.5 h-3.5 rounded-full shrink-0 ring-2 ${colorConfig.ring} bg-current ${colorConfig.text}`}
+                              />
+                              <select
+                                value={char.color || "amber"}
+                                onChange={(e) => handleUpdateCharacter(char.id, { color: e.target.value })}
+                                className="bg-slate-900 border border-slate-700 text-xs text-slate-200 rounded-lg px-2 py-1 focus:outline-none"
+                              >
+                                {BADGE_COLORS.map((c) => (
+                                  <option key={c.value} value={c.value}>
+                                    {c.label}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          </td>
+
+                          {/* Character Name */}
+                          <td className="py-3 px-3">
+                            <input
+                              type="text"
+                              value={char.name}
+                              onChange={(e) => handleUpdateCharacter(char.id, { name: e.target.value })}
+                              className="w-full bg-slate-900 border border-slate-700 focus:border-amber-500 rounded-lg px-2.5 py-1 text-xs font-bold text-white focus:outline-none"
+                              placeholder="Tên nhân vật..."
+                            />
+                          </td>
+
+                          {/* Voice Model Selection */}
+                          <td className="py-3 px-3">
+                            <select
+                              value={char.voiceId}
+                              onChange={(e) => handleUpdateCharacter(char.id, { voiceId: e.target.value })}
+                              className="w-full bg-slate-900 border border-slate-700 text-xs text-amber-300 font-medium rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                            >
+                              {voices.map((v) => (
+                                <option key={v.modelId} value={v.modelId}>
+                                  {v.name} ({v.tag})
+                                </option>
+                              ))}
+                            </select>
+                          </td>
+
+                          {/* Speed Slider */}
+                          <td className="py-3 px-3">
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="range"
+                                min="0.6"
+                                max="1.8"
+                                step="0.05"
+                                value={char.speed || 1.0}
+                                onChange={(e) => handleUpdateCharacter(char.id, { speed: parseFloat(e.target.value) })}
+                                className="w-full accent-amber-500 cursor-pointer h-1.5 bg-slate-800 rounded-lg"
+                              />
+                              <span className="font-mono text-amber-400 font-bold text-xs w-10 text-right shrink-0">
+                                {(char.speed || 1.0).toFixed(2)}x
+                              </span>
+                            </div>
+                          </td>
+
+                          {/* Action Buttons: Preview & Delete */}
+                          <td className="py-3 px-3 text-right">
+                            <div className="flex items-center justify-end gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => handlePreviewVoice(char)}
+                                disabled={isPreviewing}
+                                className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-all"
+                                title="Nghe thử giọng nhân vật"
+                              >
+                                <Volume2 className={`w-3.5 h-3.5 text-amber-400 ${isPreviewing ? "animate-pulse" : ""}`} />
+                              </button>
+
+                              {activeStory.characters.length > 1 && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteCharacter(char.id)}
+                                  className="p-1.5 rounded-lg hover:bg-rose-950/60 text-slate-500 hover:text-rose-400 transition-colors"
+                                  title="Xóa nhân vật này"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* KHU VỰC THIẾT LẬP KHOẢNG NGHỈ GIỮA CÁC ĐOẠN (Requirement 1) */}
+              <div className="bg-slate-950 border border-slate-800 rounded-2xl p-4 sm:p-5 space-y-3">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs text-slate-300">Thời gian nghỉ (ms):</span>
+                  <div>
+                    <h4 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
+                      <Clock className="w-4 h-4 text-orange-400" />
+                      <span>Khoảng Nghỉ Giữa Các Đoạn (Gap Silence)</span>
+                    </h4>
+                    <p className="text-[11px] text-slate-400 mt-0.5">
+                      Thời gian im lặng (miligiây) được chèn vào giữa các đoạn khi ghép file Master
+                    </p>
+                  </div>
                   <div className="flex items-center gap-1.5">
                     <input
                       type="number"
@@ -969,7 +1364,7 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
                       step="50"
                       value={activeStory.gapMs || 300}
                       onChange={(e) => setActiveStory({ ...activeStory, gapMs: parseInt(e.target.value) || 0 })}
-                      className="w-20 bg-slate-950 border border-slate-700 focus:border-amber-500 rounded-lg px-2 py-1 text-xs text-amber-400 font-mono font-bold text-center focus:outline-none"
+                      className="w-20 bg-slate-900 border border-slate-700 focus:border-amber-500 rounded-xl px-2 py-1 text-xs text-amber-400 font-mono font-bold text-center focus:outline-none"
                     />
                     <span className="text-xs text-slate-400">ms</span>
                   </div>
@@ -987,15 +1382,17 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
 
                 <div className="flex justify-between text-[10px] text-slate-500">
                   <span>0 ms (Liền mạch)</span>
-                  <span className="text-amber-400 font-semibold">300 ms (Chuẩn)</span>
+                  <span className="text-amber-400 font-semibold">300 ms (Mặc định chuẩn)</span>
                   <span>1000 ms (Chậm rãi)</span>
                 </div>
               </div>
 
-              {/* Quick Bulk Assign Action */}
-              <div className="pt-3 border-t border-slate-800 space-y-2">
-                <label className="text-xs font-semibold text-slate-300">Gán nhanh tất cả đoạn cho:</label>
-                <div className="flex flex-wrap gap-1.5">
+              {/* Bulk Assign Action */}
+              <div className="bg-slate-950 border border-slate-800 rounded-2xl p-4 space-y-2">
+                <label className="text-xs font-bold text-slate-300 block">
+                  Gán nhanh toàn bộ các đoạn trong truyện cho nhân vật:
+                </label>
+                <div className="flex flex-wrap gap-2">
                   {activeStory.characters.map((c) => {
                     const cfg = getColorConfig(c.color);
                     return (
@@ -1003,8 +1400,8 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
                         key={c.id}
                         type="button"
                         onClick={() => handleBulkAssign(c.id)}
-                        className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition-all ${cfg.bg} ${cfg.text} ${cfg.border} hover:opacity-80`}
-                        title={`Gán tất cả đoạn cho ${c.name}`}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-medium border transition-all ${cfg.bg} ${cfg.text} ${cfg.border} hover:opacity-80 shadow-sm`}
+                        title={`Gán toàn bộ đoạn cho ${c.name}`}
                       >
                         {c.name}
                       </button>
@@ -1013,353 +1410,102 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
                 </div>
               </div>
             </div>
+
+            {/* Modal Footer */}
+            <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-slate-800 bg-slate-950/60">
+              <button
+                type="button"
+                onClick={() => setShowCharacterModal(false)}
+                className="px-5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-300 hover:text-white transition-colors"
+              >
+                Đóng
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  handleSaveStory();
+                  setShowCharacterModal(false);
+                }}
+                className="px-6 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold shadow-lg shadow-amber-500/20 transition-all"
+              >
+                Lưu & Áp Dụng
+              </button>
+            </div>
           </div>
+        </div>
+      )}
 
-          {/* ========================================================= */}
-          {/* CỘT PHẢI: NỘI DUNG TRUYỆN & DANH SÁCH CÁC ĐOẠN             */}
-          {/* ========================================================= */}
-          <div className="lg:col-span-8 space-y-6">
-            {/* Box Nhập / Phân Tách Nội Dung Thô (Có thể đóng mở) */}
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <FileText className="w-4 h-4 text-amber-400" />
-                  <h3 className="text-sm font-bold text-white">
-                    Nội Dung Gốc & Phân Tách Tự Động ({activeStory.paragraphs.length} đoạn)
-                  </h3>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setShowRawInput(!showRawInput)}
-                  className="flex items-center gap-1 text-xs text-amber-400 hover:text-amber-300 font-medium"
-                >
-                  <span>{showRawInput ? "Ẩn khung dán" : "Dán toàn bộ văn bản truyện"}</span>
-                  {showRawInput ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                </button>
-              </div>
-
-              {showRawInput && (
-                <div className="space-y-3 pt-2">
-                  <p className="text-xs text-slate-400 leading-relaxed">
-                    Dán toàn bộ nội dung truyện vào đây. Hệ thống sẽ{" "}
-                    <strong className="text-amber-300">tự động chia thành các đoạn dựa trên dòng trống</strong> giữa các
-                    khối chữ:
-                  </p>
-                  <textarea
-                    rows={6}
-                    value={rawText}
-                    onChange={(e) => setRawText(e.target.value)}
-                    placeholder="Dán toàn bộ nội dung truyện tại đây. Giữa các đoạn hãy để 1 dòng trống..."
-                    className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl p-3 text-xs text-slate-200 focus:outline-none font-mono leading-relaxed resize-y"
-                  />
-                  <div className="flex items-center justify-between">
-                    <span className="text-[11px] text-slate-500">
-                      Mẹo: Mỗi đoạn có thể gán cho một nhân vật hoặc người kể chuyện riêng biệt.
-                    </span>
-                    <button
-                      type="button"
-                      onClick={handleSplitFromRawText}
-                      className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold shadow-md shadow-amber-500/20 transition-all"
-                    >
-                      <Scissors className="w-3.5 h-3.5" />
-                      <span>Tự Động Phân Chia Đoạn</span>
-                    </button>
+      {/* ========================================================= */}
+      {/* 4. STICKY BOTTOM BAR: TẠO AUDIO TRUYỆN & PROGRESS BAR     */}
+      {/* (Requirement 4: Sticky cố định ở đáy trang kèm Progress Bar) */}
+      {/* ========================================================= */}
+      {activeStory && (
+        <div
+          role="region"
+          aria-label="Thanh điều khiển tiến độ và tạo audio truyện"
+          className="fixed bottom-0 left-0 right-0 z-40 bg-slate-950/95 backdrop-blur-xl border-t border-slate-800 shadow-[0_-12px_40px_rgba(0,0,0,0.85)]"
+        >
+          <div className="max-w-[1680px] mx-auto px-3 sm:px-6 py-3">
+            <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3 sm:gap-4">
+              {/* VÙNG TRÁI: Thông tin truyện & nhân vật */}
+              <div className="flex items-center justify-between lg:justify-start gap-3 shrink-0">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-amber-500/15 text-amber-400 border border-amber-500/25 flex items-center justify-center shrink-0">
+                    <BookOpen className="w-4 h-4" />
+                  </div>
+                  <div className="leading-tight">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold text-white truncate max-w-[160px] sm:max-w-[220px]">
+                        {activeStory.title}
+                      </span>
+                      <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">
+                        {activeStory.paragraphs.length} đoạn
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 text-[11px] text-slate-400 mt-0.5">
+                      <span>{activeStory.characters.length} nhân vật</span>
+                      <span>·</span>
+                      <span>Khoảng nghỉ: {activeStory.gapMs || 300}ms</span>
+                    </div>
                   </div>
                 </div>
-              )}
-            </div>
-
-            {/* Danh Sách Các Đoạn Truyện */}
-            <div className="space-y-3">
-              <div className="flex items-center justify-between px-1">
-                <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">
-                  Danh Sách Đoạn Truyện ({activeStory.paragraphs.length})
-                </h4>
-                <button
-                  type="button"
-                  onClick={() => handleAddParagraphAfter(activeStory.paragraphs.length - 1)}
-                  className="flex items-center gap-1 text-xs text-amber-400 hover:text-amber-300 font-semibold"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>Thêm đoạn cuối</span>
-                </button>
               </div>
 
-              <div className="space-y-3">
-                {activeStory.paragraphs.map((p, idx) => {
-                  const assignedChar =
-                    activeStory.characters.find((c) => c.id === p.characterId) || activeStory.characters[0];
-                  const colorConfig = getColorConfig(assignedChar?.color);
-                  const isPreviewing = previewingParagraphId === p.id;
-                  const isGenerating = p.status === "generating";
-                  const isCompleted = p.status === "completed";
-
-                  return (
-                    <div
-                      key={p.id}
-                      className={`bg-slate-900 border rounded-2xl p-4 transition-all shadow-md space-y-3 ${
-                        isGenerating
-                          ? "border-amber-500/60 ring-2 ring-amber-500/20 bg-amber-500/5"
-                          : "border-slate-800 hover:border-slate-700"
-                      }`}
-                    >
-                      {/* Top Bar of Paragraph: Index, Character Menu, Status, and Controls */}
-                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800/80 pb-2.5">
-                        <div className="flex items-center gap-2">
-                          <span className="w-6 h-6 rounded-lg bg-slate-800 text-slate-300 font-mono text-xs font-bold flex items-center justify-center">
-                            #{p.index}
-                          </span>
-
-                          {/* Menu chọn Nhân Vật gán cho đoạn này (Requirement 2) */}
-                          <div className="relative">
-                            <select
-                              value={p.characterId}
-                              onChange={(e) => handleParagraphCharChange(p.id, e.target.value)}
-                              className={`text-xs font-bold rounded-lg px-2.5 py-1 pr-6 border focus:outline-none appearance-none cursor-pointer transition-all ${colorConfig.bg} ${colorConfig.text} ${colorConfig.border}`}
-                              title="Chọn nhân vật đọc đoạn này"
-                            >
-                              {activeStory.characters.map((c) => {
-                                const voice = voices.find((v) => v.modelId === c.voiceId);
-                                return (
-                                  <option key={c.id} value={c.id} className="bg-slate-900 text-white">
-                                    👤 {c.name} ({voice ? voice.name : c.voiceId.replace(/^local:/, "")})
-                                  </option>
-                                );
-                              })}
-                            </select>
-                            <ChevronDown
-                              className={`w-3 h-3 absolute right-1.5 top-1/2 -translate-y-1/2 pointer-events-none ${colorConfig.text}`}
-                            />
-                          </div>
-
-                          {/* Status Badge */}
-                          {isGenerating && (
-                            <span className="flex items-center gap-1 text-[11px] text-amber-400 font-semibold animate-pulse">
-                              <RefreshCw className="w-3 h-3 animate-spin" />
-                              Đang đọc...
-                            </span>
-                          )}
-                          {isCompleted && (
-                            <span className="flex items-center gap-1 text-[11px] text-emerald-400 font-semibold">
-                              <CheckCircle2 className="w-3 h-3" />
-                              {p.duration ? `${p.duration}s` : "Đã xong"}
-                            </span>
-                          )}
-                        </div>
-
-                        {/* Paragraph Tool Actions: Preview, Split, Merge, Move, Delete */}
-                        <div className="flex items-center gap-1 text-slate-400">
-                          {/* Preview paragraph */}
-                          <button
-                            type="button"
-                            onClick={() => handlePreviewParagraph(p)}
-                            disabled={isPreviewing || isGenerating}
-                            className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium transition-all ${
-                              isPreviewing
-                                ? "bg-amber-500 text-slate-950 font-bold"
-                                : "bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white"
-                            }`}
-                            title="Nghe thử riêng đoạn này"
-                          >
-                            <Volume2 className="w-3.5 h-3.5 text-amber-400" />
-                            <span>{isPreviewing ? "Đang phát..." : "Nghe thử"}</span>
-                          </button>
-
-                          {/* Split */}
-                          <button
-                            type="button"
-                            onClick={() => handleSplitParagraph(idx)}
-                            className="p-1.5 rounded-lg hover:bg-slate-800 hover:text-white transition-colors"
-                            title="Tách đoạn này thành 2 đoạn"
-                          >
-                            <Split className="w-3.5 h-3.5" />
-                          </button>
-
-                          {/* Merge next */}
-                          {idx < activeStory.paragraphs.length - 1 && (
-                            <button
-                              type="button"
-                              onClick={() => handleMergeNext(idx)}
-                              className="p-1.5 rounded-lg hover:bg-slate-800 hover:text-white transition-colors"
-                              title="Gộp với đoạn kế tiếp"
-                            >
-                              <Merge className="w-3.5 h-3.5" />
-                            </button>
-                          )}
-
-                          {/* Move Up */}
-                          <button
-                            type="button"
-                            disabled={idx === 0}
-                            onClick={() => handleMoveParagraph(idx, "up")}
-                            className="p-1.5 rounded-lg hover:bg-slate-800 hover:text-white disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
-                            title="Di chuyển lên"
-                          >
-                            <ArrowUp className="w-3.5 h-3.5" />
-                          </button>
-
-                          {/* Move Down */}
-                          <button
-                            type="button"
-                            disabled={idx === activeStory.paragraphs.length - 1}
-                            onClick={() => handleMoveParagraph(idx, "down")}
-                            className="p-1.5 rounded-lg hover:bg-slate-800 hover:text-white disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
-                            title="Di chuyển xuống"
-                          >
-                            <ArrowDown className="w-3.5 h-3.5" />
-                          </button>
-
-                          {/* Add after */}
-                          <button
-                            type="button"
-                            onClick={() => handleAddParagraphAfter(idx)}
-                            className="p-1.5 rounded-lg hover:bg-slate-800 hover:text-amber-400 transition-colors"
-                            title="Chèn thêm đoạn ngay sau đoạn này"
-                          >
-                            <Plus className="w-3.5 h-3.5" />
-                          </button>
-
-                          {/* Delete */}
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteParagraph(idx)}
-                            className="p-1.5 rounded-lg hover:bg-rose-950/60 hover:text-rose-400 transition-colors"
-                            title="Xóa đoạn này"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Paragraph Textarea */}
-                      <textarea
-                        rows={3}
-                        value={p.text}
-                        onChange={(e) => handleParagraphTextChange(p.id, e.target.value)}
-                        className="w-full bg-slate-950/60 border border-slate-800 focus:border-amber-500 rounded-xl p-3 text-xs sm:text-sm text-slate-200 focus:outline-none leading-relaxed resize-y font-normal"
-                        placeholder="Nhập nội dung cho đoạn truyện..."
+              {/* VÙNG GIỮA: PROGRESS BAR THỜI GIAN THỰC NHƯ TAB PHỤ ĐỀ */}
+              <div className="flex-1 max-w-2xl px-1 sm:px-4">
+                {activeStory.status === "running" && activeStory.progress ? (
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between text-xs font-semibold">
+                      <span className="text-amber-400 flex items-center gap-1.5 animate-pulse">
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        <span>
+                          Đang tạo đoạn #{activeStory.progress.currentParagraphIndex || 1} /{" "}
+                          {activeStory.progress.total}...
+                        </span>
+                      </span>
+                      <span className="font-mono text-white text-xs">
+                        {activeStory.progress.percent}%
+                      </span>
+                    </div>
+                    <div className="w-full h-2.5 bg-slate-800 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500 transition-all duration-300"
+                        style={{ width: `${activeStory.progress.percent}%` }}
                       />
                     </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* ========================================================= */}
-            {/* KHUNG TẠO AUDIO TRUYỆN & TIẾN TRÌNH & MASTER PLAYER      */}
-            {/* ========================================================= */}
-            <div className="bg-gradient-to-br from-slate-900 via-slate-900 to-slate-950 border border-slate-800 rounded-2xl p-5 sm:p-6 shadow-2xl space-y-5">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                <div>
-                  <h3 className="text-base font-bold text-white flex items-center gap-2">
-                    <Sparkles className="w-5 h-5 text-amber-400" />
-                    <span>Tạo Toàn Bộ Audio Truyện</span>
-                  </h3>
-                  <p className="text-xs text-slate-400 mt-0.5">
-                    Đọc tuần tự từng đoạn bằng giọng của nhân vật tương ứng và tự động ghép nối thành 1 file Master duy nhất.
-                  </p>
-                </div>
-
-                {/* NÚT TẠO AUDIO TRUYỆN (Requirement: Nút Tạo Audio Truyện) */}
-                <button
-                  type="button"
-                  onClick={handleGenerateAudio}
-                  disabled={activeStory.status === "running"}
-                  className={`flex items-center justify-center gap-2 px-6 py-3 rounded-xl font-bold text-sm shadow-xl transition-all ${
-                    activeStory.status === "running"
-                      ? "bg-slate-800 text-slate-400 cursor-not-allowed border border-slate-700"
-                      : "bg-gradient-to-r from-amber-500 via-orange-500 to-rose-600 hover:from-amber-400 hover:to-rose-500 text-slate-950 shadow-amber-500/25 active:scale-98"
-                  }`}
-                >
-                  {activeStory.status === "running" ? (
-                    <>
-                      <RefreshCw className="w-4 h-4 animate-spin" />
-                      <span>Đang Tạo Audio...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Play className="w-4 h-4 fill-current" />
-                      <span>Tạo Audio Truyện</span>
-                    </>
-                  )}
-                </button>
-              </div>
-
-              {/* Progress Bar during generation */}
-              {activeStory.status === "running" && activeStory.progress && (
-                <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-2.5">
-                  <div className="flex items-center justify-between text-xs font-semibold">
-                    <span className="text-amber-400 flex items-center gap-1.5">
-                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                      Đang xử lý đoạn #{activeStory.progress.currentParagraphIndex || 1} / {activeStory.progress.total}...
-                    </span>
-                    <span className="text-white font-mono">{activeStory.progress.percent}%</span>
                   </div>
-                  <div className="w-full h-2.5 bg-slate-800 rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-gradient-to-r from-amber-500 to-rose-500 transition-all duration-300"
-                      style={{ width: `${activeStory.progress.percent}%` }}
-                    />
-                  </div>
-                </div>
-              )}
-
-              {/* MASTER AUDIO PLAYER & DOWNLOAD SECTION */}
-              {activeStory.masterAudio && (
-                <div className="bg-slate-950/80 border border-amber-500/30 rounded-xl p-4 sm:p-5 space-y-4">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                    <div className="flex items-center gap-3">
-                      <button
-                        type="button"
-                        onClick={handleToggleMasterPlay}
-                        className="w-12 h-12 rounded-full bg-amber-500 hover:bg-amber-400 text-slate-950 flex items-center justify-center shadow-lg shadow-amber-500/30 transition-transform active:scale-95"
-                        title={isPlayingMaster ? "Tạm dừng" : "Nghe thử Master Audio"}
-                      >
-                        {isPlayingMaster ? (
-                          <Pause className="w-5 h-5 fill-current" />
-                        ) : (
-                          <Play className="w-5 h-5 fill-current ml-0.5" />
-                        )}
-                      </button>
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <h4 className="text-sm font-bold text-white">Master Audio Hoàn Chỉnh</h4>
-                          <span className="text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-                            {activeStory.masterAudio.format.toUpperCase()}
-                          </span>
-                        </div>
-                        <p className="text-xs text-slate-400 mt-0.5">
-                          Thời lượng: {formatTime(activeStory.masterAudio.duration)} · Kích thước:{" "}
-                          {(activeStory.masterAudio.sizeBytes / (1024 * 1024)).toFixed(2)} MB
-                        </p>
-                      </div>
-                    </div>
-
-                    {/* Download Buttons */}
-                    <div className="flex items-center gap-2">
-                      <a
-                        href={`/api/stories/${activeStory.id}/master-audio?format=mp3&download=1`}
-                        download={`story-${activeStory.id}.mp3`}
-                        className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-bold text-white transition-all shadow-sm"
-                        title="Tải xuống định dạng MP3"
-                      >
-                        <Download className="w-3.5 h-3.5 text-amber-400" />
-                        <span>Tải MP3</span>
-                      </a>
-                      <a
-                        href={`/api/stories/${activeStory.id}/master-audio?format=wav&download=1`}
-                        download={`story-${activeStory.id}.wav`}
-                        className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-bold text-white transition-all shadow-sm"
-                        title="Tải xuống định dạng WAV chất lượng gốc"
-                      >
-                        <Download className="w-3.5 h-3.5 text-amber-400" />
-                        <span>Tải WAV</span>
-                      </a>
-                    </div>
-                  </div>
-
-                  {/* Audio scrubber timeline */}
+                ) : activeStory.masterAudio ? (
+                  /* Master Player Mini Timeline Seeker when ready */
                   <div className="space-y-1">
+                    <div className="flex items-center justify-between text-[11px]">
+                      <span className="text-emerald-400 font-semibold flex items-center gap-1">
+                        <CheckCircle2 className="w-3 h-3" />
+                        <span>Master Audio sẵn sàng ({formatTime(activeStory.masterAudio.duration)})</span>
+                      </span>
+                      <span className="font-mono text-slate-400">
+                        {formatTime(masterCurrentTime)} / {formatTime(activeStory.masterAudio.duration)}
+                      </span>
+                    </div>
                     <input
                       type="range"
                       min="0"
@@ -1367,35 +1513,102 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
                       step="0.1"
                       value={masterCurrentTime}
                       onChange={handleMasterSeek}
-                      className="w-full accent-amber-500 cursor-pointer h-2 bg-slate-800 rounded-lg"
+                      className="w-full accent-amber-500 cursor-pointer h-1.5 bg-slate-800 rounded-lg"
                     />
-                    <div className="flex justify-between text-[11px] font-mono text-slate-400">
-                      <span>{formatTime(masterCurrentTime)}</span>
-                      <span>{formatTime(masterDuration || activeStory.masterAudio.duration)}</span>
-                    </div>
                   </div>
+                ) : (
+                  /* Idle status */
+                  <div className="flex items-center justify-center text-xs text-slate-400">
+                    <span>
+                      Nhấn nút <strong className="text-amber-300 font-semibold">“Tạo Audio Truyện”</strong> để bắt đầu ghép toàn bộ các đoạn.
+                    </span>
+                  </div>
+                )}
+              </div>
 
-                  {/* HTML5 Audio Element for Master */}
-                  <audio
-                    ref={masterAudioRef}
-                    src={activeStory.masterAudio.url}
-                    onTimeUpdate={() => {
-                      if (masterAudioRef.current) {
-                        setMasterCurrentTime(masterAudioRef.current.currentTime);
-                      }
-                    }}
-                    onLoadedMetadata={() => {
-                      if (masterAudioRef.current) {
-                        setMasterDuration(masterAudioRef.current.duration);
-                      }
-                    }}
-                    onEnded={() => setIsPlayingMaster(false)}
-                    className="hidden"
-                  />
-                </div>
-              )}
+              {/* VÙNG PHẢI: PLAY MASTER, DOWNLOAD & NÚT TẠO CHÍNH */}
+              <div className="flex items-center justify-end gap-2 shrink-0">
+                {activeStory.masterAudio && (
+                  <>
+                    {/* Play/Pause Master Audio */}
+                    <button
+                      type="button"
+                      onClick={handleToggleMasterPlay}
+                      className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm border border-slate-700"
+                      title={isPlayingMaster ? "Tạm dừng master audio" : "Phát master audio hoàn chỉnh"}
+                    >
+                      {isPlayingMaster ? (
+                        <>
+                          <Pause className="w-3.5 h-3.5 fill-current text-amber-400" />
+                          <span>Dừng</span>
+                        </>
+                      ) : (
+                        <>
+                          <Play className="w-3.5 h-3.5 fill-current text-emerald-400" />
+                          <span>Nghe Master</span>
+                        </>
+                      )}
+                    </button>
+
+                    {/* Download Master */}
+                    <a
+                      href={`/api/stories/${activeStory.id}/master-audio?format=mp3&download=1`}
+                      download={`story-${activeStory.id}.mp3`}
+                      className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-xl text-xs font-medium transition-all border border-slate-700"
+                      title="Tải tệp Master MP3"
+                    >
+                      <Download className="w-3.5 h-3.5 text-amber-400" />
+                    </a>
+                  </>
+                )}
+
+                {/* NÚT TẠO TOÀN BỘ AUDIO TRUYỆN (Requirement 4) */}
+                <button
+                  type="button"
+                  disabled={activeStory.status === "running" || activeStory.paragraphs.length === 0}
+                  onClick={handleGenerateAudio}
+                  className="px-5 sm:px-6 py-2.5 bg-gradient-to-r from-amber-500 via-orange-500 to-rose-600 hover:from-amber-400 hover:to-rose-500 active:scale-95 text-slate-950 font-black rounded-xl text-xs sm:text-sm flex items-center gap-2 shadow-xl shadow-amber-500/25 disabled:opacity-40 disabled:cursor-not-allowed transition-all cursor-pointer"
+                >
+                  {activeStory.status === "running" ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>Đang Xử Lý...</span>
+                    </>
+                  ) : activeStory.masterAudio ? (
+                    <>
+                      <RotateCcw className="w-4 h-4" />
+                      <span>Chạy Lại Audio</span>
+                    </>
+                  ) : (
+                    <>
+                      <Play className="w-4 h-4 fill-current ml-0.5" />
+                      <span>Tạo Audio Truyện</span>
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
           </div>
+
+          {/* Hidden Audio Player for Master */}
+          {activeStory.masterAudio && (
+            <audio
+              ref={masterAudioRef}
+              src={activeStory.masterAudio.url}
+              onTimeUpdate={() => {
+                if (masterAudioRef.current) {
+                  setMasterCurrentTime(masterAudioRef.current.currentTime);
+                }
+              }}
+              onLoadedMetadata={() => {
+                if (masterAudioRef.current) {
+                  setMasterDuration(masterAudioRef.current.duration);
+                }
+              }}
+              onEnded={() => setIsPlayingMaster(false)}
+              className="hidden"
+            />
+          )}
         </div>
       )}
     </div>
