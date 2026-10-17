@@ -85,6 +85,8 @@ import {
   SAMPLE_DIALOGUE_SRT,
   SAMPLE_TEST_50_SRT,
 } from "./utils/sampleData";
+import StorytellingTab from "./components/StorytellingTab";
+import AudioCleanupModal from "./components/AudioCleanupModal";
 
 export interface ProjectPreset {
   id: string;
@@ -140,10 +142,11 @@ interface VoiceOption {
 }
 
 export default function App() {
-  // Navigation: 'subtitles' (Phụ đề Timeline) | 'single' (Đọc văn bản đơn)
-  const [activeTab, setActiveTab] = useState<"subtitles" | "single">(
+  // Navigation: 'subtitles' (Phụ đề Timeline) | 'single' (Đọc văn bản đơn) | 'story' (Kể Truyện)
+  const [activeTab, setActiveTab] = useState<"subtitles" | "single" | "story">(
     "subtitles",
   );
+  const [showAudioCleanupModal, setShowAudioCleanupModal] = useState<boolean>(false);
 
   // Voices
   const [voices, setVoices] = useState<VoiceOption[]>([]);
@@ -1559,7 +1562,7 @@ export default function App() {
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {/* Mode Tabs */}
             <div className="flex items-center p-1 bg-slate-950/80 rounded-xl border border-slate-800 text-xs">
               <button
@@ -1584,7 +1587,30 @@ export default function App() {
               >
                 Đọc Đoạn Văn Nhanh
               </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab("story")}
+                className={`px-3 py-1.5 rounded-lg font-medium transition-all flex items-center gap-1.5 ${
+                  activeTab === "story"
+                    ? "bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/20"
+                    : "text-slate-400 hover:text-white"
+                }`}
+              >
+                <BookOpen className="w-3.5 h-3.5" />
+                <span>Kể Truyện</span>
+              </button>
             </div>
+
+            {/* Nút Dọn Dẹp Audio nổi bật trên Header (Requirement: Nút Dọn Dẹp Audio trên giao diện) */}
+            <button
+              type="button"
+              onClick={() => setShowAudioCleanupModal(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-rose-300 hover:text-rose-100 bg-rose-950/50 hover:bg-rose-900/70 rounded-xl transition-all border border-rose-800/80 shadow-sm"
+              title="Dọn dẹp toàn bộ file audio TTS tạm thời trong hệ thống"
+            >
+              <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+              <span>Dọn Dẹp Audio</span>
+            </button>
 
             <button
               onClick={() => setShowApiModal(true)}
@@ -3604,6 +3630,16 @@ export default function App() {
             </div>
           </div>
         )}
+
+        {/* ========================================================= */}
+        {/* TAB 3: STORYTELLING TTS (KỂ TRUYỆN ĐA NHÂN VẬT)           */}
+        {/* ========================================================= */}
+        {activeTab === "story" && (
+          <StorytellingTab
+            voices={voices}
+            onOpenCleanupModal={() => setShowAudioCleanupModal(true)}
+          />
+        )}
       </main>
 
       {/* ========================================================= */}
@@ -5037,6 +5073,25 @@ const { audio, sampleRate } = await tts.synthesize("Xin chào! Đây là Piper T
           </div>
         </div>
       )}
+
+      {/* Audio Cleanup Modal (Requirement: Dọn Dẹp Audio) */}
+      <AudioCleanupModal
+        isOpen={showAudioCleanupModal}
+        onClose={() => setShowAudioCleanupModal(false)}
+        onCleaned={() => {
+          if (activeJob) {
+            setActiveJob((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    masterAudio: undefined,
+                    items: prev.items.map((i) => ({ ...i, audioUrl: undefined })),
+                  }
+                : null,
+            );
+          }
+        }}
+      />
     </div>
   );
 }

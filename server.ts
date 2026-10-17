@@ -203,6 +203,11 @@ if (!fs.existsSync(JOBS_DIR)) {
   fs.mkdirSync(JOBS_DIR, { recursive: true });
 }
 
+const STORIES_DIR = path.resolve(__dirname, "stories_storage");
+if (!fs.existsSync(STORIES_DIR)) {
+  fs.mkdirSync(STORIES_DIR, { recursive: true });
+}
+
 // In-memory cache for Piper Native TTS instances
 const modelCache = new Map<string, any>();
 const loadingPromises = new Map<string, Promise<any>>();
@@ -605,6 +610,447 @@ interface TimelineJob {
 
 const jobs = new Map<string, TimelineJob>();
 const sseClients = new Map<string, Set<Response>>();
+
+// -------------------------------------------------------------
+// STORYTELLING TYPES & STATE
+// -------------------------------------------------------------
+export interface StoryCharacter {
+  id: string;
+  name: string;
+  voiceId: string;
+  speed: number;
+  color?: string;
+}
+
+export interface StoryParagraph {
+  id: string;
+  index: number;
+  characterId: string;
+  text: string;
+  audioUrl?: string;
+  duration?: number;
+  status: "pending" | "generating" | "completed" | "failed";
+  error?: string;
+}
+
+export interface StoryJob {
+  id: string;
+  title: string;
+  rawContent?: string;
+  paragraphs: StoryParagraph[];
+  characters: StoryCharacter[];
+  gapMs: number;
+  outputFormat: "mp3" | "wav";
+  status: "idle" | "running" | "completed" | "failed";
+  progress: {
+    total: number;
+    completed: number;
+    percent: number;
+    currentParagraphIndex?: number;
+  };
+  masterAudio?: {
+    url: string;
+    downloadUrl: string;
+    duration: number;
+    format: "mp3" | "wav";
+    sizeBytes: number;
+  };
+  logs: LogEntry[];
+  error?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+const storyJobs = new Map<string, StoryJob>();
+const storySseClients = new Map<string, Set<Response>>();
+
+function broadcastStoryEvent(jobId: string, eventName: string, data: any) {
+  const clients = storySseClients.get(jobId);
+  if (!clients || clients.size === 0) return;
+  const payload = `event: ${eventName}\ndata: ${JSON.stringify(data)}\n\n`;
+  for (const res of clients) {
+    try {
+      res.write(payload);
+    } catch {
+      clients.delete(res);
+    }
+  }
+}
+
+function addStoryLog(
+  job: StoryJob,
+  level: "INFO" | "SUCCESS" | "WARNING" | "ERROR",
+  message: string,
+) {
+  const entry: LogEntry = {
+    id: `slog_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+    timestamp: new Date().toLocaleTimeString("vi-VN"),
+    level,
+    message,
+  };
+  job.logs.push(entry);
+  broadcastStoryEvent(job.id, "log", entry);
+}
+
+function saveStoryToDisk(story: StoryJob) {
+  try {
+    if (!fs.existsSync(STORIES_DIR)) {
+      fs.mkdirSync(STORIES_DIR, { recursive: true });
+    }
+    const filePath = path.join(STORIES_DIR, `${story.id}.json`);
+    fs.writeFileSync(filePath, JSON.stringify(story, null, 2), "utf-8");
+  } catch (err) {
+    console.error(`[Story] Lỗi lưu truyện ${story.id}:`, err);
+  }
+}
+
+const DEFAULT_SAMPLE_STORY: StoryJob = {
+  id: "story_sample_rua_va_tho",
+  title: "Rùa và Thỏ (Truyện Ngụ Ngôn)",
+  rawContent: `Ngày xửa ngày xưa, trong một khu rừng xanh tươi, có một chú Thỏ vô cùng kiêu ngạo vì tài chạy nhanh của mình.
+
+Đố ai trong khu rừng này chạy nhanh bằng ta! Bác Gấu, chú Sóc hay anh Rùa chậm chạp đều không phải là đối thủ!
+
+Nghe thấy lời thách thức của Thỏ, chú Rùa chậm rãi ngẩng đầu lên và bình tĩnh đáp lại.
+
+Anh Thỏ đừng vội tự phụ. Nếu anh đồng ý, tôi và anh hãy cùng nhau thi chạy một chặng đường xem ai về đích trước nhé!
+
+Ha ha! Anh Rùa mà cũng đòi thi chạy với ta sao? Được lắm, ta sẽ cho anh thấy ai mới là quán quân của khu rừng này!
+
+Thế là cuộc đua bắt đầu. Thỏ cậy mình chạy nhanh nên vừa đi vừa hái hoa bắt bướm rồi nằm ngủ dưới gốc cây. Trong khi đó, Rùa từng bước kiên trì không hề dừng lại và đã về đích trước sự ngỡ ngàng của tất cả muôn loài.`,
+  characters: [
+    {
+      id: "char_narrator",
+      name: "Người kể chuyện",
+      voiceId: DEFAULT_MODEL,
+      speed: 1.0,
+      color: "amber",
+    },
+    {
+      id: "char_tho",
+      name: "Chú Thỏ Kiêu Ngạo",
+      voiceId: "local:doanhdoanh-vietnamese-vi-congchualong",
+      speed: 1.15,
+      color: "blue",
+    },
+    {
+      id: "char_rua",
+      name: "Chú Rùa Chăm Chỉ",
+      voiceId: "local:huyenngoc-vietnamese-vi-medium-ljkjhi",
+      speed: 0.95,
+      color: "emerald",
+    },
+  ],
+  paragraphs: [
+    {
+      id: "p_1",
+      index: 1,
+      characterId: "char_narrator",
+      text: "Ngày xửa ngày xưa, trong một khu rừng xanh tươi, có một chú Thỏ vô cùng kiêu ngạo vì tài chạy nhanh của mình.",
+      status: "pending",
+    },
+    {
+      id: "p_2",
+      index: 2,
+      characterId: "char_tho",
+      text: "Đố ai trong khu rừng này chạy nhanh bằng ta! Bác Gấu, chú Sóc hay anh Rùa chậm chạp đều không phải là đối thủ!",
+      status: "pending",
+    },
+    {
+      id: "p_3",
+      index: 3,
+      characterId: "char_narrator",
+      text: "Nghe thấy lời thách thức của Thỏ, chú Rùa chậm rãi ngẩng đầu lên và bình tĩnh đáp lại.",
+      status: "pending",
+    },
+    {
+      id: "p_4",
+      index: 4,
+      characterId: "char_rua",
+      text: "Anh Thỏ đừng vội tự phụ. Nếu anh đồng ý, tôi và anh hãy cùng nhau thi chạy một chặng đường xem ai về đích trước nhé!",
+      status: "pending",
+    },
+    {
+      id: "p_5",
+      index: 5,
+      characterId: "char_tho",
+      text: "Ha ha! Anh Rùa mà cũng đòi thi chạy với ta sao? Được lắm, ta sẽ cho anh thấy ai mới là quán quân của khu rừng này!",
+      status: "pending",
+    },
+    {
+      id: "p_6",
+      index: 6,
+      characterId: "char_narrator",
+      text: "Thế là cuộc đua bắt đầu. Thỏ cậy mình chạy nhanh nên vừa đi vừa hái hoa bắt bướm rồi nằm ngủ dưới gốc cây. Trong khi đó, Rùa từng bước kiên trì không hề dừng lại và đã về đích trước sự ngỡ ngàng của tất cả muôn loài.",
+      status: "pending",
+    },
+  ],
+  gapMs: 300,
+  outputFormat: "mp3",
+  status: "idle",
+  progress: {
+    total: 6,
+    completed: 0,
+    percent: 0,
+  },
+  logs: [],
+  createdAt: new Date().toISOString(),
+  updatedAt: new Date().toISOString(),
+};
+
+function loadAllStoriesFromDisk() {
+  try {
+    if (!fs.existsSync(STORIES_DIR)) {
+      fs.mkdirSync(STORIES_DIR, { recursive: true });
+    }
+    const files = fs.readdirSync(STORIES_DIR);
+    for (const f of files) {
+      if (f.endsWith(".json")) {
+        const fullPath = path.join(STORIES_DIR, f);
+        try {
+          const content = fs.readFileSync(fullPath, "utf-8");
+          const story: StoryJob = JSON.parse(content);
+          if (story && story.id) {
+            const storyDir = path.join(STORIES_DIR, story.id);
+            const masterWav = path.join(storyDir, "master.wav");
+            const masterMp3 = path.join(storyDir, "master.mp3");
+            if (fs.existsSync(masterMp3)) {
+              const stat = fs.statSync(masterMp3);
+              story.masterAudio = {
+                url: `/api/stories/${story.id}/master-audio?format=mp3`,
+                downloadUrl: `/api/stories/${story.id}/master-audio?format=mp3&download=1`,
+                duration: story.masterAudio?.duration || getAudioDuration(masterMp3) || 0,
+                format: "mp3",
+                sizeBytes: stat.size,
+              };
+            } else if (fs.existsSync(masterWav)) {
+              const stat = fs.statSync(masterWav);
+              story.masterAudio = {
+                url: `/api/stories/${story.id}/master-audio?format=wav`,
+                downloadUrl: `/api/stories/${story.id}/master-audio?format=wav&download=1`,
+                duration: story.masterAudio?.duration || getAudioDuration(masterWav) || 0,
+                format: "wav",
+                sizeBytes: stat.size,
+              };
+            }
+            if (story.status === "running") {
+              story.status = "idle";
+            }
+            storyJobs.set(story.id, story);
+          }
+        } catch (e) {
+          console.error(`[Story] Lỗi phân tích file truyện ${f}:`, e);
+        }
+      }
+    }
+    if (storyJobs.size === 0) {
+      storyJobs.set(DEFAULT_SAMPLE_STORY.id, DEFAULT_SAMPLE_STORY);
+      saveStoryToDisk(DEFAULT_SAMPLE_STORY);
+    }
+    console.log(`[Story] Đã nạp ${storyJobs.size} truyện từ thư mục lưu trữ stories_storage.`);
+  } catch (err) {
+    console.error("[Story] Lỗi nạp danh sách truyện:", err);
+  }
+}
+
+async function runStoryProcessor(story: StoryJob) {
+  if (story.status === "running") return;
+  story.status = "running";
+  story.error = undefined;
+  story.progress = {
+    total: story.paragraphs.length,
+    completed: 0,
+    percent: 0,
+    currentParagraphIndex: 1,
+  };
+  broadcastStoryEvent(story.id, "story_state", story);
+  addStoryLog(
+    story,
+    "INFO",
+    `Bắt đầu tạo audio truyện: "${story.title}" (${story.paragraphs.length} đoạn)...`,
+  );
+
+  const storyDir = path.join(STORIES_DIR, story.id);
+  const paraDir = path.join(storyDir, "paragraphs");
+  if (!fs.existsSync(paraDir)) {
+    fs.mkdirSync(paraDir, { recursive: true });
+  }
+
+  const sampleRate = 22050;
+  const pcmChunks: Buffer[] = [];
+
+  try {
+    for (let i = 0; i < story.paragraphs.length; i++) {
+      const para = story.paragraphs[i];
+      story.progress.currentParagraphIndex = para.index;
+      para.status = "generating";
+      broadcastStoryEvent(story.id, "paragraph_start", {
+        index: para.index,
+        characterId: para.characterId,
+      });
+
+      const char =
+        story.characters.find((c) => c.id === para.characterId) ||
+        story.characters[0] || {
+          id: "default",
+          name: "Người kể chuyện",
+          voiceId: DEFAULT_MODEL,
+          speed: 1.0,
+        };
+
+      addStoryLog(
+        story,
+        "INFO",
+        `Đoạn #${para.index} (${char.name} - ${char.voiceId.replace(/^local:/, "")}): "${para.text.slice(0, 35)}..."`,
+      );
+
+      const tts = await getOrLoadModel(char.voiceId);
+      const cleaned = normalizeVietnameseText(para.text);
+      const espeakVoice = tts.getConfig().espeakVoice || "vi";
+      const synthesisText = applyVietnameseRPronunciation(cleaned, espeakVoice);
+
+      const speed = Math.max(0.5, Math.min(2.0, Number(char.speed) || 1.0));
+      const lengthScale = 1.0 / speed;
+
+      const synthRes = await tts.synthesize(synthesisText, {
+        outputFormat: "wav",
+        lengthScale,
+      });
+
+      const paraWavPath = path.join(paraDir, `para_${para.index}.wav`);
+      fs.writeFileSync(paraWavPath, synthRes.audio as Buffer);
+
+      const dur = getAudioDuration(paraWavPath) || 0;
+      para.duration = Number(dur.toFixed(2));
+      para.audioUrl = `/api/stories/${story.id}/paragraph-audio/${para.index}`;
+      para.status = "completed";
+
+      story.progress.completed = i + 1;
+      story.progress.percent = Math.round(
+        ((i + 1) / story.paragraphs.length) * 100,
+      );
+
+      broadcastStoryEvent(story.id, "paragraph_completed", {
+        index: para.index,
+        duration: para.duration,
+        audioUrl: para.audioUrl,
+      });
+      broadcastStoryEvent(story.id, "story_progress", story.progress);
+    }
+
+    addStoryLog(
+      story,
+      "INFO",
+      `Đang ghép nối toàn bộ ${story.paragraphs.length} đoạn thành master audio với khoảng nghỉ ${story.gapMs || 300}ms...`,
+    );
+
+    const gapMs = Math.max(0, Math.min(3000, Number(story.gapMs) || 300));
+    const gapSamples = Math.floor((gapMs / 1000) * sampleRate);
+    const gapBuffer = Buffer.alloc(gapSamples * 2, 0);
+
+    for (let i = 0; i < story.paragraphs.length; i++) {
+      const para = story.paragraphs[i];
+      const paraWavPath = path.join(paraDir, `para_${para.index}.wav`);
+      if (fs.existsSync(paraWavPath)) {
+        const fileBuf = fs.readFileSync(paraWavPath);
+        let pcmOffset = 44;
+        const dataIdx = fileBuf.indexOf("data");
+        if (dataIdx !== -1 && dataIdx + 8 <= fileBuf.length) {
+          pcmOffset = dataIdx + 8;
+        }
+        const pcmData = fileBuf.subarray(pcmOffset);
+        pcmChunks.push(pcmData);
+
+        if (i < story.paragraphs.length - 1 && gapBuffer.length > 0) {
+          pcmChunks.push(gapBuffer);
+        }
+      }
+    }
+
+    const masterPcm = Buffer.concat(pcmChunks);
+    const wavHeader = createWavHeader(masterPcm.length, sampleRate, 1, 16);
+    const fullMasterWav = Buffer.concat([wavHeader, masterPcm]);
+
+    const tempMasterWav = path.join(storyDir, "master_temp.wav");
+    const tempMasterMp3 = path.join(storyDir, "master_temp.mp3");
+    fs.writeFileSync(tempMasterWav, fullMasterWav);
+
+    const finalMasterWav = path.join(storyDir, "master.wav");
+    const finalMasterMp3 = path.join(storyDir, "master.mp3");
+
+    let mp3Created = false;
+    const ffmpegBin = resolveFfmpegPath();
+    try {
+      const res = spawnSync(
+        ffmpegBin,
+        [
+          "-y",
+          "-i",
+          tempMasterWav,
+          "-codec:a",
+          "libmp3lame",
+          "-b:a",
+          "192k",
+          tempMasterMp3,
+        ],
+        { stdio: "ignore" },
+      );
+      mp3Created =
+        res.status === 0 &&
+        fs.existsSync(tempMasterMp3) &&
+        fs.statSync(tempMasterMp3).size > 0;
+    } catch (e) {
+      console.warn("[FFmpeg] Không thể chuyển master truyện sang MP3:", e);
+    }
+
+    if (fs.existsSync(tempMasterWav)) {
+      if (fs.existsSync(finalMasterWav))
+        fs.rmSync(finalMasterWav, { force: true });
+      fs.renameSync(tempMasterWav, finalMasterWav);
+    }
+    if (mp3Created && fs.existsSync(tempMasterMp3)) {
+      if (fs.existsSync(finalMasterMp3))
+        fs.rmSync(finalMasterMp3, { force: true });
+      fs.renameSync(tempMasterMp3, finalMasterMp3);
+    }
+
+    const finalPath = mp3Created ? finalMasterMp3 : finalMasterWav;
+    const stat = fs.statSync(finalPath);
+    const totalDuration =
+      getAudioDuration(finalPath) || masterPcm.length / (sampleRate * 2);
+
+    story.masterAudio = {
+      url: `/api/stories/${story.id}/master-audio?format=${mp3Created ? "mp3" : "wav"}`,
+      downloadUrl: `/api/stories/${story.id}/master-audio?format=${mp3Created ? "mp3" : "wav"}&download=1`,
+      duration: Number(totalDuration.toFixed(2)),
+      format: mp3Created ? "mp3" : "wav",
+      sizeBytes: stat.size,
+    };
+    story.status = "completed";
+    addStoryLog(
+      story,
+      "SUCCESS",
+      `Đã tạo xong master audio thành công! Thời lượng: ${totalDuration.toFixed(2)}s (${(stat.size / (1024 * 1024)).toFixed(2)} MB).`,
+    );
+
+    saveStoryToDisk(story);
+    broadcastStoryEvent(story.id, "story_completed", story);
+  } catch (err: any) {
+    console.error(`[Story] Lỗi tạo audio truyện ${story.id}:`, err);
+    story.status = "failed";
+    story.error = err.message || "Lỗi không xác định khi tạo audio truyện.";
+    addStoryLog(story, "ERROR", `Lỗi: ${story.error}`);
+    try {
+      const tempWav = path.join(storyDir, "master_temp.wav");
+      const tempMp3 = path.join(storyDir, "master_temp.mp3");
+      if (fs.existsSync(tempWav)) fs.rmSync(tempWav, { force: true });
+      if (fs.existsSync(tempMp3)) fs.rmSync(tempMp3, { force: true });
+    } catch {}
+    saveStoryToDisk(story);
+    broadcastStoryEvent(story.id, "story_failed", { error: story.error });
+  }
+}
+
 
 function broadcastJobEvent(jobId: string, eventName: string, data: any) {
   const clients = sseClients.get(jobId);
@@ -1618,8 +2064,467 @@ app.post("/api/subtitles/cleanup-all", (req: Request, res: Response) => {
 });
 
 // -------------------------------------------------------------
-// ORIGINAL SINGLE TTS ENDPOINTS
+// AUDIO CLEANUP ENDPOINTS (Requirement: Dọn Dẹp Audio)
 // -------------------------------------------------------------
+
+// Calculate temporary audio status
+app.get("/api/audio/status", (req: Request, res: Response) => {
+  try {
+    let subtitleFiles = 0;
+    let subtitleBytes = 0;
+    if (fs.existsSync(JOBS_DIR)) {
+      const subEntries = fs.readdirSync(JOBS_DIR, { withFileTypes: true });
+      for (const entry of subEntries) {
+        const full = path.join(JOBS_DIR, entry.name);
+        if (entry.isDirectory()) {
+          const innerFiles = fs.readdirSync(full);
+          for (const inf of innerFiles) {
+            if (/\.(wav|mp3)$/i.test(inf)) {
+              subtitleFiles++;
+              subtitleBytes += fs.statSync(path.join(full, inf)).size;
+            }
+          }
+        } else if (/\.(wav|mp3)$/i.test(entry.name)) {
+          subtitleFiles++;
+          subtitleBytes += fs.statSync(full).size;
+        }
+      }
+    }
+
+    let storyParagraphFiles = 0;
+    let storyParagraphBytes = 0;
+    let storyMasterFiles = 0;
+    let storyMasterBytes = 0;
+
+    if (fs.existsSync(STORIES_DIR)) {
+      const entries = fs.readdirSync(STORIES_DIR, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isDirectory()) {
+          const sDir = path.join(STORIES_DIR, entry.name);
+          const paraDir = path.join(sDir, "paragraphs");
+          if (fs.existsSync(paraDir)) {
+            const pFiles = fs.readdirSync(paraDir);
+            for (const pf of pFiles) {
+              if (/\.(wav|mp3)$/i.test(pf)) {
+                storyParagraphFiles++;
+                storyParagraphBytes += fs.statSync(path.join(paraDir, pf)).size;
+              }
+            }
+          }
+          const masterWav = path.join(sDir, "master.wav");
+          const masterMp3 = path.join(sDir, "master.mp3");
+          if (fs.existsSync(masterWav)) {
+            storyMasterFiles++;
+            storyMasterBytes += fs.statSync(masterWav).size;
+          }
+          if (fs.existsSync(masterMp3)) {
+            storyMasterFiles++;
+            storyMasterBytes += fs.statSync(masterMp3).size;
+          }
+        }
+      }
+    }
+
+    const totalFiles = subtitleFiles + storyParagraphFiles;
+    const totalBytes = subtitleBytes + storyParagraphBytes;
+
+    res.json({
+      subtitles: {
+        files: subtitleFiles,
+        bytes: subtitleBytes,
+        mb: Number((subtitleBytes / (1024 * 1024)).toFixed(2)),
+      },
+      storyParagraphs: {
+        files: storyParagraphFiles,
+        bytes: storyParagraphBytes,
+        mb: Number((storyParagraphBytes / (1024 * 1024)).toFixed(2)),
+      },
+      storyMasters: {
+        files: storyMasterFiles,
+        bytes: storyMasterBytes,
+        mb: Number((storyMasterBytes / (1024 * 1024)).toFixed(2)),
+      },
+      total: {
+        files: totalFiles,
+        bytes: totalBytes,
+        mb: Number((totalBytes / (1024 * 1024)).toFixed(2)),
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Explicit cleanup endpoint
+app.post("/api/audio/cleanup", (req: Request, res: Response) => {
+  try {
+    const {
+      cleanSubtitles = true,
+      cleanStoryParagraphs = true,
+      cleanStoryMasters = false,
+    } = req.body || {};
+
+    let deletedFiles = 0;
+    let freedBytes = 0;
+
+    // 1. Clean subtitle intermediate files from JOBS_DIR
+    if (cleanSubtitles && fs.existsSync(JOBS_DIR)) {
+      const jobDirs = fs.readdirSync(JOBS_DIR, { withFileTypes: true });
+      for (const entry of jobDirs) {
+        const full = path.join(JOBS_DIR, entry.name);
+        if (entry.isDirectory()) {
+          const files = fs.readdirSync(full);
+          for (const f of files) {
+            if (/\.(wav|mp3|txt)$/i.test(f)) {
+              const fPath = path.join(full, f);
+              try {
+                freedBytes += fs.statSync(fPath).size;
+                fs.rmSync(fPath, { force: true });
+                deletedFiles++;
+              } catch {}
+            }
+          }
+          try {
+            if (fs.readdirSync(full).length === 0) {
+              fs.rmdirSync(full);
+            }
+          } catch {}
+        }
+      }
+      for (const job of jobs.values()) {
+        for (const item of job.items) {
+          item.audioUrl = undefined;
+          if (item.status === "completed") item.status = "pending";
+        }
+        job.masterAudio = undefined;
+      }
+    }
+
+    // 2. Clean story intermediate paragraph audio files from STORIES_DIR
+    if (cleanStoryParagraphs && fs.existsSync(STORIES_DIR)) {
+      const storyEntries = fs.readdirSync(STORIES_DIR, { withFileTypes: true });
+      for (const entry of storyEntries) {
+        if (entry.isDirectory()) {
+          const paraDir = path.join(STORIES_DIR, entry.name, "paragraphs");
+          if (fs.existsSync(paraDir)) {
+            const pFiles = fs.readdirSync(paraDir);
+            for (const pf of pFiles) {
+              if (/\.(wav|mp3)$/i.test(pf)) {
+                const pfPath = path.join(paraDir, pf);
+                try {
+                  freedBytes += fs.statSync(pfPath).size;
+                  fs.rmSync(pfPath, { force: true });
+                  deletedFiles++;
+                } catch {}
+              }
+            }
+          }
+
+          if (cleanStoryMasters) {
+            const masterWav = path.join(STORIES_DIR, entry.name, "master.wav");
+            const masterMp3 = path.join(STORIES_DIR, entry.name, "master.mp3");
+            if (fs.existsSync(masterWav)) {
+              try {
+                freedBytes += fs.statSync(masterWav).size;
+                fs.rmSync(masterWav, { force: true });
+                deletedFiles++;
+              } catch {}
+            }
+            if (fs.existsSync(masterMp3)) {
+              try {
+                freedBytes += fs.statSync(masterMp3).size;
+                fs.rmSync(masterMp3, { force: true });
+                deletedFiles++;
+              } catch {}
+            }
+          }
+        }
+      }
+
+      for (const story of storyJobs.values()) {
+        for (const p of story.paragraphs) {
+          p.audioUrl = undefined;
+          if (p.status === "completed") p.status = "pending";
+        }
+        if (cleanStoryMasters) {
+          story.masterAudio = undefined;
+        }
+        saveStoryToDisk(story);
+      }
+    }
+
+    const freedMB = (freedBytes / (1024 * 1024)).toFixed(2);
+    res.json({
+      success: true,
+      deletedFiles,
+      freedBytes,
+      freedMB: Number(freedMB),
+      message: `Đã dọn dẹp thành công ${deletedFiles} file audio tạm (${freedMB} MB).`,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// -------------------------------------------------------------
+// STORYTELLING ENDPOINTS (KỂ TRUYỆN ĐA NHÂN VẬT)
+// -------------------------------------------------------------
+
+// List all stories
+app.get("/api/stories", (req: Request, res: Response) => {
+  const list = Array.from(storyJobs.values()).map((s) => ({
+    id: s.id,
+    title: s.title,
+    charactersCount: s.characters.length,
+    paragraphsCount: s.paragraphs.length,
+    gapMs: s.gapMs,
+    status: s.status,
+    masterAudio: s.masterAudio,
+    updatedAt: s.updatedAt,
+  }));
+  res.json({ stories: list });
+});
+
+// Get story detail
+app.get("/api/stories/:storyId", (req: Request, res: Response) => {
+  const story = storyJobs.get(req.params.storyId);
+  if (!story) return res.status(404).json({ error: "Không tìm thấy truyện." });
+  res.json(story);
+});
+
+// Create or save story
+app.post("/api/stories", (req: Request, res: Response) => {
+  try {
+    const {
+      id = `story_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      title = "Truyện Mới",
+      characters = [],
+      paragraphs = [],
+      gapMs = 300,
+      outputFormat = "mp3",
+      rawContent = "",
+    } = req.body;
+
+    const existing = storyJobs.get(id);
+    const story: StoryJob = {
+      id,
+      title: title || "Truyện Mới",
+      rawContent,
+      characters:
+        characters.length > 0
+          ? characters
+          : [
+              {
+                id: "char_narrator",
+                name: "Người kể chuyện",
+                voiceId: DEFAULT_MODEL,
+                speed: 1.0,
+                color: "amber",
+              },
+              {
+                id: "char_a",
+                name: "Nhân vật A",
+                voiceId: "local:doanhdoanh-vietnamese-vi-congchualong",
+                speed: 1.0,
+                color: "blue",
+              },
+              {
+                id: "char_b",
+                name: "Nhân vật B",
+                voiceId: "local:huyenngoc-vietnamese-vi-medium-ljkjhi",
+                speed: 1.0,
+                color: "emerald",
+              },
+            ],
+      paragraphs: paragraphs.map((p: any, idx: number) => ({
+        id: p.id || `p_${idx + 1}`,
+        index: idx + 1,
+        characterId: p.characterId || (characters[0]?.id || "char_narrator"),
+        text: p.text || "",
+        status: p.status || "pending",
+        duration: p.duration,
+        audioUrl: p.audioUrl,
+      })),
+      gapMs: Number(gapMs) || 300,
+      outputFormat: outputFormat === "wav" ? "wav" : "mp3",
+      status: existing?.status === "running" ? "running" : "idle",
+      progress: existing?.progress || {
+        total: paragraphs.length,
+        completed: 0,
+        percent: 0,
+      },
+      masterAudio: existing?.masterAudio,
+      logs: existing?.logs || [],
+      createdAt: existing?.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    storyJobs.set(story.id, story);
+    saveStoryToDisk(story);
+    res.json(story);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Update story
+app.put("/api/stories/:storyId", (req: Request, res: Response) => {
+  const story = storyJobs.get(req.params.storyId);
+  if (!story) return res.status(404).json({ error: "Không tìm thấy truyện." });
+  const { title, characters, paragraphs, gapMs, outputFormat, rawContent } =
+    req.body;
+  if (title !== undefined) story.title = title;
+  if (rawContent !== undefined) story.rawContent = rawContent;
+  if (characters !== undefined) story.characters = characters;
+  if (paragraphs !== undefined) {
+    story.paragraphs = paragraphs.map((p: any, idx: number) => ({
+      ...p,
+      index: idx + 1,
+    }));
+  }
+  if (gapMs !== undefined) story.gapMs = Number(gapMs);
+  if (outputFormat !== undefined) story.outputFormat = outputFormat;
+  story.updatedAt = new Date().toISOString();
+  saveStoryToDisk(story);
+  res.json(story);
+});
+
+// Delete story
+app.delete("/api/stories/:storyId", (req: Request, res: Response) => {
+  const storyId = req.params.storyId;
+  const story = storyJobs.get(storyId);
+  if (!story) return res.status(404).json({ error: "Không tìm thấy truyện." });
+
+  try {
+    const jsonPath = path.join(STORIES_DIR, `${storyId}.json`);
+    if (fs.existsSync(jsonPath)) fs.rmSync(jsonPath, { force: true });
+    const storyDir = path.join(STORIES_DIR, storyId);
+    if (fs.existsSync(storyDir))
+      fs.rmSync(storyDir, { recursive: true, force: true });
+    storyJobs.delete(storyId);
+    storySseClients.delete(storyId);
+    res.json({ success: true, message: "Đã xóa truyện thành công." });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Start story audio generation
+app.post("/api/stories/:storyId/generate", (req: Request, res: Response) => {
+  const story = storyJobs.get(req.params.storyId);
+  if (!story) return res.status(404).json({ error: "Không tìm thấy truyện." });
+
+  if (story.status === "running") {
+    return res.json({ message: "Tiến trình tạo audio truyện đang chạy." });
+  }
+
+  runStoryProcessor(story);
+  res.json({ message: "Đã bắt đầu tạo audio truyện.", storyId: story.id });
+});
+
+// SSE events stream for story
+app.get("/api/stories/:storyId/events", (req: Request, res: Response) => {
+  const story = storyJobs.get(req.params.storyId);
+  if (!story) return res.status(404).send("Story not found");
+
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.flushHeaders?.();
+
+  if (!storySseClients.has(story.id)) {
+    storySseClients.set(story.id, new Set());
+  }
+  storySseClients.get(story.id)!.add(res);
+
+  res.write(`event: story_state\ndata: ${JSON.stringify(story)}\n\n`);
+
+  const interval = setInterval(() => {
+    res.write(": ping\n\n");
+  }, 15000);
+
+  req.on("close", () => {
+    clearInterval(interval);
+    storySseClients.get(story.id)?.delete(res);
+  });
+});
+
+// Stream master audio for story with HTTP 206 Range support
+app.get("/api/stories/:storyId/master-audio", (req: Request, res: Response) => {
+  const storyDir = path.join(STORIES_DIR, req.params.storyId);
+  const format = req.query.format === "wav" ? "wav" : "mp3";
+  const filePath =
+    format === "wav"
+      ? path.join(storyDir, "master.wav")
+      : path.join(storyDir, "master.mp3");
+
+  const fallbackPath =
+    format === "wav"
+      ? path.join(storyDir, "master.mp3")
+      : path.join(storyDir, "master.wav");
+
+  const fileToServe = fs.existsSync(filePath) ? filePath : fallbackPath;
+  if (!fs.existsSync(fileToServe)) {
+    return res.status(404).send("Master audio not found");
+  }
+
+  const isDownload = req.query.download === "1";
+  const finalExt = fileToServe.endsWith(".mp3") ? "mp3" : "wav";
+  const mimeType = finalExt === "mp3" ? "audio/mpeg" : "audio/wav";
+  const downloadName = isDownload
+    ? `story-${req.params.storyId}.${finalExt}`
+    : undefined;
+
+  streamAudioWithRange(req, res, fileToServe, mimeType, downloadName);
+});
+
+// Stream individual paragraph audio
+app.get(
+  "/api/stories/:storyId/paragraph-audio/:index",
+  (req: Request, res: Response) => {
+    const paraPath = path.join(
+      STORIES_DIR,
+      req.params.storyId,
+      "paragraphs",
+      `para_${req.params.index}.wav`,
+    );
+    if (!fs.existsSync(paraPath)) {
+      return res.status(404).send("Paragraph audio not found");
+    }
+    streamAudioWithRange(req, res, paraPath, "audio/wav");
+  },
+);
+
+// Fast preview for a single paragraph
+app.post(
+  "/api/stories/:storyId/preview-paragraph",
+  async (req: Request, res: Response) => {
+    try {
+      const { text, voiceId, speed = 1.0 } = req.body;
+      if (!text || !text.trim()) {
+        return res.status(400).json({ error: "Văn bản không được để trống." });
+      }
+      const tts = await getOrLoadModel(voiceId || DEFAULT_MODEL);
+      const cleaned = normalizeVietnameseText(text);
+      const espeakVoice = tts.getConfig().espeakVoice || "vi";
+      const synthesisText = applyVietnameseRPronunciation(cleaned, espeakVoice);
+      const numSpeed = Math.max(0.5, Math.min(2.0, Number(speed) || 1.0));
+      const lengthScale = 1.0 / numSpeed;
+
+      const synthRes = await tts.synthesize(synthesisText, {
+        outputFormat: "wav",
+        lengthScale,
+      });
+
+      res.setHeader("Content-Type", "audio/wav");
+      res.setHeader("Cache-Control", "no-cache");
+      res.send(synthRes.audio);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  },
+);
+
 
 app.get("/api/voices", (req: Request, res: Response) => {
   res.json({
@@ -1800,6 +2705,8 @@ async function startServer() {
       app.use(vite.middlewares);
     }
   }
+
+  loadAllStoriesFromDisk();
 
   const server = app.listen(PORT, () => {
     console.log(
