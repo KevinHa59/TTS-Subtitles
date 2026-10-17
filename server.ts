@@ -2525,6 +2525,59 @@ app.post(
   },
 );
 
+// Export or download SRT subtitles for story based on paragraph durations and gap
+app.get("/api/stories/:storyId/subtitles.srt", (req: Request, res: Response) => {
+  const story = storyJobs.get(req.params.storyId);
+  if (!story) return res.status(404).json({ error: "Không tìm thấy truyện." });
+
+  const withCharacter = req.query.withCharacter === "1";
+  const gapSec = (story.gapMs || 300) / 1000;
+  let currentTime = 0;
+
+  const pad = (n: number, z = 2) => String(n).padStart(z, "0");
+  const toSrtTime = (sec: number) => {
+    if (isNaN(sec) || sec < 0) sec = 0;
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = Math.floor(sec % 60);
+    const ms = Math.floor((sec % 1) * 1000);
+    return `${pad(h)}:${pad(m)}:${pad(s)},${pad(ms, 3)}`;
+  };
+
+  const srtBlocks: string[] = [];
+
+  story.paragraphs.forEach((p, idx) => {
+    const duration = p.duration || Math.max(1.0, Number((p.text.length * 0.08).toFixed(2)));
+    const startTime = currentTime;
+    const endTime = startTime + duration;
+    currentTime = endTime + gapSec;
+
+    const startStr = toSrtTime(startTime);
+    const endStr = toSrtTime(endTime);
+
+    let text = p.text;
+    if (withCharacter) {
+      const char = story.characters.find((c) => c.id === p.characterId);
+      if (char) {
+        text = `[${char.name}]: ${p.text}`;
+      }
+    }
+
+    srtBlocks.push(`${idx + 1}\n${startStr} --> ${endStr}\n${text}\n`);
+  });
+
+  const srtContent = srtBlocks.join("\n");
+  const isDownload = req.query.download === "1";
+  const filename = `story-${story.id}.srt`;
+
+  res.setHeader("Content-Type", "text/plain; charset=utf-8");
+  if (isDownload) {
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+  }
+  res.send(srtContent);
+});
+
+
 
 app.get("/api/voices", (req: Request, res: Response) => {
   res.json({

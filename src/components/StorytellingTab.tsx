@@ -31,6 +31,7 @@ import {
   Filter,
   X,
   VolumeX,
+  Copy,
 } from "lucide-react";
 import { Story, StoryCharacter, StoryParagraph } from "../types/story";
 
@@ -78,6 +79,10 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
 
   // Popup Modal: Thiết Lập Nhân Vật & Khoảng Nghỉ
   const [showCharacterModal, setShowCharacterModal] = useState(false);
+
+  // Popup Modal: Xuất Phụ Đề SRT (Requirement: tạo file phụ đề srt dựa vào thông tin mỗi đoạn)
+  const [showSrtModal, setShowSrtModal] = useState(false);
+  const [includeCharacterInSrt, setIncludeCharacterInSrt] = useState(false);
 
   // Raw Content Input Drawer for Quick Import
   const [rawText, setRawText] = useState("");
@@ -564,40 +569,153 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
     showToast(`Đã gộp đoạn #${idx + 1} và #${idx + 2} thành công!`, "info");
   };
 
-  const handleSplitParagraph = (idx: number) => {
+  // Tách văn bản theo các dấu câu (, . ! ? ; : …) trong khi giữ lại dấu câu ở cuối từng câu
+  const splitTextByPunctuation = (text: string): string[] => {
+    if (!text || !text.trim()) return [];
+    // Tách dựa trên khoảng trắng sau các dấu câu, bảo vệ các số có dấu chấm/phẩy như 5.000 hoặc 3,5
+    const regex = /(?<=(?<!\d)[,.;:?!…\u2026]["'\u201d\u2019)\]]?)\s+/;
+    const parts = text
+      .trim()
+      .split(regex)
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    return parts.length > 0 ? parts : [text.trim()];
+  };
+
+  // Tách toàn bộ đoạn bởi dấu câu (Requirement: Tách toàn bộ đoạn bởi dấu câu)
+  const handleSplitParagraphByPunctuation = (idx: number) => {
     if (!activeStory) return;
     const current = activeStory.paragraphs[idx];
-    const text = current.text.trim();
-    if (text.length < 10) {
-      showToast("Đoạn quá ngắn để tách.", "error");
+    const sentences = splitTextByPunctuation(current.text);
+
+    if (sentences.length <= 1) {
+      showToast("Đoạn này không chứa dấu câu phù hợp để tách thêm.", "info");
       return;
     }
 
-    const splitMatch = text.slice(Math.floor(text.length * 0.3)).search(/[.?!]\s+/);
-    let splitPos = -1;
-    if (splitMatch !== -1) {
-      splitPos = Math.floor(text.length * 0.3) + splitMatch + 1;
-    } else {
-      splitPos = Math.floor(text.length / 2);
-    }
-
-    const part1 = text.slice(0, splitPos).trim();
-    const part2 = text.slice(splitPos).trim();
-
-    const para1: StoryParagraph = { ...current, text: part1, status: "pending", audioUrl: undefined };
-    const para2: StoryParagraph = {
-      id: `p_${Date.now()}_split`,
-      index: idx + 2,
+    const newParagraphs: StoryParagraph[] = sentences.map((sentence, sIdx) => ({
+      id: sIdx === 0 ? current.id : `p_${Date.now()}_${sIdx}`,
+      index: 0,
       characterId: current.characterId,
-      text: part2,
+      text: sentence,
       status: "pending",
-    };
+    }));
 
     const updated = [...activeStory.paragraphs];
-    updated.splice(idx, 1, para1, para2);
+    updated.splice(idx, 1, ...newParagraphs);
     const reindexed = updated.map((p, i) => ({ ...p, index: i + 1 }));
-    setActiveStory({ ...activeStory, paragraphs: reindexed });
-    showToast(`Đã tách đoạn #${idx + 1} thành 2 đoạn!`, "info");
+
+    setActiveStory({
+      ...activeStory,
+      paragraphs: reindexed,
+      status: "idle",
+      masterAudio: undefined,
+    });
+
+    showToast(`Đã tách đoạn #${idx + 1} thành ${sentences.length} câu theo dấu câu!`, "success");
+  };
+
+  // Tách toàn bộ tất cả các đoạn trong truyện theo dấu câu
+  const handleSplitAllParagraphsByPunctuation = () => {
+    if (!activeStory) return;
+    const countBefore = activeStory.paragraphs.length;
+    let anySplit = false;
+    const resultParagraphs: StoryParagraph[] = [];
+
+    activeStory.paragraphs.forEach((p) => {
+      const sentences = splitTextByPunctuation(p.text);
+      if (sentences.length > 1) anySplit = true;
+      sentences.forEach((sentence, sIdx) => {
+        resultParagraphs.push({
+          id: sIdx === 0 ? p.id : `p_${Date.now()}_${resultParagraphs.length + 1}`,
+          index: resultParagraphs.length + 1,
+          characterId: p.characterId,
+          text: sentence,
+          status: "pending",
+        });
+      });
+    });
+
+    if (!anySplit) {
+      showToast("Tất cả các đoạn đều đã là câu đơn hoặc không có dấu câu phù hợp.", "info");
+      return;
+    }
+
+    setActiveStory({
+      ...activeStory,
+      paragraphs: resultParagraphs,
+      status: "idle",
+      masterAudio: undefined,
+    });
+
+    showToast(
+      `Đã phân tách từ ${countBefore} đoạn thành ${resultParagraphs.length} câu dựa trên dấu câu!`,
+      "success",
+    );
+  };
+
+  // Định dạng timestamp chuẩn SRT: "00:01:23,456"
+  const toSrtTimestamp = (sec: number): string => {
+    if (isNaN(sec) || sec < 0) sec = 0;
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = Math.floor(sec % 60);
+    const ms = Math.floor((sec % 1) * 1000);
+    const pad = (n: number, z = 2) => String(n).padStart(z, "0");
+    return `${pad(h)}:${pad(m)}:${pad(s)},${pad(ms, 3)}`;
+  };
+
+  // Tạo nội dung phụ đề SRT dựa vào thông tin mỗi đoạn (Requirement: tạo file phụ đề srt)
+  const generateStorySrt = (withChar = includeCharacterInSrt): string => {
+    if (!activeStory) return "";
+    const gapSec = (activeStory.gapMs || 300) / 1000;
+    let currentTime = 0;
+    const blocks: string[] = [];
+
+    activeStory.paragraphs.forEach((p, idx) => {
+      const duration = p.duration || Math.max(1.0, Number((p.text.length * 0.08).toFixed(2)));
+      const startTime = currentTime;
+      const endTime = startTime + duration;
+      currentTime = endTime + gapSec;
+
+      const startStr = toSrtTimestamp(startTime);
+      const endStr = toSrtTimestamp(endTime);
+
+      let text = p.text;
+      if (withChar) {
+        const char = activeStory.characters.find((c) => c.id === p.characterId);
+        if (char) {
+          text = `[${char.name}]: ${p.text}`;
+        }
+      }
+
+      blocks.push(`${idx + 1}\n${startStr} --> ${endStr}\n${text}\n`);
+    });
+
+    return blocks.join("\n");
+  };
+
+  const handleDownloadSrt = () => {
+    if (!activeStory) return;
+    const srtContent = generateStorySrt(includeCharacterInSrt);
+    const blob = new Blob([srtContent], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `story-${activeStory.id}.srt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showToast("Đã tải tệp phụ đề .SRT thành công!", "success");
+  };
+
+  const handleCopySrt = () => {
+    const srtContent = generateStorySrt(includeCharacterInSrt);
+    navigator.clipboard.writeText(srtContent).then(() => {
+      showToast("Đã sao chép toàn bộ nội dung phụ đề SRT vào bộ nhớ tạm!", "success");
+    });
   };
 
   const handleBulkAssign = (charId: string) => {
@@ -930,12 +1048,34 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
               </div>
             </div>
 
-            {/* Right actions: Add Paragraph & Counts */}
-            <div className="flex items-center gap-3 shrink-0 justify-between md:justify-end">
+            {/* Right actions: Add Paragraph, Split All & Counts */}
+            <div className="flex flex-wrap items-center gap-2.5 shrink-0 justify-between md:justify-end">
               <span className="text-xs text-slate-400">
                 Hiển thị: <strong className="text-amber-400 font-mono">{filteredParagraphs.length}</strong> /{" "}
                 <span className="font-mono">{activeStory.paragraphs.length}</span> đoạn
               </span>
+
+              {activeStory.masterAudio && (
+                <button
+                  type="button"
+                  onClick={() => setShowSrtModal(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 text-xs font-bold transition-all shadow-sm"
+                  title="Tạo và xuất file phụ đề .SRT theo timeline của các đoạn truyện"
+                >
+                  <FileText className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Xuất Phụ Đề SRT</span>
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={handleSplitAllParagraphsByPunctuation}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs text-slate-300 hover:text-amber-300 font-medium transition-all shadow-sm"
+                title="Tự động phân tách toàn bộ các đoạn trong truyện thành từng câu dựa theo dấu câu"
+              >
+                <Scissors className="w-3.5 h-3.5 text-amber-400" />
+                <span>Tách Tất Cả Theo Dấu Câu</span>
+              </button>
 
               <button
                 type="button"
@@ -1100,14 +1240,14 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
                                 </span>
                               </button>
 
-                              {/* Split */}
+                              {/* Tách toàn bộ đoạn bởi dấu câu (Requirement: Tách toàn bộ đoạn bởi dấu câu) */}
                               <button
                                 type="button"
-                                onClick={() => handleSplitParagraph(actualIdx)}
-                                className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
-                                title="Tách đoạn này thành 2 đoạn"
+                                onClick={() => handleSplitParagraphByPunctuation(actualIdx)}
+                                className="p-1.5 rounded-lg hover:bg-amber-500/20 text-slate-400 hover:text-amber-300 transition-colors"
+                                title="Tách toàn bộ đoạn này theo dấu câu (, . ! ? ; :)"
                               >
-                                <Split className="w-3.5 h-3.5" />
+                                <Scissors className="w-3.5 h-3.5" />
                               </button>
 
                               {/* Merge next */}
@@ -1559,6 +1699,17 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
                     >
                       <Download className="w-3.5 h-3.5 text-amber-400" />
                     </a>
+
+                    {/* Nút Tạo Phụ Đề SRT khi hoàn thành tạo audio */}
+                    <button
+                      type="button"
+                      onClick={() => setShowSrtModal(true)}
+                      className="px-3.5 py-2 bg-gradient-to-r from-amber-500/20 via-orange-500/20 to-rose-500/20 hover:from-amber-500/30 hover:to-rose-500/30 text-amber-300 hover:text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm border border-amber-500/40"
+                      title="Tạo và xuất file phụ đề .SRT chuẩn thời gian"
+                    >
+                      <FileText className="w-3.5 h-3.5 text-amber-400" />
+                      <span>Tạo Phụ Đề SRT</span>
+                    </button>
                   </>
                 )}
 
@@ -1609,6 +1760,112 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
               className="hidden"
             />
           )}
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* POPUP / MODAL: XUẤT PHỤ ĐỀ SRT THEO ĐOẠN TRUYỆN           */}
+      {/* (Requirement: khi hoàn thành tạo audio, thêm chức năng     */}
+      {/* có thể tạo file phụ đề srt dựa vào thông tin mỗi đoạn)   */}
+      {/* ========================================================= */}
+      {showSrtModal && activeStory && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-slate-950/80 backdrop-blur-md animate-fadeIn">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-3xl w-full max-h-[90vh] flex flex-col shadow-2xl overflow-hidden relative text-slate-200">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-slate-950/60">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20 flex items-center justify-center">
+                  <FileText className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white flex items-center gap-2">
+                    <span>Tạo & Xuất Phụ Đề SRT</span>
+                    <span className="text-[11px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-medium">
+                      Khớp Timeline Audio
+                    </span>
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    Phụ đề được tính tự động dựa trên thời lượng thực tế của từng đoạn thoại và khoảng nghỉ ({activeStory.gapMs || 300}ms)
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowSrtModal(false)}
+                className="p-1.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6 overflow-y-auto space-y-5 flex-1">
+              {/* Option: Include character name */}
+              <div className="bg-slate-950 border border-slate-800 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                <div>
+                  <h4 className="text-xs font-bold text-white flex items-center gap-2">
+                    <span>Hiển thị tên nhân vật trong phụ đề</span>
+                  </h4>
+                  <p className="text-[11px] text-slate-400 mt-0.5">
+                    Ví dụ: [Người kể chuyện]: Ngày xửa ngày xưa...
+                  </p>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={includeCharacterInSrt}
+                    onChange={(e) => setIncludeCharacterInSrt(e.target.checked)}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-500"></div>
+                </label>
+              </div>
+
+              {/* Live SRT Preview */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-xs text-slate-400">
+                  <span className="font-semibold text-slate-300">
+                    Xem trước nội dung file SRT ({activeStory.paragraphs.length} câu / đoạn):
+                  </span>
+                  <span className="font-mono text-[11px] text-amber-400">
+                    Tổng: {activeStory.paragraphs.length} cues
+                  </span>
+                </div>
+                <textarea
+                  readOnly
+                  rows={10}
+                  value={generateStorySrt(includeCharacterInSrt)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-slate-300 font-mono leading-relaxed resize-none focus:outline-none select-all"
+                  placeholder="Đang tạo file phụ đề..."
+                />
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-6 py-4 border-t border-slate-800 bg-slate-950/60">
+              <span className="text-[11px] text-slate-400 order-2 sm:order-1">
+                Tương thích tiêu chuẩn với VLC, Premiere, CapCut, YouTube và Tab Đồng Bộ Phụ Đề.
+              </span>
+              <div className="flex items-center gap-2 w-full sm:w-auto justify-end order-1 sm:order-2">
+                <button
+                  type="button"
+                  onClick={handleCopySrt}
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-semibold text-slate-200 transition-colors"
+                >
+                  <Copy className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Sao Chép</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDownloadSrt}
+                  className="flex items-center gap-1.5 px-5 py-2 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 text-xs font-bold shadow-lg shadow-amber-500/20 transition-all"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Tải File .SRT</span>
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>
