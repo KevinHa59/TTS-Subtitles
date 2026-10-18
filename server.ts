@@ -639,6 +639,7 @@ export interface StoryParagraph {
   index: number;
   characterId: string;
   text: string;
+  pauseBefore?: number;
   audioUrl?: string;
   duration?: number;
   status: "pending" | "generating" | "completed" | "failed";
@@ -961,12 +962,30 @@ async function runStoryProcessor(story: StoryJob) {
       `Đang ghép nối toàn bộ ${story.paragraphs.length} đoạn thành master audio với khoảng nghỉ ${story.gapMs || 300}ms...`,
     );
 
-    const gapMs = Math.max(0, Math.min(3000, Number(story.gapMs) || 300));
-    const gapSamples = Math.floor((gapMs / 1000) * sampleRate);
-    const gapBuffer = Buffer.alloc(gapSamples * 2, 0);
+    const defaultGapMs = Math.max(0, Math.min(30000, Number(story.gapMs) || 300));
+    const defaultGapSec = defaultGapMs / 1000;
 
     for (let i = 0; i < story.paragraphs.length; i++) {
       const para = story.paragraphs[i];
+      const hasCustomPause =
+        para.pauseBefore !== undefined &&
+        para.pauseBefore !== null &&
+        (typeof para.pauseBefore === "number" ||
+          (typeof para.pauseBefore === "string" && (para.pauseBefore as string).trim() !== "")) &&
+        !isNaN(Number(para.pauseBefore));
+
+      const pauseSec = hasCustomPause
+        ? Math.max(0, Math.min(120, Number(para.pauseBefore)))
+        : (i === 0 ? 0 : defaultGapSec);
+
+      if (pauseSec > 0) {
+        const pauseSamples = Math.floor(pauseSec * sampleRate);
+        if (pauseSamples > 0) {
+          const silenceBuffer = Buffer.alloc(pauseSamples * 2, 0);
+          pcmChunks.push(silenceBuffer);
+        }
+      }
+
       const paraWavPath = path.join(paraDir, `para_${para.index}.wav`);
       if (fs.existsSync(paraWavPath)) {
         const fileBuf = fs.readFileSync(paraWavPath);
@@ -977,10 +996,6 @@ async function runStoryProcessor(story: StoryJob) {
         }
         const pcmData = fileBuf.subarray(pcmOffset);
         pcmChunks.push(pcmData);
-
-        if (i < story.paragraphs.length - 1 && gapBuffer.length > 0) {
-          pcmChunks.push(gapBuffer);
-        }
       }
     }
 
@@ -2360,6 +2375,14 @@ app.post("/api/stories", (req: Request, res: Response) => {
         index: idx + 1,
         characterId: p.characterId || (characters[0]?.id || "char_narrator"),
         text: p.text || "",
+        pauseBefore:
+          p.pauseBefore !== undefined &&
+          p.pauseBefore !== null &&
+          (typeof p.pauseBefore === "number" ||
+            (typeof p.pauseBefore === "string" && (p.pauseBefore as string).trim() !== "")) &&
+          !isNaN(Number(p.pauseBefore))
+            ? Number(p.pauseBefore)
+            : undefined,
         status: p.status || "pending",
         duration: p.duration,
         audioUrl: p.audioUrl,
@@ -2399,6 +2422,14 @@ app.put("/api/stories/:storyId", (req: Request, res: Response) => {
     story.paragraphs = paragraphs.map((p: any, idx: number) => ({
       ...p,
       index: idx + 1,
+      pauseBefore:
+        p.pauseBefore !== undefined &&
+        p.pauseBefore !== null &&
+        (typeof p.pauseBefore === "number" ||
+          (typeof p.pauseBefore === "string" && (p.pauseBefore as string).trim() !== "")) &&
+        !isNaN(Number(p.pauseBefore))
+          ? Number(p.pauseBefore)
+          : undefined,
     }));
   }
   if (gapMs !== undefined) story.gapMs = Number(gapMs);
@@ -2555,7 +2586,7 @@ app.get("/api/stories/:storyId/subtitles.srt", (req: Request, res: Response) => 
   if (!story) return res.status(404).json({ error: "Không tìm thấy truyện." });
 
   const withCharacter = req.query.withCharacter === "1";
-  const gapSec = (story.gapMs || 300) / 1000;
+  const defaultGapSec = (story.gapMs || 300) / 1000;
   let currentTime = 0;
 
   const pad = (n: number, z = 2) => String(n).padStart(z, "0");
@@ -2571,10 +2602,23 @@ app.get("/api/stories/:storyId/subtitles.srt", (req: Request, res: Response) => 
   const srtBlocks: string[] = [];
 
   story.paragraphs.forEach((p, idx) => {
+    const hasCustomPause =
+      p.pauseBefore !== undefined &&
+      p.pauseBefore !== null &&
+      (typeof p.pauseBefore === "number" ||
+        (typeof p.pauseBefore === "string" && (p.pauseBefore as string).trim() !== "")) &&
+      !isNaN(Number(p.pauseBefore));
+
+    const pauseSec = hasCustomPause
+      ? Math.max(0, Number(p.pauseBefore))
+      : (idx === 0 ? 0 : defaultGapSec);
+
+    currentTime += pauseSec;
+
     const duration = p.duration || Math.max(1.0, Number((p.text.length * 0.08).toFixed(2)));
     const startTime = currentTime;
     const endTime = startTime + duration;
-    currentTime = endTime + gapSec;
+    currentTime = endTime;
 
     const startStr = toSrtTime(startTime);
     const endStr = toSrtTime(endTime);

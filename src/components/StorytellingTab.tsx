@@ -530,6 +530,21 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
     });
   };
 
+  const handleParagraphPauseChange = (id: string, value: string) => {
+    if (!activeStory) return;
+    const trimmed = value.trim();
+    const num = trimmed === "" ? undefined : parseFloat(trimmed);
+    const validNum = num !== undefined && !isNaN(num) ? Math.max(0, Math.min(120, num)) : undefined;
+
+    setActiveStory({
+      ...activeStory,
+      paragraphs: activeStory.paragraphs.map((p) =>
+        p.id === id ? { ...p, pauseBefore: validNum } : p
+      ),
+      masterAudio: undefined,
+    });
+  };
+
   const handleAddParagraphAfter = (idx: number) => {
     if (!activeStory) return;
     const defaultCharId = activeStory.characters[0]?.id || "char_default";
@@ -538,6 +553,7 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
       index: idx + 2,
       characterId: defaultCharId,
       text: "Nhập nội dung cho đoạn mới...",
+      pauseBefore: undefined,
       status: "pending",
     };
     const updated = [...activeStory.paragraphs];
@@ -577,7 +593,13 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
     const mergedText = `${current.text} ${next.text}`;
 
     const updated = [...activeStory.paragraphs];
-    updated[idx] = { ...current, text: mergedText, status: "pending", audioUrl: undefined };
+    updated[idx] = {
+      ...current,
+      text: mergedText,
+      pauseBefore: current.pauseBefore,
+      status: "pending",
+      audioUrl: undefined,
+    };
     updated.splice(idx + 1, 1);
     const reindexed = updated.map((p, i) => ({ ...p, index: i + 1 }));
     setActiveStory({ ...activeStory, paragraphs: reindexed });
@@ -614,6 +636,7 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
       index: 0,
       characterId: current.characterId,
       text: sentence,
+      pauseBefore: sIdx === 0 ? current.pauseBefore : undefined,
       status: "pending",
     }));
 
@@ -647,6 +670,7 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
           index: resultParagraphs.length + 1,
           characterId: p.characterId,
           text: sentence,
+          pauseBefore: sIdx === 0 ? p.pauseBefore : undefined,
           status: "pending",
         });
       });
@@ -684,15 +708,30 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
   // Tạo nội dung phụ đề SRT dựa vào thông tin mỗi đoạn (Requirement: tạo file phụ đề srt)
   const generateStorySrt = (withChar = includeCharacterInSrt): string => {
     if (!activeStory) return "";
-    const gapSec = (activeStory.gapMs || 300) / 1000;
+    const defaultGapSec = (activeStory.gapMs || 300) / 1000;
     let currentTime = 0;
     const blocks: string[] = [];
 
     activeStory.paragraphs.forEach((p, idx) => {
+      const hasCustomPause =
+        p.pauseBefore !== undefined &&
+        p.pauseBefore !== null &&
+        (typeof p.pauseBefore === "number" ||
+          (typeof p.pauseBefore === "string" && (p.pauseBefore as string).trim() !== "")) &&
+        !isNaN(Number(p.pauseBefore));
+
+      const pauseSec = hasCustomPause
+        ? Math.max(0, Number(p.pauseBefore))
+        : idx === 0
+          ? 0
+          : defaultGapSec;
+
+      currentTime += pauseSec;
+
       const duration = p.duration || Math.max(1.0, Number((p.text.length * 0.08).toFixed(2)));
       const startTime = currentTime;
       const endTime = startTime + duration;
-      currentTime = endTime + gapSec;
+      currentTime = endTime;
 
       const startStr = toSrtTimestamp(startTime);
       const endStr = toSrtTimestamp(endTime);
@@ -1120,7 +1159,13 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
                     <th scope="col" className="py-3 px-4 min-w-[320px]">
                       Nội Dung Đoạn Văn
                     </th>
-                    <th scope="col" className="py-3 px-3 w-32 text-center">
+                    <th scope="col" className="py-3 px-3 w-32 text-center" title="Thời gian đợi/nghỉ (giây) trước khi bắt đầu đọc đoạn này">
+                      <div className="flex items-center justify-center gap-1">
+                        <Clock className="w-3.5 h-3.5 text-amber-400" />
+                        <span>Đợi Trước (s)</span>
+                      </div>
+                    </th>
+                    <th scope="col" className="py-3 px-3 w-28 text-center">
                       Thời Lượng
                     </th>
                     <th scope="col" className="py-3 px-3 w-48 text-right">
@@ -1131,7 +1176,7 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
                 <tbody className="divide-y divide-slate-800/60">
                   {filteredParagraphs.length === 0 ? (
                     <tr>
-                      <td colSpan={5} className="py-12 text-center text-slate-500">
+                      <td colSpan={6} className="py-12 text-center text-slate-500">
                         Không tìm thấy đoạn văn nào phù hợp.
                       </td>
                     </tr>
@@ -1208,6 +1253,35 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
                                   {p.text.trim().split(/\s+/).filter(Boolean).length} từ · {p.text.length} ký tự
                                 </span>
                               </div>
+                            </div>
+                          </td>
+
+                          {/* Wait Time / Pause Before Column */}
+                          <td className="py-3 px-3 text-center align-top">
+                            <div className="flex flex-col items-center justify-center gap-1 pt-1">
+                              <div className="relative inline-flex items-center">
+                                <input
+                                  type="number"
+                                  min="0"
+                                  max="120"
+                                  step="0.5"
+                                  value={
+                                    p.pauseBefore !== undefined && p.pauseBefore !== null
+                                      ? p.pauseBefore
+                                      : ""
+                                  }
+                                  onChange={(e) => handleParagraphPauseChange(p.id, e.target.value)}
+                                  placeholder={`${((activeStory.gapMs || 300) / 1000).toFixed(1)}`}
+                                  className="w-16 bg-slate-950/80 border border-slate-800 focus:border-amber-500 rounded-xl px-2 py-1.5 text-xs text-center font-mono font-bold text-amber-300 focus:outline-none placeholder:text-slate-600 transition-colors"
+                                  title={`Thời gian đợi (giây) trước đoạn này. Để trống sẽ dùng mặc định (${((activeStory.gapMs || 300) / 1000).toFixed(1)}s)`}
+                                />
+                                <span className="ml-1 text-[11px] font-mono text-slate-500">s</span>
+                              </div>
+                              <span className="text-[10px] text-slate-500 font-mono">
+                                {p.pauseBefore !== undefined && p.pauseBefore !== null
+                                  ? `${p.pauseBefore}s tùy chỉnh`
+                                  : `Mặc định (${((activeStory.gapMs || 300) / 1000).toFixed(1)}s)`}
+                              </span>
                             </div>
                           </td>
 
