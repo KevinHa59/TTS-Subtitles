@@ -2,6 +2,7 @@ export interface StoryCharacter {
   id: string;
   name: string;
   voiceId: string;
+  speakerId?: number;
   speed: number;
   color?: string;
   description?: string;

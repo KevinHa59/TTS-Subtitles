@@ -437,8 +437,19 @@ function normalizeVietnameseText(
     .trim();
 }
 
-function applyVietnameseRPronunciation(text: string, espeakVoice: string): string {
-  if (!/^vi(?:[-_]|$)/i.test(espeakVoice)) return text;
+function applyVietnameseRPronunciation(
+  text: string,
+  modelId: string,
+  espeakVoice: string,
+): string {
+  const normalizedModelId = modelId.replace(/^(?:local:|hub:)/i, "");
+  if (
+    !/^hoaimy-vietnamese-vi-/i.test(normalizedModelId) ||
+    !/^vi(?:[-_]|$)/i.test(espeakVoice)
+  ) {
+    return text;
+  }
+
   return text.replace(
     /(^|[^\p{L}\p{N}\[])r(?=[\p{L}])/giu,
     "$1\uE000",
@@ -618,6 +629,7 @@ export interface StoryCharacter {
   id: string;
   name: string;
   voiceId: string;
+  speakerId?: number;
   speed: number;
   color?: string;
 }
@@ -907,7 +919,11 @@ async function runStoryProcessor(story: StoryJob) {
       const tts = await getOrLoadModel(char.voiceId);
       const cleaned = normalizeVietnameseText(para.text);
       const espeakVoice = tts.getConfig().espeakVoice || "vi";
-      const synthesisText = applyVietnameseRPronunciation(cleaned, espeakVoice);
+      const synthesisText = applyVietnameseRPronunciation(
+        cleaned,
+        char.voiceId,
+        espeakVoice,
+      );
 
       const speed = Math.max(0.5, Math.min(2.0, Number(char.speed) || 1.0));
       const lengthScale = 1.0 / speed;
@@ -915,6 +931,7 @@ async function runStoryProcessor(story: StoryJob) {
       const synthRes = await tts.synthesize(synthesisText, {
         outputFormat: "wav",
         lengthScale,
+        speakerId: char.speakerId,
       });
 
       const paraWavPath = path.join(paraDir, `para_${para.index}.wav`);
@@ -1402,6 +1419,7 @@ async function runJobProcessor(job: TimelineJob) {
             });
             const synthesisText = applyVietnameseRPronunciation(
               cleanedText,
+              job.model,
               tts.getConfig().espeakVoice,
             );
             const synthRes = await tts.synthesize(synthesisText, {
@@ -1782,6 +1800,7 @@ app.post(
       });
       const synthesisText = applyVietnameseRPronunciation(
         cleanedText,
+        job.model,
         tts.getConfig().espeakVoice,
       );
       const synthRes = await tts.synthesize(synthesisText, {
@@ -2500,20 +2519,25 @@ app.post(
   "/api/stories/:storyId/preview-paragraph",
   async (req: Request, res: Response) => {
     try {
-      const { text, voiceId, speed = 1.0 } = req.body;
+      const { text, voiceId, speakerId, speed = 1.0 } = req.body;
       if (!text || !text.trim()) {
         return res.status(400).json({ error: "Văn bản không được để trống." });
       }
       const tts = await getOrLoadModel(voiceId || DEFAULT_MODEL);
       const cleaned = normalizeVietnameseText(text);
       const espeakVoice = tts.getConfig().espeakVoice || "vi";
-      const synthesisText = applyVietnameseRPronunciation(cleaned, espeakVoice);
+      const synthesisText = applyVietnameseRPronunciation(
+        cleaned,
+        voiceId || DEFAULT_MODEL,
+        espeakVoice,
+      );
       const numSpeed = Math.max(0.5, Math.min(2.0, Number(speed) || 1.0));
       const lengthScale = 1.0 / numSpeed;
 
       const synthRes = await tts.synthesize(synthesisText, {
         outputFormat: "wav",
         lengthScale,
+        speakerId,
       });
 
       res.setHeader("Content-Type", "audio/wav");
@@ -2629,6 +2653,7 @@ app.post("/api/tts", async (req: Request, res: Response) => {
     const tts = await getOrLoadModel(model);
     const synthesisText = applyVietnameseRPronunciation(
       cleanedText,
+      model,
       tts.getConfig().espeakVoice,
     );
 
@@ -2701,6 +2726,7 @@ app.post("/api/tts/download", async (req: Request, res: Response) => {
     });
     const synthesisText = applyVietnameseRPronunciation(
       cleanedText,
+      model,
       tts.getConfig().espeakVoice,
     );
     const synthResult = await tts.synthesize(synthesisText, {

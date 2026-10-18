@@ -1,0 +1,465 @@
+{
+  "id": "story_sample_rua_va_tho",
+  "title": "Rùa và Thỏ (Truyện Ngụ Ngôn)",
+  "rawContent": "Ngày xửa ngày xưa, trong một khu rừng xanh tươi, có một chú Thỏ vô cùng kiêu ngạo vì tài chạy nhanh của mình.\n\nĐố ai trong khu rừng này chạy nhanh bằng ta! Bác Gấu, chú Sóc hay anh Rùa chậm chạp đều không phải là đối thủ!\n\nNghe thấy lời thách thức của Thỏ, chú Rùa chậm rãi ngẩng đầu lên và bình tĩnh đáp lại.\n\nAnh Thỏ đừng vội tự phụ. Nếu anh đồng ý, tôi và anh hãy cùng nhau thi chạy một chặng đường xem ai về đích trước nhé!\n\nHa ha! Anh Rùa mà cũng đòi thi chạy với ta sao? Được lắm, ta sẽ cho anh thấy ai mới là quán quân của khu rừng này!\n\nThế là cuộc đua bắt đầu. Thỏ cậy mình chạy nhanh nên vừa đi vừa hái hoa bắt bướm rồi nằm ngủ dưới gốc cây. Trong khi đó, Rùa từng bước kiên trì không hề dừng lại và đã về đích trước sự ngỡ ngàng của tất cả muôn loài.",
+  "characters": [
+    {
+      "id": "char_narrator",
+      "name": "Người kể chuyện",
+      "voiceId": "local:ngoc-ngan-vietnamese-vi-medium",
+      "speed": 1,
+      "color": "amber"
+    },
+    {
+      "id": "char_tho",
+      "name": "Chú Thỏ Kiêu Ngạo",
+      "voiceId": "local:duy-onyx-vietnamese-vi-medium",
+      "speed": 1,
+      "color": "blue"
+    },
+    {
+      "id": "char_rua",
+      "name": "Chú Rùa Chăm Chỉ",
+      "voiceId": "local:viet-thao-vietnamese-vi-medium",
+      "speed": 1.1,
+      "color": "emerald"
+    }
+  ],
+  "paragraphs": [
+    {
+      "id": "p_1",
+      "index": 1,
+      "characterId": "char_narrator",
+      "text": "Ngày xửa ngày xưa, trong một khu rừng xanh tươi, có một chú Thỏ vô cùng kiêu ngạo vì tài chạy nhanh của mình.",
+      "status": "pending",
+      "duration": 6.94
+    },
+    {
+      "id": "p_2",
+      "index": 2,
+      "characterId": "char_tho",
+      "text": "Đố ai trong khu rừng này chạy nhanh bằng ta! Bác Gấu, chú Sóc hay anh Rùa chậm chạp đều không phải là đối thủ!",
+      "status": "pending",
+      "duration": 5.9
+    },
+    {
+      "id": "p_3",
+      "index": 3,
+      "characterId": "char_narrator",
+      "text": "Nghe thấy lời thách thức của Thỏ, chú Rùa chậm rãi ngẩng đầu lên và bình tĩnh đáp lại.",
+      "status": "pending",
+      "duration": 4.74
+    },
+    {
+      "id": "p_1792260311889_2",
+      "index": 4,
+      "characterId": "char_tho",
+      "text": "Anh Thỏ đừng vội tự phụ.",
+      "status": "pending",
+      "duration": 1.54
+    },
+    {
+      "id": "p_1792258697264_10",
+      "index": 5,
+      "characterId": "char_rua",
+      "text": "Nếu anh đồng ý, tôi và anh hãy cùng nhau thi chạy một chặng đường xem ai về đích trước nhé!",
+      "status": "pending",
+      "duration": 4.42
+    },
+    {
+      "id": "p_1792258377197_1",
+      "index": 6,
+      "characterId": "char_tho",
+      "text": "Anh Rùa mà cũng đòi thi chạy với ta sao? Được lắm, ta sẽ cho anh thấy ai mới là quán quân của khu rừng này!",
+      "status": "pending",
+      "duration": 5.83
+    },
+    {
+      "id": "p_6",
+      "index": 7,
+      "characterId": "char_narrator",
+      "text": "Thế là cuộc đua bắt đầu. Thỏ cậy mình chạy nhanh nên vừa đi vừa hái hoa bắt bướm rồi nằm ngủ dưới gốc cây. Trong khi đó, Rùa từng bước kiên trì không hề dừng lại và đã về đích trước sự ngỡ ngàng của tất cả muôn loài.",
+      "status": "pending",
+      "duration": 12.36
+    }
+  ],
+  "gapMs": 300,
+  "outputFormat": "mp3",
+  "status": "completed",
+  "progress": {
+    "total": 7,
+    "completed": 7,
+    "percent": 100,
+    "currentParagraphIndex": 7
+  },
+  "logs": [
+    {
+      "id": "slog_1792255821404_8a56",
+      "timestamp": "12:50:21",
+      "level": "INFO",
+      "message": "Bắt đầu tạo audio truyện: \"Rùa và Thỏ (Truyện Ngụ Ngôn)\" (6 đoạn)..."
+    },
+    {
+      "id": "slog_1792255821414_i2hj",
+      "timestamp": "12:50:21",
+      "level": "INFO",
+      "message": "Đoạn #1 (Người kể chuyện - ngoc-ngan-vietnamese-vi-medium): \"Ngày xửa ngày xưa, trong một khu rừ...\""
+    },
+    {
+      "id": "slog_1792255828155_gcvf",
+      "timestamp": "12:50:28",
+      "level": "INFO",
+      "message": "Đoạn #2 (Chú Thỏ Kiêu Ngạo - doanhdoanh-vietnamese-vi-congchualong): \"Đố ai trong khu rừng này chạy nhanh...\""
+    },
+    {
+      "id": "slog_1792255836050_6crg",
+      "timestamp": "12:50:36",
+      "level": "INFO",
+      "message": "Đoạn #3 (Người kể chuyện - ngoc-ngan-vietnamese-vi-medium): \"Nghe thấy lời thách thức của Thỏ, c...\""
+    },
+    {
+      "id": "slog_1792255838498_8zof",
+      "timestamp": "12:50:38",
+      "level": "INFO",
+      "message": "Đoạn #4 (Chú Rùa Chăm Chỉ - huyenngoc-vietnamese-vi-medium-ljkjhi): \"Anh Thỏ đừng vội tự phụ. Nếu anh đồ...\""
+    },
+    {
+      "id": "slog_1792255845898_ay36",
+      "timestamp": "12:50:45",
+      "level": "INFO",
+      "message": "Đoạn #5 (Chú Thỏ Kiêu Ngạo - doanhdoanh-vietnamese-vi-congchualong): \"Ha ha! Anh Rùa mà cũng đòi thi chạy...\""
+    },
+    {
+      "id": "slog_1792255849272_b60m",
+      "timestamp": "12:50:49",
+      "level": "INFO",
+      "message": "Đoạn #6 (Người kể chuyện - ngoc-ngan-vietnamese-vi-medium): \"Thế là cuộc đua bắt đầu. Thỏ cậy mì...\""
+    },
+    {
+      "id": "slog_1792255853426_b35w",
+      "timestamp": "12:50:53",
+      "level": "INFO",
+      "message": "Đang ghép nối toàn bộ 6 đoạn thành master audio với khoảng nghỉ 300ms..."
+    },
+    {
+      "id": "slog_1792255855346_tsr0",
+      "timestamp": "12:50:55",
+      "level": "SUCCESS",
+      "message": "Đã tạo xong master audio thành công! Thời lượng: 42.89s (0.82 MB)."
+    },
+    {
+      "id": "slog_1792258393107_m1qg",
+      "timestamp": "13:33:13",
+      "level": "INFO",
+      "message": "Bắt đầu tạo audio truyện: \"Rùa và Thỏ (Truyện Ngụ Ngôn)\" (18 đoạn)..."
+    },
+    {
+      "id": "slog_1792258393114_7qy5",
+      "timestamp": "13:33:13",
+      "level": "INFO",
+      "message": "Đoạn #1 (Người kể chuyện - ngoc-ngan-vietnamese-vi-medium): \"Ngày xửa ngày xưa,...\""
+    },
+    {
+      "id": "slog_1792258396928_plfc",
+      "timestamp": "13:33:16",
+      "level": "INFO",
+      "message": "Đoạn #2 (Người kể chuyện - ngoc-ngan-vietnamese-vi-medium): \"trong một khu rừng xanh tươi,...\""
+    },
+    {
+      "id": "slog_1792258397576_535e",
+      "timestamp": "13:33:17",
+      "level": "INFO",
+      "message": "Đoạn #3 (Người kể chuyện - ngoc-ngan-vietnamese-vi-medium): \"có một chú Thỏ vô cùng kiêu ngạo vì...\""
+    },
+    {
+      "id": "slog_1792258398485_0sic",
+      "timestamp": "13:33:18",
+      "level": "INFO",
+      "message": "Đoạn #4 (Chú Thỏ Kiêu Ngạo - doanhdoanh-vietnamese-vi-congchualong): \"Đố ai trong khu rừng này chạy nhanh...\""
+    },
+    {
+      "id": "slog_1792258403383_rdw0",
+      "timestamp": "13:33:23",
+      "level": "INFO",
+      "message": "Đoạn #5 (Chú Thỏ Kiêu Ngạo - doanhdoanh-vietnamese-vi-congchualong): \"Bác Gấu,...\""
+    },
+    {
+      "id": "slog_1792258403773_vpj4",
+      "timestamp": "13:33:23",
+      "level": "INFO",
+      "message": "Đoạn #6 (Chú Thỏ Kiêu Ngạo - doanhdoanh-vietnamese-vi-congchualong): \"chú Sóc hay anh Rùa chậm chạp đều k...\""
+    },
+    {
+      "id": "slog_1792258404617_103r",
+      "timestamp": "13:33:24",
+      "level": "INFO",
+      "message": "Đoạn #7 (Người kể chuyện - ngoc-ngan-vietnamese-vi-medium): \"Nghe thấy lời thách thức của Thỏ,...\""
+    },
+    {
+      "id": "slog_1792258405715_ddy2",
+      "timestamp": "13:33:25",
+      "level": "INFO",
+      "message": "Đoạn #8 (Người kể chuyện - ngoc-ngan-vietnamese-vi-medium): \"chú Rùa chậm rãi ngẩng đầu lên và b...\""
+    },
+    {
+      "id": "slog_1792258406983_fn94",
+      "timestamp": "13:33:26",
+      "level": "INFO",
+      "message": "Đoạn #9 (Chú Rùa Chăm Chỉ - huyenngoc-vietnamese-vi-medium-ljkjhi): \"Anh Thỏ đừng vội tự phụ....\""
+    },
+    {
+      "id": "slog_1792258411667_1pbv",
+      "timestamp": "13:33:31",
+      "level": "INFO",
+      "message": "Đoạn #10 (Chú Rùa Chăm Chỉ - huyenngoc-vietnamese-vi-medium-ljkjhi): \"Nếu anh đồng ý,...\""
+    },
+    {
+      "id": "slog_1792258412180_24wy",
+      "timestamp": "13:33:32",
+      "level": "INFO",
+      "message": "Đoạn #11 (Chú Rùa Chăm Chỉ - huyenngoc-vietnamese-vi-medium-ljkjhi): \"tôi và anh hãy cùng nhau thi chạy m...\""
+    },
+    {
+      "id": "slog_1792258413092_8hgf",
+      "timestamp": "13:33:33",
+      "level": "INFO",
+      "message": "Đoạn #12 (Chú Thỏ Kiêu Ngạo - doanhdoanh-vietnamese-vi-congchualong): \"Anh Rùa mà cũng đòi thi chạy với ta...\""
+    },
+    {
+      "id": "slog_1792258414493_le26",
+      "timestamp": "13:33:34",
+      "level": "INFO",
+      "message": "Đoạn #13 (Chú Thỏ Kiêu Ngạo - doanhdoanh-vietnamese-vi-congchualong): \"Được lắm,...\""
+    },
+    {
+      "id": "slog_1792258415187_dyxe",
+      "timestamp": "13:33:35",
+      "level": "INFO",
+      "message": "Đoạn #14 (Chú Thỏ Kiêu Ngạo - doanhdoanh-vietnamese-vi-congchualong): \"ta sẽ cho anh thấy ai mới là quán q...\""
+    },
+    {
+      "id": "slog_1792258416026_9oj5",
+      "timestamp": "13:33:36",
+      "level": "INFO",
+      "message": "Đoạn #15 (Người kể chuyện - ngoc-ngan-vietnamese-vi-medium): \"Thế là cuộc đua bắt đầu....\""
+    },
+    {
+      "id": "slog_1792258417119_otf4",
+      "timestamp": "13:33:37",
+      "level": "INFO",
+      "message": "Đoạn #16 (Người kể chuyện - ngoc-ngan-vietnamese-vi-medium): \"Thỏ cậy mình chạy nhanh nên vừa đi ...\""
+    },
+    {
+      "id": "slog_1792258418649_agq0",
+      "timestamp": "13:33:38",
+      "level": "INFO",
+      "message": "Đoạn #17 (Người kể chuyện - ngoc-ngan-vietnamese-vi-medium): \"Trong khi đó,...\""
+    },
+    {
+      "id": "slog_1792258419149_7yq5",
+      "timestamp": "13:33:39",
+      "level": "INFO",
+      "message": "Đoạn #18 (Người kể chuyện - ngoc-ngan-vietnamese-vi-medium): \"Rùa từng bước kiên trì không hề dừn...\""
+    },
+    {
+      "id": "slog_1792258420354_ekcq",
+      "timestamp": "13:33:40",
+      "level": "INFO",
+      "message": "Đang ghép nối toàn bộ 18 đoạn thành master audio với khoảng nghỉ 300ms..."
+    },
+    {
+      "id": "slog_1792258420959_beww",
+      "timestamp": "13:33:40",
+      "level": "SUCCESS",
+      "message": "Đã tạo xong master audio thành công! Thời lượng: 46.42s (0.89 MB)."
+    },
+    {
+      "id": "slog_1792258884660_2zsf",
+      "timestamp": "13:41:24",
+      "level": "INFO",
+      "message": "Bắt đầu tạo audio truyện: \"Rùa và Thỏ (Truyện Ngụ Ngôn)\" (18 đoạn)..."
+    },
+    {
+      "id": "slog_1792258884666_00db",
+      "timestamp": "13:41:24",
+      "level": "INFO",
+      "message": "Đoạn #1 (Người kể chuyện - ngoc-ngan-vietnamese-vi-medium): \"Ngày xửa ngày xưa,...\""
+    },
+    {
+      "id": "slog_1792258888203_zh43",
+      "timestamp": "13:41:28",
+      "level": "INFO",
+      "message": "Đoạn #2 (Người kể chuyện - ngoc-ngan-vietnamese-vi-medium): \"trong một khu rừng xanh tươi,...\""
+    },
+    {
+      "id": "slog_1792258888804_b6op",
+      "timestamp": "13:41:28",
+      "level": "INFO",
+      "message": "Đoạn #3 (Người kể chuyện - ngoc-ngan-vietnamese-vi-medium): \"có một chú Thỏ vô cùng kiêu ngạo vì...\""
+    },
+    {
+      "id": "slog_1792258889793_iskm",
+      "timestamp": "13:41:29",
+      "level": "INFO",
+      "message": "Đoạn #4 (Chú Thỏ Kiêu Ngạo - duy-onyx-vietnamese-vi-medium): \"Đố ai trong khu rừng này chạy nhanh...\""
+    },
+    {
+      "id": "slog_1792258891258_vwrq",
+      "timestamp": "13:41:31",
+      "level": "INFO",
+      "message": "Đoạn #5 (Chú Thỏ Kiêu Ngạo - duy-onyx-vietnamese-vi-medium): \"Bác Gấu,...\""
+    },
+    {
+      "id": "slog_1792258891932_k6b8",
+      "timestamp": "13:41:31",
+      "level": "INFO",
+      "message": "Đoạn #6 (Chú Thỏ Kiêu Ngạo - duy-onyx-vietnamese-vi-medium): \"chú Sóc hay anh Rùa chậm chạp đều k...\""
+    },
+    {
+      "id": "slog_1792258892723_mrtv",
+      "timestamp": "13:41:32",
+      "level": "INFO",
+      "message": "Đoạn #7 (Người kể chuyện - ngoc-ngan-vietnamese-vi-medium): \"Nghe thấy lời thách thức của Thỏ,...\""
+    },
+    {
+      "id": "slog_1792258893861_20d8",
+      "timestamp": "13:41:33",
+      "level": "INFO",
+      "message": "Đoạn #8 (Người kể chuyện - ngoc-ngan-vietnamese-vi-medium): \"chú Rùa chậm rãi ngẩng đầu lên và b...\""
+    },
+    {
+      "id": "slog_1792258895107_z6mj",
+      "timestamp": "13:41:35",
+      "level": "INFO",
+      "message": "Đoạn #9 (Chú Rùa Chăm Chỉ - dungdien-vietnamese-vi-congchualong): \"Anh Thỏ đừng vội tự phụ....\""
+    },
+    {
+      "id": "slog_1792258896255_cd1l",
+      "timestamp": "13:41:36",
+      "level": "INFO",
+      "message": "Đoạn #10 (Chú Rùa Chăm Chỉ - dungdien-vietnamese-vi-congchualong): \"Nếu anh đồng ý,...\""
+    },
+    {
+      "id": "slog_1792258897190_1k1m",
+      "timestamp": "13:41:37",
+      "level": "INFO",
+      "message": "Đoạn #11 (Chú Rùa Chăm Chỉ - dungdien-vietnamese-vi-congchualong): \"tôi và anh hãy cùng nhau thi chạy m...\""
+    },
+    {
+      "id": "slog_1792258898186_f5a1",
+      "timestamp": "13:41:38",
+      "level": "INFO",
+      "message": "Đoạn #12 (Chú Thỏ Kiêu Ngạo - duy-onyx-vietnamese-vi-medium): \"Anh Rùa mà cũng đòi thi chạy với ta...\""
+    },
+    {
+      "id": "slog_1792258899696_7j6p",
+      "timestamp": "13:41:39",
+      "level": "INFO",
+      "message": "Đoạn #13 (Chú Thỏ Kiêu Ngạo - duy-onyx-vietnamese-vi-medium): \"Được lắm,...\""
+    },
+    {
+      "id": "slog_1792258900332_a6im",
+      "timestamp": "13:41:40",
+      "level": "INFO",
+      "message": "Đoạn #14 (Chú Thỏ Kiêu Ngạo - duy-onyx-vietnamese-vi-medium): \"ta sẽ cho anh thấy ai mới là quán q...\""
+    },
+    {
+      "id": "slog_1792258901182_uwti",
+      "timestamp": "13:41:41",
+      "level": "INFO",
+      "message": "Đoạn #15 (Người kể chuyện - ngoc-ngan-vietnamese-vi-medium): \"Thế là cuộc đua bắt đầu....\""
+    },
+    {
+      "id": "slog_1792258902319_j0tx",
+      "timestamp": "13:41:42",
+      "level": "INFO",
+      "message": "Đoạn #16 (Người kể chuyện - ngoc-ngan-vietnamese-vi-medium): \"Thỏ cậy mình chạy nhanh nên vừa đi ...\""
+    },
+    {
+      "id": "slog_1792258903914_df54",
+      "timestamp": "13:41:43",
+      "level": "INFO",
+      "message": "Đoạn #17 (Người kể chuyện - ngoc-ngan-vietnamese-vi-medium): \"Trong khi đó,...\""
+    },
+    {
+      "id": "slog_1792258904374_39kk",
+      "timestamp": "13:41:44",
+      "level": "INFO",
+      "message": "Đoạn #18 (Người kể chuyện - ngoc-ngan-vietnamese-vi-medium): \"Rùa từng bước kiên trì không hề dừn...\""
+    },
+    {
+      "id": "slog_1792258905499_2w3y",
+      "timestamp": "13:41:45",
+      "level": "INFO",
+      "message": "Đang ghép nối toàn bộ 18 đoạn thành master audio với khoảng nghỉ 300ms..."
+    },
+    {
+      "id": "slog_1792258906032_rj1l",
+      "timestamp": "13:41:46",
+      "level": "SUCCESS",
+      "message": "Đã tạo xong master audio thành công! Thời lượng: 48.81s (0.93 MB)."
+    },
+    {
+      "id": "slog_1792260398236_2xat",
+      "timestamp": "14:06:38",
+      "level": "INFO",
+      "message": "Bắt đầu tạo audio truyện: \"Rùa và Thỏ (Truyện Ngụ Ngôn)\" (7 đoạn)..."
+    },
+    {
+      "id": "slog_1792260398242_f10t",
+      "timestamp": "14:06:38",
+      "level": "INFO",
+      "message": "Đoạn #1 (Người kể chuyện - ngoc-ngan-vietnamese-vi-medium): \"Ngày xửa ngày xưa, trong một khu rừ...\""
+    },
+    {
+      "id": "slog_1792260402778_ivwj",
+      "timestamp": "14:06:42",
+      "level": "INFO",
+      "message": "Đoạn #2 (Chú Thỏ Kiêu Ngạo - duy-onyx-vietnamese-vi-medium): \"Đố ai trong khu rừng này chạy nhanh...\""
+    },
+    {
+      "id": "slog_1792260408250_n9ba",
+      "timestamp": "14:06:48",
+      "level": "INFO",
+      "message": "Đoạn #3 (Người kể chuyện - ngoc-ngan-vietnamese-vi-medium): \"Nghe thấy lời thách thức của Thỏ, c...\""
+    },
+    {
+      "id": "slog_1792260410300_kxc7",
+      "timestamp": "14:06:50",
+      "level": "INFO",
+      "message": "Đoạn #4 (Chú Thỏ Kiêu Ngạo - duy-onyx-vietnamese-vi-medium): \"Anh Thỏ đừng vội tự phụ....\""
+    },
+    {
+      "id": "slog_1792260411437_i171",
+      "timestamp": "14:06:51",
+      "level": "INFO",
+      "message": "Đoạn #5 (Chú Rùa Chăm Chỉ - viet-thao-vietnamese-vi-medium): \"Nếu anh đồng ý, tôi và anh hãy cùng...\""
+    },
+    {
+      "id": "slog_1792260416963_fywf",
+      "timestamp": "14:06:56",
+      "level": "INFO",
+      "message": "Đoạn #6 (Chú Thỏ Kiêu Ngạo - duy-onyx-vietnamese-vi-medium): \"Anh Rùa mà cũng đòi thi chạy với ta...\""
+    },
+    {
+      "id": "slog_1792260419479_m2xw",
+      "timestamp": "14:06:59",
+      "level": "INFO",
+      "message": "Đoạn #7 (Người kể chuyện - ngoc-ngan-vietnamese-vi-medium): \"Thế là cuộc đua bắt đầu. Thỏ cậy mì...\""
+    },
+    {
+      "id": "slog_1792260423314_4nmd",
+      "timestamp": "14:07:03",
+      "level": "INFO",
+      "message": "Đang ghép nối toàn bộ 7 đoạn thành master audio với khoảng nghỉ 300ms..."
+    },
+    {
+      "id": "slog_1792260423809_vkeu",
+      "timestamp": "14:07:03",
+      "level": "SUCCESS",
+      "message": "Đã tạo xong master audio thành công! Thời lượng: 43.54s (0.83 MB)."
+    }
+  ],
+  "createdAt": "2026-10-17T16:48:53.708Z",
+  "updatedAt": "2026-10-17T18:06:38.229Z"
+}

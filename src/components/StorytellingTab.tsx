@@ -69,6 +69,16 @@ function getColorConfig(colorName?: string) {
   return BADGE_COLORS.find((c) => c.value === colorName) || BADGE_COLORS[0];
 }
 
+function getCharacterVoice(voices: VoiceOption[], character: StoryCharacter) {
+  return (
+    voices.find(
+      (voice) =>
+        voice.modelId === character.voiceId &&
+        voice.speakerId === character.speakerId,
+    ) || voices.find((voice) => voice.modelId === character.voiceId)
+  );
+}
+
 export default function StorytellingTab({ voices, onOpenCleanupModal }: StorytellingTabProps) {
   // Stories List & Active Story
   const [storiesList, setStoriesList] = useState<any[]>([]);
@@ -270,6 +280,7 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
         id: `char_${Date.now()}`,
         name: "Người kể chuyện",
         voiceId: voices[0]?.modelId || "local:hoaimy-vietnamese-vi-medium-ljkjhi",
+        speakerId: voices[0]?.speakerId,
         speed: 1.0,
         color: "amber",
       };
@@ -283,6 +294,7 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
             id: `char_a_${Date.now()}`,
             name: "Nhân vật A",
             voiceId: voices[1]?.modelId || "local:doanhdoanh-vietnamese-vi-congchualong",
+            speakerId: voices[1]?.speakerId,
             speed: 1.0,
             color: "blue",
           },
@@ -386,6 +398,7 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
       id: `char_${Date.now()}_${Math.random().toString(36).substring(2, 5)}`,
       name: `Nhân vật ${String.fromCharCode(65 + activeStory.characters.length)}`,
       voiceId: voices[voiceIndex]?.modelId || voices[0]?.modelId || "local:hoaimy-vietnamese-vi-medium-ljkjhi",
+      speakerId: voices[voiceIndex]?.speakerId,
       speed: 1.0,
       color: BADGE_COLORS[colorIndex].value,
     };
@@ -435,6 +448,7 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
         body: JSON.stringify({
           text: sample,
           voiceId: char.voiceId,
+          speakerId: char.speakerId,
           speed: char.speed,
         }),
       });
@@ -477,6 +491,7 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
         body: JSON.stringify({
           text: p.text,
           voiceId: char?.voiceId,
+          speakerId: char?.speakerId,
           speed: char?.speed,
         }),
       });
@@ -1156,7 +1171,7 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
                                 title="Chọn nhân vật đọc đoạn này"
                               >
                                 {activeStory.characters.map((c) => {
-                                  const voice = voices.find((v) => v.modelId === c.voiceId);
+                                  const voice = getCharacterVoice(voices, c);
                                   return (
                                     <option key={c.id} value={c.id} className="bg-slate-900 text-white">
                                       👤 {c.name} ({voice ? voice.name : c.voiceId.replace(/^local:/, "")})
@@ -1422,12 +1437,20 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
                           {/* Voice Model Selection */}
                           <td className="py-3 px-3">
                             <select
-                              value={char.voiceId}
-                              onChange={(e) => handleUpdateCharacter(char.id, { voiceId: e.target.value })}
+                              value={getCharacterVoice(voices, char)?.id || char.voiceId}
+                              onChange={(e) => {
+                                const voice = voices.find((item) => item.id === e.target.value);
+                                if (voice) {
+                                  handleUpdateCharacter(char.id, {
+                                    voiceId: voice.modelId,
+                                    speakerId: voice.speakerId,
+                                  });
+                                }
+                              }}
                               className="w-full bg-slate-900 border border-slate-700 text-xs text-amber-300 font-medium rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-amber-500"
                             >
                               {voices.map((v) => (
-                                <option key={v.modelId} value={v.modelId}>
+                                <option key={v.id} value={v.id}>
                                   {v.name} ({v.tag})
                                 </option>
                               ))}
