@@ -15,12 +15,15 @@ export const CSA_VOICE_MODEL_ID = "local:vi_VN-csa-voice-piper-v3-medium";
 
 // Mapping from local model ID to corresponding .onnx file(s) in /models directory
 export const LOCAL_MODEL_FILES: Record<string, string | string[]> = {
-  "local:hoaimy-vietnamese-vi-medium-ljkjhi": "hoaimy-vietnamese-vi-medium-ljkjhi.onnx",
-  "local:hoaimy-vietnamese-vi-congchualong": "hoaimy-vietnamese-vi-congchualong.onnx",
+  "local:hoaimy-vietnamese-vi-medium-ljkjhi":
+    "hoaimy-vietnamese-vi-medium-ljkjhi.onnx",
+  "local:hoaimy-vietnamese-vi-congchualong":
+    "hoaimy-vietnamese-vi-congchualong.onnx",
   "local:hoaimy-vietnamese-vi-nmh19xx": "hoaimy-vietnamese-vi-nmh19xx.onnx",
   "local:ban-mai-vietnamese-vi-medium": "ban-mai-vietnamese-vi-medium.onnx",
-  "local:thanh-nien-tu-tin-vietnamese-vi-medium": "thanh-nien-tu-tin-vietnamese-vi-medium.onnx",
-  "local:viet-thao-vietnamese-vi-medium": "viet-thao-vietnamese-vi-medium.onnx",
+  "local:thanh-nien-tu-tin-vietnamese-vi-medium":
+    "thanh-nien-tu-tin-vietnamese-vi-medium.onnx",
+  "local:vietthao3886": "vietthao3886.onnx",
   "local:huyenngoc-vietnamese-vi-medium-ljkjhi": [
     "huyenngoc-vietnamese-vi-medium-ljkjhi.onnx",
     "voices_huyenngoc.onnx",
@@ -113,8 +116,8 @@ export const AVAILABLE_MODELS: VoiceDefinition[] = [
     recommended: false,
   },
   {
-    id: "local:viet-thao-vietnamese-vi-medium",
-    modelId: "local:viet-thao-vietnamese-vi-medium",
+    id: "local:vietthao3886",
+    modelId: "local:vietthao3886",
     name: "Việt Thảo",
     tag: "Nam · Miền Nam · Hóm hỉnh, sống động (Offline)",
     gender: "male",
@@ -173,7 +176,8 @@ export const AVAILABLE_MODELS: VoiceDefinition[] = [
     name: "Yan 3D",
     tag: "Nữ · Miền Nam · Hiện đại, sống động (Offline)",
     gender: "female",
-    description: "Âm sắc miền Nam hiện đại, sống động, thích hợp review phim & truyện tranh.",
+    description:
+      "Âm sắc miền Nam hiện đại, sống động, thích hợp review phim & truyện tranh.",
     sampleText:
       "Xin kính chào quý vị và các bạn đã quay trở lại với chương trình ngày hôm nay.",
     recommended: false,
@@ -184,7 +188,8 @@ export const AVAILABLE_MODELS: VoiceDefinition[] = [
     name: "Nguyễn Ngọc Ngạn",
     tag: "Nam · Bắc 54 / Hải ngoại · Truyền cảm (Offline)",
     gender: "male",
-    description: "Phong cách đọc truyện đêm khuya truyền cảm, giọng Bắc 54 đặc trưng.",
+    description:
+      "Phong cách đọc truyện đêm khuya truyền cảm, giọng Bắc 54 đặc trưng.",
     sampleText:
       "Xin kính chào quý vị thính giả đã theo dõi câu chuyện đêm nay.",
     recommended: false,
