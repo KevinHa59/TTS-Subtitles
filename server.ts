@@ -21,7 +21,8 @@ import {
   normalizeVietnameseUnits,
 } from "./src/utils/textNormalizer";
 import {
-  generateBgmTrack,
+  startBgmGeneration,
+  getBgmGenerationJob,
   getBgmHistory,
   deleteBgmTrack,
 } from "./bgmService";
@@ -2826,14 +2827,22 @@ app.get("/api/bgm/history", (_req: Request, res: Response) => {
   }
 });
 
-app.post("/api/bgm/generate", async (req: Request, res: Response) => {
+app.post("/api/bgm/generate", (req: Request, res: Response) => {
   try {
-    const track = await generateBgmTrack(req.body);
-    res.json({ success: true, track });
+    const jobId = startBgmGeneration(req.body);
+    res.status(202).json({ success: true, jobId });
   } catch (err: any) {
     console.error("[BGM Generate Error]:", err);
     res.status(500).json({ error: err.message || "Lỗi khi tạo nhạc nền." });
   }
+});
+
+app.get("/api/bgm/generate/:jobId", (req: Request, res: Response) => {
+  const job = getBgmGenerationJob(req.params.jobId);
+  if (!job) {
+    return res.status(404).json({ error: "Không tìm thấy tiến trình tạo nhạc." });
+  }
+  res.json({ success: true, job });
 });
 
 app.delete("/api/bgm/:id", (req: Request, res: Response) => {

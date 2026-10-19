@@ -178,9 +178,16 @@ const PRESET_MOODS: BgmMoodPreset[] = [
 ];
 
 export default function BgmGeneratorTab({ voices }: BgmGeneratorTabProps) {
+  const availableCpuThreads =
+    typeof navigator === "undefined"
+      ? 8
+      : Math.max(1, navigator.hardwareConcurrency || 8);
   // Engine Selection State: 'procedural' (FFmpeg Synth) or 'neural' (AI Model)
   const [engine, setEngine] = useState<BgmEngineType>("procedural");
   const [selectedModelId, setSelectedModelId] = useState<string>("musicgen-small");
+  const [cpuThreads, setCpuThreads] = useState<number>(
+    Math.min(12, availableCpuThreads),
+  );
 
   // System & Model Download Status
   const [systemStatus, setSystemStatus] = useState<BgmSystemStatus | null>(null);
@@ -210,6 +217,11 @@ export default function BgmGeneratorTab({ voices }: BgmGeneratorTabProps) {
   // UI state
   const [showAdvanced, setShowAdvanced] = useState<boolean>(false);
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
+  const [generationProgress, setGenerationProgress] = useState<{
+    percent: number;
+    stage: string;
+    message: string;
+  }>({ percent: 0, stage: "queued", message: "Đang khởi tạo..." });
   const [toastMessage, setToastMessage] = useState<{
     text: string;
     type: "success" | "error" | "info";
@@ -393,20 +405,36 @@ export default function BgmGeneratorTab({ voices }: BgmGeneratorTabProps) {
     const handleEnded = () => {
       if (loopPlayback) {
         audio.currentTime = 0;
-        audio.play().catch(() => {});
+        audio.play().catch((error: unknown) => {
+          setIsPlaying(false);
+          const detail = error instanceof Error ? `: ${error.message}` : "";
+          showToast(`Không thể phát lặp audio${detail}`, "error");
+        });
       } else {
         setIsPlaying(false);
       }
     };
 
+    const handleAudioError = () => {
+      setIsPlaying(false);
+      showToast(
+        audio.error?.message
+          ? `Không thể tải hoặc giải mã audio: ${audio.error.message}`
+          : "Không thể tải hoặc giải mã tệp audio.",
+        "error",
+      );
+    };
+
     audio.addEventListener("timeupdate", handleTimeUpdate);
     audio.addEventListener("loadedmetadata", handleLoadedMetadata);
     audio.addEventListener("ended", handleEnded);
+    audio.addEventListener("error", handleAudioError);
 
     return () => {
       audio.removeEventListener("timeupdate", handleTimeUpdate);
       audio.removeEventListener("loadedmetadata", handleLoadedMetadata);
       audio.removeEventListener("ended", handleEnded);
+      audio.removeEventListener("error", handleAudioError);
     };
   }, [activeTrack, loopPlayback]);
 
@@ -504,9 +532,14 @@ export default function BgmGeneratorTab({ voices }: BgmGeneratorTabProps) {
 
     try {
       setIsGenerating(true);
+      setGenerationProgress({
+        percent: 0,
+        stage: "queued",
+        message: "Đang gửi yêu cầu tạo nhạc...",
+      });
       showToast(
         engine === "neural"
-          ? "Đang sinh nhạc bằng Mô hình AI Học Sâu..."
+          ? `Đang chuẩn bị tạo audio bằng ${selectedModelId === "audioldm-soundscape" ? "AudioLDM" : "MusicGen"}...`
           : "Đang tạo nhạc nền loop 100% offline bằng Bộ Tổng Hợp Siêu Tốc...",
         "info",
       );
@@ -525,24 +558,98 @@ export default function BgmGeneratorTab({ voices }: BgmGeneratorTabProps) {
           elements,
           engine,
           modelId: selectedModelId,
+          cpuThreads,
         }),
       });
 
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        throw new Error(data.error || "Không thể tạo nhạc nền.");
+      const responseText = await res.text();
+      let data: { success?: boolean; jobId?: string; error?: string };
+      try {
+        data = JSON.parse(responseText);
+      } catch {
+        throw new Error(
+          responseText.trim() || `Máy chủ trả về lỗi HTTP ${res.status}.`,
+        );
       }
 
-      const newTrack: BgmTrack = data.track;
+      if (!res.ok || !data.success) {
+        throw new Error(
+          data.error || `Không thể tạo nhạc nền (HTTP ${res.status}).`,
+        );
+      }
+
+      if (!data.jobId) {
+        throw new Error("Máy chủ không trả về mã tiến trình tạo nhạc.");
+      }
+
+      let completedTrack: BgmTrack | undefined;
+      while (!completedTrack) {
+        const statusResponse = await fetch(
+          `/api/bgm/generate/${encodeURIComponent(data.jobId)}`,
+        );
+        const statusText = await statusResponse.text();
+        let statusData: {
+          success?: boolean;
+          error?: string;
+          job?: {
+            status: "queued" | "running" | "completed" | "failed";
+            progress: { percent: number; stage: string; message: string };
+            track?: BgmTrack;
+            error?: string;
+          };
+        };
+        try {
+          statusData = JSON.parse(statusText);
+        } catch {
+          throw new Error(
+            statusText.trim() ||
+              `Không đọc được tiến trình tạo nhạc (HTTP ${statusResponse.status}).`,
+          );
+        }
+        if (!statusResponse.ok || !statusData.success || !statusData.job) {
+          throw new Error(
+            statusData.error ||
+              `Không thể kiểm tra tiến trình tạo nhạc (HTTP ${statusResponse.status}).`,
+          );
+        }
+
+        const job = statusData.job;
+        setGenerationProgress(job.progress);
+        if (job.status === "failed") {
+          throw new Error(job.error || job.progress.message || "Tạo nhạc thất bại.");
+        }
+        if (job.status === "completed") {
+          if (!job.track) {
+            throw new Error("Tiến trình báo hoàn tất nhưng không trả về tệp nhạc.");
+          }
+          completedTrack = job.track;
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 750));
+      }
+
+      const newTrack = completedTrack;
       setActiveTrack(newTrack);
       setHistory((prev) => [newTrack, ...prev.filter((t) => t.id !== newTrack.id)]);
 
       // Auto play the generated track
       if (audioRef.current) {
+        setIsPlaying(false);
         audioRef.current.src = newTrack.audioUrl;
         audioRef.current.volume = volume;
         audioRef.current.loop = loopPlayback;
-        audioRef.current.play().then(() => setIsPlaying(true)).catch(() => {});
+        try {
+          await audioRef.current.play();
+          setIsPlaying(true);
+        } catch (error) {
+          const detail =
+            error instanceof Error ? ` (${error.message})` : "";
+          showToast(
+            `Đã tạo nhạc nhưng không thể tự phát audio${detail}. Hãy bấm nút Phát để thử lại.`,
+            "error",
+          );
+          return;
+        }
       }
 
       showToast(
@@ -563,10 +670,16 @@ export default function BgmGeneratorTab({ voices }: BgmGeneratorTabProps) {
 
     if (track && track.id !== activeTrack?.id) {
       setActiveTrack(track);
+      setIsPlaying(false);
       audio.src = track.audioUrl;
       audio.volume = isMuted ? 0 : volume;
       audio.loop = loopPlayback;
-      audio.play().then(() => setIsPlaying(true)).catch(() => {});
+      audio.play()
+        .then(() => setIsPlaying(true))
+        .catch((error: unknown) => {
+          const detail = error instanceof Error ? `: ${error.message}` : "";
+          showToast(`Không thể phát audio${detail}`, "error");
+        });
       return;
     }
 
@@ -576,7 +689,12 @@ export default function BgmGeneratorTab({ voices }: BgmGeneratorTabProps) {
     } else {
       audio.volume = isMuted ? 0 : volume;
       audio.loop = loopPlayback;
-      audio.play().then(() => setIsPlaying(true)).catch(() => {});
+      audio.play()
+        .then(() => setIsPlaying(true))
+        .catch((error: unknown) => {
+          const detail = error instanceof Error ? `: ${error.message}` : "";
+          showToast(`Không thể phát audio${detail}`, "error");
+        });
     }
   };
 
@@ -677,7 +795,7 @@ export default function BgmGeneratorTab({ voices }: BgmGeneratorTabProps) {
         audioRef.current.src = activeTrack.audioUrl;
         audioRef.current.volume = bgmOverlayVolume;
         audioRef.current.loop = true;
-        await audioRef.current.play().catch(() => {});
+        await audioRef.current.play();
 
         // Play voice
         await voiceAudioRef.current.play();
@@ -827,6 +945,7 @@ export default function BgmGeneratorTab({ voices }: BgmGeneratorTabProps) {
             {systemStatus?.models.map((model) => {
               const isDownloading = model.status === "downloading";
               const isReady = model.status === "ready";
+              const hasDownloadError = model.status === "error";
               const isBusy = actionInProgressModelId === model.id;
 
               return (
@@ -837,7 +956,9 @@ export default function BgmGeneratorTab({ voices }: BgmGeneratorTabProps) {
                       ? "bg-slate-950/70 border-emerald-800/40 shadow-sm"
                       : isDownloading
                         ? "bg-slate-950/90 border-purple-700/60 ring-1 ring-purple-600/40"
-                        : "bg-slate-950/40 border-slate-800"
+                          : hasDownloadError
+                            ? "bg-rose-950/20 border-rose-800/50"
+                          : "bg-slate-950/40 border-slate-800"
                   }`}
                 >
                   <div className="flex items-start justify-between gap-3">
@@ -856,6 +977,11 @@ export default function BgmGeneratorTab({ voices }: BgmGeneratorTabProps) {
                             <Loader2 className="w-3 h-3 animate-spin" />
                             <span>Đang Tải {model.downloadProgress}%</span>
                           </span>
+                        ) : hasDownloadError ? (
+                          <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-rose-500/15 text-rose-300 border border-rose-500/30 font-bold">
+                            <XCircle className="w-3 h-3" />
+                            <span>Tải thất bại</span>
+                          </span>
                         ) : (
                           <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700 font-medium">
                             Chưa Tải ({model.sizeFormatted})
@@ -866,6 +992,11 @@ export default function BgmGeneratorTab({ voices }: BgmGeneratorTabProps) {
                       <p className="text-[11px] text-slate-400 line-clamp-2">
                         {model.description}
                       </p>
+                      {hasDownloadError && model.error && (
+                        <p className="pt-1 text-[11px] leading-relaxed text-rose-300 break-words">
+                          Lỗi tải: {model.error}
+                        </p>
+                      )}
                     </div>
                   </div>
 
@@ -1014,7 +1145,7 @@ export default function BgmGeneratorTab({ voices }: BgmGeneratorTabProps) {
                   )}
                 </div>
                 <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">
-                  Mô hình nơ-ron sinh giai điệu đa nhạc cụ. <strong>Tải theo yêu cầu</strong> khi cần, không lưu sẵn trong project.
+                  Chọn MusicGen cho nhạc nền hoặc AudioLDM cho soundscape/âm thanh môi trường. Chạy PyTorch trên CPU; cần cài requirements-bgm.txt.
                 </p>
                 <div className="mt-2 flex items-center justify-between text-[10px]">
                   {activeModel?.status === "ready" ? (
@@ -1027,7 +1158,7 @@ export default function BgmGeneratorTab({ voices }: BgmGeneratorTabProps) {
                     </span>
                   ) : (
                     <span className="text-amber-400 font-semibold flex items-center gap-1">
-                      <AlertTriangle className="w-3 h-3" /> Cần tải (~1.2GB)
+                      <AlertTriangle className="w-3 h-3" /> Cần tải ({activeModel?.sizeFormatted || "~2.2 GiB"})
                     </span>
                   )}
                   <span
@@ -1042,6 +1173,83 @@ export default function BgmGeneratorTab({ voices }: BgmGeneratorTabProps) {
                 </div>
               </button>
             </div>
+            {engine === "neural" && (
+              <div className="rounded-xl border border-purple-800/50 bg-purple-950/30 p-3 space-y-3">
+                <p className="text-[11px] text-purple-200/80 leading-relaxed">
+                  {selectedModelId === "audioldm-soundscape"
+                    ? "AudioLDM S-Full-v2 tạo soundscape từ prompt (hoạt động tốt nhất với mô tả tiếng Anh). Các đoạn tối đa 10 giây được ghép thành audio dài; CPU có thể cần nhiều thời gian. Tải đầy đủ pipeline (~1.57 GiB) trước khi dùng."
+                    : "MusicGen Small tạo nhạc đa nhạc cụ. Lần chạy đầu cần kết nối mạng để lấy metadata/tokenizer; sau đó các thành phần được lưu trong models/music/musicgen-small/hf_model."}
+                </p>
+                <div className="space-y-1.5">
+                  <label
+                    htmlFor="bgm-ai-model"
+                    className="block text-xs font-semibold text-slate-200"
+                  >
+                    Mô hình AI
+                  </label>
+                  <select
+                    id="bgm-ai-model"
+                    value={selectedModelId}
+                    onChange={(event) => setSelectedModelId(event.target.value)}
+                    disabled={isGenerating}
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-100 disabled:opacity-50"
+                  >
+                    <option value="musicgen-small">
+                      Meta MusicGen Small
+                      {systemStatus?.models.find((model) => model.id === "musicgen-small")?.status === "ready"
+                        ? " — sẵn sàng"
+                        : " — cần tải"}
+                    </option>
+                    <option value="audioldm-soundscape">
+                      AudioLDM Soundscape
+                      {systemStatus?.models.find((model) => model.id === "audioldm-soundscape")?.status === "ready"
+                        ? " — sẵn sàng"
+                        : " — cần tải"}
+                    </option>
+                  </select>
+                  {activeModel?.status !== "ready" && (
+                    <button
+                      type="button"
+                      onClick={() => setShowModelManager(true)}
+                      className="text-[11px] font-semibold text-purple-300 hover:text-purple-200 hover:underline"
+                    >
+                      Mở quản lý model để tải {activeModel?.name || "mô hình đã chọn"}
+                    </button>
+                  )}
+                </div>
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between text-xs">
+                    <label htmlFor="bgm-cpu-threads" className="font-semibold text-slate-200">
+                      Luồng CPU cho model AI
+                    </label>
+                    <span className="font-mono text-purple-200">
+                      {cpuThreads} / {availableCpuThreads}
+                    </span>
+                  </div>
+                  <input
+                    id="bgm-cpu-threads"
+                    type="range"
+                    min={1}
+                    max={availableCpuThreads}
+                    step={1}
+                    value={cpuThreads}
+                    onChange={(event) => setCpuThreads(Number(event.target.value))}
+                    disabled={isGenerating}
+                    className="w-full accent-purple-500 disabled:opacity-50"
+                  />
+                  <p className="text-[10px] leading-relaxed text-slate-400">
+                    Nhiều luồng hơn có thể tăng tốc nhưng cũng làm máy nóng hoặc
+                    chậm các ứng dụng khác. Mặc định dùng tối đa 12 luồng để
+                    chừa tài nguyên hệ thống.
+                  </p>
+                </div>
+                <p className="text-[10px] leading-relaxed text-slate-400">
+                  RAM được PyTorch tự cấp phát theo model và quá trình tạo nhạc;
+                  tăng mức RAM không tự làm inference nhanh hơn. Chỉ chỉnh CPU
+                  khi cần tăng tốc.
+                </p>
+              </div>
+            )}
           </div>
 
           {/* 1. Prompt Input Card */}
@@ -1055,7 +1263,9 @@ export default function BgmGeneratorTab({ voices }: BgmGeneratorTabProps) {
                 <span>Mô Tả Nhạc Nền Bạn Muốn Tạo (Prompt)</span>
               </label>
               <span className="text-[11px] text-slate-400">
-                Hỗ trợ tiếng Việt và tiếng Anh
+                {engine === "neural" && selectedModelId === "audioldm-soundscape"
+                  ? "AudioLDM hoạt động tốt nhất với mô tả tiếng Anh"
+                  : "Hỗ trợ tiếng Việt và tiếng Anh"}
               </span>
             </div>
 
@@ -1300,7 +1510,11 @@ export default function BgmGeneratorTab({ voices }: BgmGeneratorTabProps) {
                 {isGenerating ? (
                   <>
                     <RefreshCw className="w-5 h-5 animate-spin text-slate-950" />
-                    <span>Đang tạo đoạn nhạc loop ({duration}s)...</span>
+                    <span>
+                      {engine === "neural"
+                        ? `${selectedModelId === "audioldm-soundscape" ? "AudioLDM" : "MusicGen"} ${generationProgress.percent}%`
+                        : `Đang tạo nhạc nền (${generationProgress.percent}%)`}
+                    </span>
                   </>
                 ) : (
                   <>
@@ -1311,6 +1525,40 @@ export default function BgmGeneratorTab({ voices }: BgmGeneratorTabProps) {
                   </>
                 )}
               </button>
+              {isGenerating && (
+                <div
+                  className="mt-3 rounded-xl border border-slate-800 bg-slate-950/80 p-3 space-y-2"
+                  role="status"
+                  aria-live="polite"
+                >
+                  <div className="flex items-center justify-between gap-3 text-[11px]">
+                    <span className="text-slate-300">{generationProgress.message}</span>
+                    <span className="shrink-0 font-mono font-bold text-purple-300">
+                      {generationProgress.percent}%
+                    </span>
+                  </div>
+                  <div
+                    className="h-2 w-full overflow-hidden rounded-full bg-slate-800"
+                    role="progressbar"
+                    aria-label="Tiến trình tạo nhạc nền"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={generationProgress.percent}
+                  >
+                    <div
+                      className="h-full rounded-full bg-gradient-to-r from-purple-500 via-indigo-400 to-emerald-400 transition-[width] duration-500"
+                      style={{ width: `${generationProgress.percent}%` }}
+                    />
+                  </div>
+                  {engine === "neural" && (
+                    <p className="text-[10px] text-slate-500">
+                      {selectedModelId === "audioldm-soundscape"
+                        ? "AudioLDM đang sinh soundscape từng đoạn trên CPU; thời gian phụ thuộc độ dài audio."
+                        : "Suy luận MusicGen trên CPU có thể cần vài phút; phần trăm cập nhật theo số token đã sinh."}
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -1415,8 +1663,13 @@ export default function BgmGeneratorTab({ voices }: BgmGeneratorTabProps) {
                       onClick={() => {
                         if (audioRef.current) {
                           audioRef.current.currentTime = 0;
-                          audioRef.current.play().catch(() => {});
-                          setIsPlaying(true);
+                          audioRef.current.play()
+                            .then(() => setIsPlaying(true))
+                            .catch((error: unknown) => {
+                              const detail =
+                                error instanceof Error ? `: ${error.message}` : "";
+                              showToast(`Không thể phát lại audio${detail}`, "error");
+                            });
                         }
                       }}
                       className="w-10 h-10 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 flex items-center justify-center transition-colors cursor-pointer"

@@ -97,6 +97,19 @@ Bạn **không cần** mở VS Code, không cần gõ lệnh dòng lệnh phức
 
 ## 5. Khắc phục sự cố thường gặp
 
+### Tạo nhạc nền bằng model AI (tùy chọn)
+
+Chế độ **Mô Hình Deep Learning AI** cho phép chọn Meta MusicGen Small để tạo nhạc hoặc AudioLDM S-Full-v2 để tạo soundscape/âm thanh môi trường. Chế độ **Procedural DSP** vẫn dùng FFmpeg như trước.
+
+1. Cài Python 3.10 trở lên và PyTorch phù hợp với máy.
+2. Chạy `python -m pip install -r requirements-bgm.txt`.
+3. Trong tab **Tạo Nhạc Nền**, tải model muốn dùng ở phần **Quản lý Model**, chọn chế độ AI, sau đó chọn **Meta MusicGen Small** hoặc **AudioLDM Soundscape** trong danh sách mô hình.
+
+Lần chạy đầu của MusicGen cần kết nối mạng để tải metadata/tokenizer từ Hugging Face. Weights được nạp từ thư mục `models/music/musicgen-small`; MusicGen chạy trên CPU có thể mất vài phút, tùy độ dài audio và cấu hình máy. AudioLDM tải toàn bộ pipeline (~1.57 GiB) vào `models/music/audioldm-soundscape` để chạy offline; các đoạn tối đa 10 giây được nối thành audio dài, nên tạo lâu hơn khi chọn thời lượng dài. AudioLDM S-Full-v2 được cấp phép CC-BY-NC-SA 4.0; cần tuân thủ điều khoản giấy phép, bao gồm giới hạn sử dụng thương mại. Cài `diffusers` và `scipy` cùng các thư viện còn lại bằng requirements-bgm.txt. Đặt biến môi trường `BGM_PYTHON` nếu muốn máy chủ dùng một Python interpreter cụ thể.
+
+Nếu Python báo thiếu module hoặc không tải được metadata, lỗi sẽ hiển thị trong giao diện; ứng dụng không tự chuyển sang DSP.
+
+
 1. **Giọng đọc bị mất dấu hoặc chỉ đọc được tiếng Việt không dấu:**
    - Nguyên nhân: Hệ thống chưa cài đặt hoặc chưa nhận diện được `eSpeak NG`.
    - Khắc phục: Mở Command Prompt hoặc PowerShell, chạy lệnh:

@@ -35,6 +35,7 @@ export interface BgmGenerateRequest {
   elements?: BgmElements;
   engine?: BgmEngineType;
   modelId?: string;
+  cpuThreads?: number;
 }
 
 export interface BgmTrack {

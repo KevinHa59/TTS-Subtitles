@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import os from "os";
+import crypto from "crypto";
 import https from "https";
 import http from "http";
 import { URL } from "url";
@@ -13,6 +14,7 @@ import {
 } from "./src/types/bgm";
 
 const MODELS_BASE_DIR = path.resolve("./models/music");
+const AUDIOLDM_REPO_REVISION = "feeb3d14203495a4b6ac0893cbdedb2159b4819c";
 if (!fs.existsSync(MODELS_BASE_DIR)) {
   fs.mkdirSync(MODELS_BASE_DIR, { recursive: true });
 }
@@ -30,7 +32,15 @@ interface ActiveDownload {
   error?: string;
 }
 
+interface ModelFileSpec {
+  path: string;
+  sizeBytes: number;
+  sha256?: string;
+  legacyPaths?: string[];
+}
+
 const activeDownloads = new Map<string, ActiveDownload>();
+const failedDownloads = new Map<string, string>();
 
 // Available AI Models specification (Downloaded ON-DEMAND only)
 export const AVAILABLE_MODELS: Record<string, {
@@ -41,15 +51,17 @@ export const AVAILABLE_MODELS: Record<string, {
   ramRequired: string;
   recommendedFor: string;
   targetFilename: string;
+  expectedSizeBytes?: number;
   downloadUrls: string[];
+  files?: ModelFileSpec[];
 }> = {
   "musicgen-small": {
     name: "Meta MusicGen Small (Neural Melody & Cinematic BGM)",
-    description: "Mô hình nơ-ron học sâu sinh giai điệu, hòa âm đa nhạc cụ từ văn bản. Hoàn hảo cho nhạc nền truyện ma, trinh thám, kiếm hiệp, lofi.",
-    sizeFormatted: "~1.2 GB",
-    sizeBytes: 1250000000,
-    ramRequired: "~4 GB RAM khả dụng",
-    recommendedFor: "Khuyên dùng cho CPU đa nhân, RAM tự do >= 6GB",
+    description: "Mô hình MusicGen thật, sinh nhạc đa nhạc cụ từ prompt bằng Transformers/PyTorch. Lần đầu cần tải metadata mô hình; CPU có thể mất vài phút.",
+    sizeFormatted: "~2.2 GiB",
+    sizeBytes: 2364427288,
+    ramRequired: "~8 GB RAM khả dụng",
+    recommendedFor: "CPU đa nhân; cần cài requirements-bgm.txt",
     targetFilename: "musicgen_small_weights.bin",
     downloadUrls: [
       "https://huggingface.co/facebook/musicgen-small/resolve/main/model.safetensors",
@@ -58,15 +70,34 @@ export const AVAILABLE_MODELS: Record<string, {
   },
   "audioldm-soundscape": {
     name: "AudioLDM Soundscape (Atmospheric & Horror Drone)",
-    description: "Mô hình khuếch tán âm học chuyên về ambient ma mị, không gian rùng rợn, tiếng động môi trường điện ảnh cho truyện đêm muộn.",
-    sizeFormatted: "~680 MB",
-    sizeBytes: 680000000,
-    ramRequired: "~2.5 GB RAM khả dụng",
-    recommendedFor: "Nhẹ hơn, phù hợp CPU, sinh không gian âm u kinh dị cực tốt",
-    targetFilename: "audioldm_weights.bin",
-    downloadUrls: [
-      "https://huggingface.co/cvssp/audioldm-s-small-v2/resolve/main/diffusion_pytorch_model.bin",
-      "https://hf-mirror.com/cvssp/audioldm-s-small-v2/resolve/main/diffusion_pytorch_model.bin"
+    description: "AudioLDM S-Full-v2 tạo âm thanh môi trường từ prompt. Tải đầy đủ pipeline Diffusers để có thể chạy offline.",
+    sizeFormatted: "~1.57 GiB",
+    sizeBytes: 1687448107,
+    ramRequired: "~4 GB RAM khả dụng",
+    recommendedFor: "CPU; sinh từng đoạn 10 giây, có thể chậm hơn MusicGen",
+    targetFilename: "unet/diffusion_pytorch_model.safetensors",
+    downloadUrls: [],
+    files: [
+      { path: "model_index.json", sizeBytes: 462 },
+      { path: "scheduler/scheduler_config.json", sizeBytes: 439 },
+      { path: "text_encoder/config.json", sizeBytes: 843 },
+      { path: "text_encoder/model.safetensors", sizeBytes: 501241456 },
+      { path: "tokenizer/merges.txt", sizeBytes: 456356 },
+      { path: "tokenizer/special_tokens_map.json", sizeBytes: 280 },
+      { path: "tokenizer/tokenizer.json", sizeBytes: 2108746 },
+      { path: "tokenizer/tokenizer_config.json", sizeBytes: 424 },
+      { path: "tokenizer/vocab.json", sizeBytes: 798293 },
+      { path: "unet/config.json", sizeBytes: 1300 },
+      {
+        path: "unet/diffusion_pytorch_model.safetensors",
+        sizeBytes: 740228912,
+        sha256: "fc30d5b5a3bb8d08672736efb1fff10755ba7024dace39b2dcb579a105aa2a5a5",
+        legacyPaths: ["audioldm_unet.safetensors"],
+      },
+      { path: "vae/config.json", sizeBytes: 534 },
+      { path: "vae/diffusion_pytorch_model.safetensors", sizeBytes: 221530316 },
+      { path: "vocoder/config.json", sizeBytes: 654 },
+      { path: "vocoder/model.safetensors", sizeBytes: 221079092 },
     ],
   },
 };
@@ -92,7 +123,20 @@ export function getBgmSystemStatus(): BgmSystemStatus {
       let downloadedBytes = 0;
       let totalBytes = spec.sizeBytes;
       let downloadSpeedMb = 0;
-      let error: string | undefined = undefined;
+      let error: string | undefined;
+      const requiredFiles = spec.files ?? [
+        { path: spec.targetFilename, sizeBytes: spec.expectedSizeBytes ?? 0 },
+      ];
+      const modelReady = requiredFiles.every(({ path: relativePath, sizeBytes }) => {
+        const filePath = path.join(modelDir, relativePath);
+        if (!fs.existsSync(filePath)) return false;
+        try {
+          const actualSize = fs.statSync(filePath).size;
+          return sizeBytes > 0 ? actualSize === sizeBytes : actualSize > 10 * 1024 * 1024;
+        } catch {
+          return false;
+        }
+      });
 
       if (active) {
         status = "downloading";
@@ -103,19 +147,13 @@ export function getBgmSystemStatus(): BgmSystemStatus {
           : 0;
         downloadSpeedMb = active.currentSpeedMb;
         error = active.error;
-      } else if (fs.existsSync(targetFile)) {
-        try {
-          const stat = fs.statSync(targetFile);
-          // If file is at least 10MB or matches expected size
-          if (stat.size > 10 * 1024 * 1024) {
-            status = "ready";
-            downloadProgress = 100;
-            downloadedBytes = stat.size;
-            totalBytes = stat.size;
-          }
-        } catch {
-          status = "not_downloaded";
-        }
+      } else if (modelReady) {
+        status = "ready";
+        downloadProgress = 100;
+        downloadedBytes = spec.sizeBytes;
+      } else if (failedDownloads.has(id)) {
+        status = "error";
+        error = failedDownloads.get(id);
       }
 
       return {
@@ -151,14 +189,20 @@ export function getBgmSystemStatus(): BgmSystemStatus {
 export function isModelReady(modelId: string): boolean {
   const spec = AVAILABLE_MODELS[modelId];
   if (!spec) return false;
-  const targetFile = path.join(MODELS_BASE_DIR, modelId, spec.targetFilename);
-  if (!fs.existsSync(targetFile)) return false;
-  try {
-    const stat = fs.statSync(targetFile);
-    return stat.size > 10 * 1024 * 1024;
-  } catch {
-    return false;
-  }
+  const modelDir = path.join(MODELS_BASE_DIR, modelId);
+  const requiredFiles = spec.files ?? [
+    { path: spec.targetFilename, sizeBytes: spec.expectedSizeBytes ?? 0 },
+  ];
+  return requiredFiles.every(({ path: relativePath, sizeBytes }) => {
+    const filePath = path.join(modelDir, relativePath);
+    if (!fs.existsSync(filePath)) return false;
+    try {
+      const actualSize = fs.statSync(filePath).size;
+      return sizeBytes > 0 ? actualSize === sizeBytes : actualSize > 10 * 1024 * 1024;
+    } catch {
+      return false;
+    }
+  });
 }
 
 /**
@@ -212,13 +256,11 @@ function downloadFileWithRedirect(
           new Error(`Máy chủ trả về mã lỗi HTTP ${res.statusCode}: ${res.statusMessage}`)
         );
       }
-
-      const contentLength = res.headers["content-length"];
-      if (contentLength) {
-        const parsedLength = parseInt(contentLength, 10);
-        if (!isNaN(parsedLength) && parsedLength > 0) {
-          activeState.totalBytes = parsedLength;
-        }
+      if (res.statusCode !== 200) {
+        res.resume();
+        return onError(
+          new Error(`Máy chủ trả về mã HTTP không mong đợi: ${res.statusCode ?? "không rõ"}.`)
+        );
       }
 
       const fileStream = fs.createWriteStream(destPath, { flags: "w" });
@@ -237,6 +279,12 @@ function downloadFileWithRedirect(
           activeState.lastSpeedCheckTime = now;
           activeState.lastBytes = activeState.downloadedBytes;
         }
+      });
+      res.on("aborted", () => {
+        try {
+          fs.unlinkSync(destPath);
+        } catch {}
+        onError(new Error("Kết nối bị ngắt giữa chừng khi tải checkpoint."));
       });
 
       res.pipe(fileStream);
@@ -282,14 +330,19 @@ export function startModelDownload(modelId: string): { success: boolean; message
   if (isModelReady(modelId)) {
     return { success: true, message: `Mô hình "${spec.name}" đã được tải về sẵn rồi.` };
   }
+  failedDownloads.delete(modelId);
 
   const modelDir = path.join(MODELS_BASE_DIR, modelId);
   if (!fs.existsSync(modelDir)) {
     fs.mkdirSync(modelDir, { recursive: true });
   }
 
-  const tempFilePath = path.join(modelDir, `${spec.targetFilename}.download.tmp`);
-  const finalFilePath = path.join(modelDir, spec.targetFilename);
+  const files = spec.files ?? [
+    {
+      path: spec.targetFilename,
+      sizeBytes: spec.expectedSizeBytes ?? spec.sizeBytes,
+    },
+  ];
 
   const activeState: ActiveDownload = {
     modelId,
@@ -300,44 +353,127 @@ export function startModelDownload(modelId: string): { success: boolean; message
     lastSpeedCheckTime: Date.now(),
     lastBytes: 0,
     currentSpeedMb: 0,
-    tempFilePath,
+    tempFilePath: "",
   };
 
   activeDownloads.set(modelId, activeState);
 
-  const initialUrl = spec.downloadUrls[0];
-  console.log(`[BGM Model Manager] Bắt đầu tải model "${modelId}" từ ${initialUrl}...`);
+  const failDownload = (err: Error, tempFilePath: string) => {
+    if (activeDownloads.get(modelId) !== activeState) {
+      try {
+        if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
+      } catch {}
+      return;
+    }
+    console.error(`[BGM Model Manager] Lỗi khi tải mô hình "${modelId}":`, err.message);
+    activeState.error = err.message;
+    failedDownloads.set(modelId, err.message);
+    try {
+      if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
+    } catch {}
+    setTimeout(() => activeDownloads.delete(modelId), 5000);
+  };
 
-  downloadFileWithRedirect(
-    initialUrl,
-    tempFilePath,
-    activeState,
-    () => {
-      // Completed successfully
-      try {
-        if (fs.existsSync(tempFilePath)) {
-          fs.renameSync(tempFilePath, finalFilePath);
+  const downloadNextFile = (fileIndex: number): void => {
+    if (activeDownloads.get(modelId) !== activeState) return;
+    if (fileIndex >= files.length) {
+      activeDownloads.delete(modelId);
+      failedDownloads.delete(modelId);
+      console.log(`[BGM Model Manager] Tải xong mô hình "${modelId}" -> ${modelDir}`);
+      return;
+    }
+
+    const file = files[fileIndex];
+    const finalFilePath = path.join(modelDir, file.path);
+    const tempFilePath = `${finalFilePath}.download.tmp`;
+    activeState.tempFilePath = tempFilePath;
+    fs.mkdirSync(path.dirname(finalFilePath), { recursive: true });
+    if (!fs.existsSync(finalFilePath)) {
+      const legacyPath = file.legacyPaths
+        ?.map((relativePath) => path.join(modelDir, relativePath))
+        .find((candidate) => {
+          try {
+            if (fs.statSync(candidate).size !== file.sizeBytes) return false;
+            if (!file.sha256) return true;
+            const hash = crypto.createHash("sha256");
+            const descriptor = fs.openSync(candidate, "r");
+            const buffer = Buffer.allocUnsafe(8 * 1024 * 1024);
+            try {
+              let bytesRead = 0;
+              do {
+                bytesRead = fs.readSync(
+                  descriptor,
+                  buffer,
+                  0,
+                  buffer.length,
+                  null,
+                );
+                if (bytesRead > 0) hash.update(buffer.subarray(0, bytesRead));
+              } while (bytesRead > 0);
+            } finally {
+              fs.closeSync(descriptor);
+            }
+            return hash.digest("hex") === file.sha256;
+          } catch {
+            return false;
+          }
+        });
+      if (legacyPath) {
+        try {
+          fs.linkSync(legacyPath, finalFilePath);
+        } catch (error) {
+          console.warn(
+            `[BGM Model Manager] Không thể tái sử dụng checkpoint cũ ${legacyPath}; sẽ tải lại:`,
+            error,
+          );
         }
-        activeDownloads.delete(modelId);
-        console.log(`[BGM Model Manager] Tải xong mô hình "${modelId}" -> ${finalFilePath}`);
-      } catch (e: any) {
-        console.error(`[BGM Model Manager] Lỗi đổi tên file model:`, e);
-        activeDownloads.delete(modelId);
       }
-    },
-    (err) => {
-      console.error(`[BGM Model Manager] Lỗi khi tải mô hình "${modelId}":`, err.message);
-      activeState.error = err.message;
+    }
+    if (fs.existsSync(finalFilePath)) {
       try {
-        if (fs.existsSync(tempFilePath)) {
-          fs.unlinkSync(tempFilePath);
+        if (fs.statSync(finalFilePath).size === file.sizeBytes) {
+          activeState.downloadedBytes += file.sizeBytes;
+          downloadNextFile(fileIndex + 1);
+          return;
         }
       } catch {}
-      setTimeout(() => {
-        activeDownloads.delete(modelId);
-      }, 5000);
     }
-  );
+    const fileUrl =
+      spec.files
+        ? `https://huggingface.co/cvssp/audioldm-s-full-v2/resolve/${AUDIOLDM_REPO_REVISION}/${file.path}`
+        : spec.downloadUrls[0];
+    if (!fileUrl) {
+      failDownload(new Error(`Không có URL tải cho tệp ${file.path}.`), tempFilePath);
+      return;
+    }
+
+    downloadFileWithRedirect(
+      fileUrl,
+      tempFilePath,
+      activeState,
+      () => {
+        try {
+          const downloadedSize = fs.statSync(tempFilePath).size;
+          if (downloadedSize !== file.sizeBytes) {
+            throw new Error(
+              `Kích thước ${file.path} không hợp lệ (${downloadedSize} bytes; mong đợi ${file.sizeBytes}).`,
+            );
+          }
+          fs.renameSync(tempFilePath, finalFilePath);
+          downloadNextFile(fileIndex + 1);
+        } catch (error) {
+          failDownload(
+            error instanceof Error ? error : new Error("Không thể lưu checkpoint vừa tải."),
+            tempFilePath,
+          );
+        }
+      },
+      (error) => failDownload(error, tempFilePath),
+    );
+  };
+
+  console.log(`[BGM Model Manager] Bắt đầu tải model "${modelId}" (${files.length} tệp)...`);
+  downloadNextFile(0);
 
   return { success: true, message: `Đã bắt đầu tải mô hình "${spec.name}" theo yêu cầu.` };
 }
