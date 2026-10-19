@@ -216,6 +216,7 @@ export default function BgmGeneratorTab({ voices }: BgmGeneratorTabProps) {
 
   // UI state
   const [showAdvanced, setShowAdvanced] = useState<boolean>(false);
+  const [showModelPromptModal, setShowModelPromptModal] = useState<boolean>(false);
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
   const [generationProgress, setGenerationProgress] = useState<{
     percent: number;
@@ -232,7 +233,7 @@ export default function BgmGeneratorTab({ voices }: BgmGeneratorTabProps) {
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [trackDuration, setTrackDuration] = useState<number>(0);
-  const [volume, setVolume] = useState<number>(0.8);
+  const [volume, setVolume] = useState<number>(1.0);
   const [isMuted, setIsMuted] = useState<boolean>(false);
   const [loopPlayback, setLoopPlayback] = useState<boolean>(true);
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -511,21 +512,19 @@ export default function BgmGeneratorTab({ voices }: BgmGeneratorTabProps) {
     }
   };
 
-  const handleGenerate = async () => {
+  const handleGenerate = async (forcedEngine?: BgmEngineType) => {
     if (!prompt.trim()) {
       showToast("Vui lòng nhập mô tả âm thanh nền bạn muốn tạo.", "error");
       return;
     }
 
+    const targetEngine = forcedEngine || engine;
+
     // Check if neural model is selected but not ready
-    if (engine === "neural") {
+    if (targetEngine === "neural") {
       const currentModel = systemStatus?.models.find((m) => m.id === selectedModelId);
       if (currentModel?.status !== "ready") {
-        setShowModelManager(true);
-        showToast(
-          `Mô hình "${currentModel?.name || selectedModelId}" chưa được tải về máy. Hãy bấm nút "Tải Model" bên dưới, hoặc chuyển sang chế độ "Bộ Tổng Hợp Siêu Tốc".`,
-          "error",
-        );
+        setShowModelPromptModal(true);
         return;
       }
     }
@@ -538,7 +537,7 @@ export default function BgmGeneratorTab({ voices }: BgmGeneratorTabProps) {
         message: "Đang gửi yêu cầu tạo nhạc...",
       });
       showToast(
-        engine === "neural"
+        targetEngine === "neural"
           ? `Đang chuẩn bị tạo audio bằng ${selectedModelId === "audioldm-soundscape" ? "AudioLDM" : "MusicGen"}...`
           : "Đang tạo nhạc nền loop 100% offline bằng Bộ Tổng Hợp Siêu Tốc...",
         "info",
@@ -556,7 +555,7 @@ export default function BgmGeneratorTab({ voices }: BgmGeneratorTabProps) {
           intensity,
           format,
           elements,
-          engine,
+          engine: targetEngine,
           modelId: selectedModelId,
           cpuThreads,
         }),
@@ -632,11 +631,13 @@ export default function BgmGeneratorTab({ voices }: BgmGeneratorTabProps) {
       setActiveTrack(newTrack);
       setHistory((prev) => [newTrack, ...prev.filter((t) => t.id !== newTrack.id)]);
 
-      // Auto play the generated track
+      // Auto play the generated track with full volume
       if (audioRef.current) {
         setIsPlaying(false);
         audioRef.current.src = newTrack.audioUrl;
-        audioRef.current.volume = volume;
+        audioRef.current.volume = 1.0;
+        setVolume(1.0);
+        setIsMuted(false);
         audioRef.current.loop = loopPlayback;
         try {
           await audioRef.current.play();
@@ -653,7 +654,7 @@ export default function BgmGeneratorTab({ voices }: BgmGeneratorTabProps) {
       }
 
       showToast(
-        `Đã tạo thành công "${newTrack.title}" (${newTrack.duration}s loop)!`,
+        `Đã tạo thành công "${newTrack.title}" (${newTrack.duration}s loop)! Đang phát âm thanh...`,
         "success",
       );
     } catch (err: any) {
@@ -1499,12 +1500,47 @@ export default function BgmGeneratorTab({ voices }: BgmGeneratorTabProps) {
               </div>
             )}
 
+            {/* Warning banner when Neural Model is selected but not downloaded */}
+            {engine === "neural" && activeModel?.status !== "ready" && (
+              <div className="p-4 rounded-2xl bg-purple-950/40 border border-purple-800/60 text-purple-200 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-in fade-in">
+                <div className="flex items-center gap-2.5">
+                  <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0" />
+                  <div>
+                    <strong className="text-white">Mô hình AI chưa được tải về máy ({activeModel?.sizeFormatted || "1.2 GB"})</strong>
+                    <p className="text-slate-400 text-[11px] mt-0.5">
+                      Bấm nút tải để tải về máy dùng AI, hoặc bấm chuyển sang "Bộ Siêu Tốc" để tạo tức thì 0.1s không cần tải model.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowModelManager(true);
+                      handleStartDownload(selectedModelId);
+                    }}
+                    className="px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-md"
+                  >
+                    <DownloadCloud className="w-3.5 h-3.5" />
+                    <span>Tải Model ({activeModel?.sizeFormatted || "1.2GB"})</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEngine("procedural")}
+                    className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium text-xs cursor-pointer"
+                  >
+                    <span>Dùng Bộ Siêu Tốc</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* Action Generate Button */}
             <div className="pt-2">
               <button
                 type="button"
                 disabled={isGenerating}
-                onClick={handleGenerate}
+                onClick={() => handleGenerate()}
                 className="w-full py-4 px-6 rounded-2xl bg-gradient-to-r from-amber-500 via-amber-400 to-purple-600 hover:from-amber-400 hover:to-purple-500 text-slate-950 font-black text-sm sm:text-base tracking-wide flex items-center justify-center gap-3 shadow-xl shadow-amber-500/20 active:scale-[0.99] transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {isGenerating ? (
@@ -1939,6 +1975,77 @@ export default function BgmGeneratorTab({ voices }: BgmGeneratorTabProps) {
           </div>
         </div>
       </div>
+
+      {/* ========================================================= */}
+      {/* MODAL: MODEL DOWNLOAD PROMPT & ENGINE SWITCH               */}
+      {/* ========================================================= */}
+      {showModelPromptModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-purple-800/60 rounded-3xl p-6 sm:p-7 max-w-lg w-full shadow-2xl space-y-5 animate-in fade-in zoom-in-95">
+            <div className="flex items-start justify-between gap-3">
+              <div className="w-12 h-12 rounded-2xl bg-purple-500/20 text-purple-400 flex items-center justify-center border border-purple-500/30 shrink-0">
+                <HardDrive className="w-6 h-6" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-base font-extrabold text-white">
+                  Chưa Có File Model AI Trên Máy
+                </h3>
+                <p className="text-xs text-purple-300 font-semibold mt-0.5">
+                  Mô hình: {activeModel?.name || selectedModelId}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowModelPromptModal(false)}
+                className="text-slate-500 hover:text-slate-300 p-1 rounded-lg"
+              >
+                <XCircle className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="bg-slate-950/70 border border-slate-800 rounded-2xl p-4 text-xs text-slate-300 space-y-2 leading-relaxed">
+              <p>
+                Theo đúng yêu cầu của bạn, hệ thống <strong className="text-emerald-400">không lưu sẵn model nặng trong dự án</strong>.
+              </p>
+              <p>
+                Để sinh nhạc bằng mô hình Deep Learning AI, bạn cần bấm tải file trọng số model (~<strong className="text-white">{activeModel?.sizeFormatted || "1.2 GB"}</strong>) về máy (lưu trong thư mục ngoài dự án).
+              </p>
+              <div className="pt-1 text-[11px] text-amber-300 flex items-center gap-1.5">
+                <Sparkles className="w-3.5 h-3.5 shrink-0 text-amber-400" />
+                <span>Hoặc bạn có thể nghe âm thanh ngay tức thì bằng Bộ Tổng Hợp Siêu Tốc (0MB).</span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowModelPromptModal(false);
+                  setShowModelManager(true);
+                  handleStartDownload(selectedModelId);
+                }}
+                className="py-3 px-4 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-lg shadow-purple-900/30 transition-all cursor-pointer"
+              >
+                <DownloadCloud className="w-4 h-4" />
+                <span>Tải Model AI ({activeModel?.sizeFormatted || "1.2GB"})</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setShowModelPromptModal(false);
+                  setEngine("procedural");
+                  handleGenerate("procedural");
+                }}
+                className="py-3 px-4 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs flex items-center justify-center gap-2 shadow-lg shadow-amber-500/20 transition-all cursor-pointer"
+              >
+                <Zap className="w-4 h-4 fill-current" />
+                <span>Dùng Bộ Siêu Tốc (Nghe Luôn)</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

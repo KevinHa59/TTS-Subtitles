@@ -297,70 +297,95 @@ function buildFfmpegArgs(
 
   // MOOD-SPECIFIC SYNTHESIS LAYERS
   if (mood === "horror") {
-    // 1. Deep sub-bass drone (55Hz / A1)
-    inputs.push("-f", "lavfi", "-i", `sine=frequency=55:duration=${rawDuration}`);
-    filters.push(`[${streamCount}:a]volume=0.55,tremolo=f=0.4:d=0.6[s_${streamCount}]`);
+    // 1. Audible deep drone (110Hz / A2)
+    inputs.push("-f", "lavfi", "-i", `sine=frequency=110:duration=${rawDuration}`);
+    filters.push(`[${streamCount}:a]volume=0.8,tremolo=f=0.5:d=0.5[s_${streamCount}]`);
     streamCount++;
 
-    // 2. Dissonant minor second (58.27Hz / Bb1)
-    inputs.push("-f", "lavfi", "-i", `sine=frequency=58.27:duration=${rawDuration}`);
-    filters.push(`[${streamCount}:a]volume=0.42[s_${streamCount}]`);
-    streamCount++;
-
-    // 3. Eerie mid tritone (116.54Hz / Bb2) with subtle wobble
+    // 2. Dissonant minor second (116.54Hz / Bb2)
     inputs.push("-f", "lavfi", "-i", `sine=frequency=116.54:duration=${rawDuration}`);
-    filters.push(`[${streamCount}:a]volume=0.28,tremolo=f=1.1:d=0.4[s_${streamCount}]`);
+    filters.push(`[${streamCount}:a]volume=0.75,tremolo=f=1.2:d=0.6[s_${streamCount}]`);
     streamCount++;
 
-    // 4. Subterranean brown noise rumble
-    inputs.push("-f", "lavfi", "-i", `anoisesrc=color=brown:duration=${rawDuration}:amplitude=0.07`);
-    filters.push(`[${streamCount}:a]lowpass=f=260,volume=0.6[s_${streamCount}]`);
+    // 3. Eerie mid string (220Hz / A3) with chorus/flanger
+    inputs.push("-f", "lavfi", "-i", `sine=frequency=220:duration=${rawDuration}`);
+    filters.push(`[${streamCount}:a]volume=0.6,flanger=delay=5:depth=4:regen=30:width=70[s_${streamCount}]`);
+    streamCount++;
+
+    // 4. Ghostly high tritone (440Hz / A4)
+    inputs.push("-f", "lavfi", "-i", `sine=frequency=440:duration=${rawDuration}`);
+    filters.push(`[${streamCount}:a]volume=0.4,vibrato=f=4:d=0.5[s_${streamCount}]`);
+    streamCount++;
+
+    // 5. Creepy high overtone (587.33Hz / D5)
+    inputs.push("-f", "lavfi", "-i", `sine=frequency=587.33:duration=${rawDuration}`);
+    filters.push(`[${streamCount}:a]volume=0.3,tremolo=f=0.8:d=0.7[s_${streamCount}]`);
+    streamCount++;
+
+    // 6. Subterranean brown noise rumble
+    inputs.push("-f", "lavfi", "-i", `anoisesrc=color=brown:duration=${rawDuration}:amplitude=0.12`);
+    filters.push(`[${streamCount}:a]bandpass=f=280:w=140,volume=0.75[s_${streamCount}]`);
     streamCount++;
   } else if (mood === "suspense") {
-    // 1. Tension drone (65.41Hz / C2)
-    inputs.push("-f", "lavfi", "-i", `sine=frequency=65.41:duration=${rawDuration}`);
-    filters.push(`[${streamCount}:a]volume=0.5,tremolo=f=0.8:d=0.5[s_${streamCount}]`);
+    // 1. Tension root (130.81Hz / C3)
+    inputs.push("-f", "lavfi", "-i", `sine=frequency=130.81:duration=${rawDuration}`);
+    filters.push(`[${streamCount}:a]volume=0.8,tremolo=f=0.6:d=0.5[s_${streamCount}]`);
     streamCount++;
 
-    // 2. High tension dissonance (493.88Hz / B4)
+    // 2. Tension fifth (196Hz / G3)
+    inputs.push("-f", "lavfi", "-i", `sine=frequency=196:duration=${rawDuration}`);
+    filters.push(`[${streamCount}:a]volume=0.6[s_${streamCount}]`);
+    streamCount++;
+
+    // 3. High tension dissonance (493.88Hz / B4)
     inputs.push("-f", "lavfi", "-i", `sine=frequency=493.88:duration=${rawDuration}`);
-    filters.push(`[${streamCount}:a]volume=0.18,tremolo=f=2.4:d=0.6[s_${streamCount}]`);
+    filters.push(`[${streamCount}:a]volume=0.45,vibrato=f=5:d=0.6[s_${streamCount}]`);
     streamCount++;
 
-    // 3. Pulse / Heartbeat rhythm
-    inputs.push("-f", "lavfi", "-i", `sine=frequency=50:duration=${rawDuration}`);
-    filters.push(`[${streamCount}:a]volume=0.65,tremolo=f=1.2:d=0.9[s_${streamCount}]`);
+    // 4. Minor second clash (523.25Hz / C5)
+    inputs.push("-f", "lavfi", "-i", `sine=frequency=523.25:duration=${rawDuration}`);
+    filters.push(`[${streamCount}:a]volume=0.35,tremolo=f=2.2:d=0.7[s_${streamCount}]`);
     streamCount++;
 
-    // 4. Low air tension
-    inputs.push("-f", "lavfi", "-i", `anoisesrc=color=pink:duration=${rawDuration}:amplitude=0.04`);
-    filters.push(`[${streamCount}:a]bandpass=f=350:w=120,volume=0.5[s_${streamCount}]`);
+    // 5. Rhythmic Heartbeat pulse (80Hz with punchy tremolo)
+    inputs.push("-f", "lavfi", "-i", `sine=frequency=80:duration=${rawDuration}`);
+    filters.push(`[${streamCount}:a]volume=0.9,tremolo=f=1.3:d=0.95[s_${streamCount}]`);
+    streamCount++;
+
+    // 6. Tension friction texture
+    inputs.push("-f", "lavfi", "-i", `anoisesrc=color=pink:duration=${rawDuration}:amplitude=0.08`);
+    filters.push(`[${streamCount}:a]bandpass=f=450:w=160,volume=0.6[s_${streamCount}]`);
     streamCount++;
   } else if (mood === "ancient") {
-    // Cổ trang / Kiếm hiệp: D minor pentatonic harmony (D2, A2, D3, F3, A3)
-    // 1. Root D2 (73.42Hz)
-    inputs.push("-f", "lavfi", "-i", `sine=frequency=73.42:duration=${rawDuration}`);
-    filters.push(`[${streamCount}:a]volume=0.5[s_${streamCount}]`);
+    // Cổ trang / Kiếm hiệp: D minor pentatonic harmony (D3, A3, D4, F4, A4, C5)
+    // 1. Root D3 (146.83Hz)
+    inputs.push("-f", "lavfi", "-i", `sine=frequency=146.83:duration=${rawDuration}`);
+    filters.push(`[${streamCount}:a]volume=0.8[s_${streamCount}]`);
     streamCount++;
 
-    // 2. Fifth A2 (110Hz)
-    inputs.push("-f", "lavfi", "-i", `sine=frequency=110:duration=${rawDuration}`);
-    filters.push(`[${streamCount}:a]volume=0.38,tremolo=f=0.3:d=0.3[s_${streamCount}]`);
+    // 2. Fifth A3 (220Hz)
+    inputs.push("-f", "lavfi", "-i", `sine=frequency=220:duration=${rawDuration}`);
+    filters.push(`[${streamCount}:a]volume=0.7,tremolo=f=0.4:d=0.3[s_${streamCount}]`);
     streamCount++;
 
-    // 3. Flute-like octave D4 (293.66Hz)
+    // 3. Bamboo Flute D4 (293.66Hz) with rich flanger
     inputs.push("-f", "lavfi", "-i", `sine=frequency=293.66:duration=${rawDuration}`);
-    filters.push(`[${streamCount}:a]volume=0.22,flanger=delay=4:depth=3:regen=30:width=60[s_${streamCount}]`);
+    filters.push(`[${streamCount}:a]volume=0.55,flanger=delay=4:depth=3:regen=35:width=70[s_${streamCount}]`);
     streamCount++;
 
-    // 4. Minor third F4 (349.23Hz)
+    // 4. Melancholic minor third F4 (349.23Hz)
     inputs.push("-f", "lavfi", "-i", `sine=frequency=349.23:duration=${rawDuration}`);
-    filters.push(`[${streamCount}:a]volume=0.18,tremolo=f=0.5:d=0.4[s_${streamCount}]`);
+    filters.push(`[${streamCount}:a]volume=0.5,vibrato=f=4.5:d=0.4[s_${streamCount}]`);
     streamCount++;
 
-    // 5. Gentle wind / bamboo air
-    inputs.push("-f", "lavfi", "-i", `anoisesrc=color=pink:duration=${rawDuration}:amplitude=0.03`);
-    filters.push(`[${streamCount}:a]bandpass=f=600:w=250,volume=0.4[s_${streamCount}]`);
+    // 5. Ancient Guzheng tone A4 (440Hz)
+    inputs.push("-f", "lavfi", "-i", `sine=frequency=440:duration=${rawDuration}`);
+    filters.push(`[${streamCount}:a]volume=0.4,tremolo=f=0.6:d=0.5[s_${streamCount}]`);
+    streamCount++;
+
+    // 6. Bamboo wind breeze
+    inputs.push("-f", "lavfi", "-i", `anoisesrc=color=pink:duration=${rawDuration}:amplitude=0.06`);
+    filters.push(`[${streamCount}:a]bandpass=f=650:w=220,volume=0.5[s_${streamCount}]`);
     streamCount++;
   } else if (mood === "nature") {
     // 1. Rain texture (Pink + Brown noise layered)
@@ -499,12 +524,12 @@ function buildFfmpegArgs(
     streamCount++;
   }
 
-  // MIX ALL INPUTS
+  // MIX ALL INPUTS (normalize=0 to prevent volume drop)
   const inputLabels = Array.from({ length: streamCount }, (_, i) => `[s_${i}]`).join("");
   const mixFilter = `${inputLabels}amix=inputs=${streamCount}:dropout_transition=0:normalize=0,aecho=0.8:0.88:80|160:0.35|0.2,volume=${masterGain}[raw_mix]`;
   filters.push(mixFilter);
 
-  // SEAMLESS LOOP CROSSFADE
+  // SEAMLESS LOOP CROSSFADE + BROADCAST LOUDNORM (-14 LUFS)
   let finalFilter = "";
   if (loop && crossfadeSec > 0) {
     const fade = crossfadeSec;

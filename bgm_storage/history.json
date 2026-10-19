@@ -1,1 +1,48 @@
-[]
+[
+  {
+    "id": "bgm_1792444774358_wr8c",
+    "title": "Nhạc Nền Kinh Dị U Ám",
+    "prompt": "tạo 1 âm thanh nền kinh dị cho audio kể truyện",
+    "mood": "horror",
+    "duration": 15,
+    "format": "mp3",
+    "audioUrl": "/api/bgm/audio/bgm_1792444774358_wr8c.mp3",
+    "downloadUrl": "/api/bgm/download/bgm_1792444774358_wr8c.mp3",
+    "sizeBytes": 481581,
+    "createdAt": "2026-10-19T21:19:35.153Z",
+    "elements": {
+      "rain": false,
+      "thunder": false,
+      "wind": false,
+      "heartbeat": false,
+      "chimes": false,
+      "waves": false,
+      "vinyl": false,
+      "drone": true
+    },
+    "engine": "procedural"
+  },
+  {
+    "id": "bgm_1792444648169_95hr",
+    "title": "Nhạc Nền Kinh Dị U Ám",
+    "prompt": "tạo 1 âm thanh nền kinh dị cho audio kể truyện ma",
+    "mood": "horror",
+    "duration": 15,
+    "format": "mp3",
+    "audioUrl": "/api/bgm/audio/bgm_1792444648169_95hr.mp3",
+    "downloadUrl": "/api/bgm/download/bgm_1792444648169_95hr.mp3",
+    "sizeBytes": 481581,
+    "createdAt": "2026-10-19T21:17:29.033Z",
+    "elements": {
+      "rain": false,
+      "thunder": false,
+      "wind": false,
+      "heartbeat": false,
+      "chimes": false,
+      "waves": false,
+      "vinyl": false,
+      "drone": true
+    },
+    "engine": "procedural"
+  }
+]
