@@ -60,6 +60,8 @@ import {
   BellOff,
   BookOpen,
   Plus,
+  Menu,
+  Zap,
 } from "lucide-react";
 
 import {
@@ -148,6 +150,7 @@ export default function App() {
     "subtitles" | "single" | "story" | "bgm"
   >("subtitles");
   const [showAudioCleanupModal, setShowAudioCleanupModal] = useState<boolean>(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState<boolean>(false);
 
   // Voices
   const [voices, setVoices] = useState<VoiceOption[]>([]);
@@ -1542,34 +1545,43 @@ export default function App() {
       <audio ref={singleAudioRef} />
 
       {/* Header */}
-      <header className="border-b border-slate-800/80 bg-slate-900/60 backdrop-blur sticky top-0 z-40">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-500 via-orange-500 to-rose-600 flex items-center justify-center shadow-lg shadow-amber-500/20 text-white font-black text-sm tracking-tighter">
+      <header className="border-b border-slate-800/80 bg-slate-900/80 backdrop-blur sticky top-0 z-40 w-full max-w-full">
+        <div className="w-full px-3 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-2 sm:gap-4 max-w-full">
+          {/* Logo & Brand */}
+          <div className="flex items-center gap-2.5 sm:gap-3 shrink-0">
+            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-br from-amber-500 via-orange-500 to-rose-600 flex items-center justify-center shadow-lg shadow-amber-500/20 text-white font-black text-xs sm:text-sm tracking-tighter shrink-0">
               TTS
             </div>
-            <div>
+            <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <h1 className="font-semibold text-base sm:text-lg text-white tracking-tight">
+                <h1 className="font-semibold text-sm sm:text-lg text-white tracking-tight truncate">
                   Piper TTS Studio
                 </h1>
-                <span className="text-xs text-amber-400 font-mono font-medium">
+                <span className="text-xs text-amber-400 font-mono font-medium hidden sm:inline">
                   Multi-Voice & SRT
                 </span>
+                {/* Active mode indicator badge on mobile view */}
+                <span className="lg:hidden text-[10px] font-medium px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400 border border-amber-500/30 truncate max-w-[125px] sm:max-w-none">
+                  {activeTab === "subtitles" && "Đồng Bộ SRT"}
+                  {activeTab === "single" && "Đọc Đoạn Văn"}
+                  {activeTab === "story" && "Kể Truyện"}
+                  {activeTab === "bgm" && "Tạo Nhạc Nền"}
+                </span>
               </div>
-              <p className="text-xs text-slate-400 hidden sm:block">
+              <p className="text-xs text-slate-400 hidden xl:block">
                 Studio tổng hợp giọng nói & đồng bộ phụ đề đa giọng đọc tiếng Việt 100% Offline
               </p>
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          {/* Desktop Navigation (>= lg screens: 100% full-width row, no wrapping) */}
+          <div className="hidden lg:flex items-center gap-2 shrink-0 flex-nowrap">
             {/* Mode Tabs */}
-            <div className="flex items-center p-1 bg-slate-950/80 rounded-xl border border-slate-800 text-xs">
+            <nav className="flex items-center p-1 bg-slate-950/80 rounded-xl border border-slate-800 text-xs shrink-0 flex-nowrap">
               <button
                 type="button"
                 onClick={() => setActiveTab("subtitles")}
-                className={`px-3 py-1.5 rounded-lg font-medium transition-all ${
+                className={`px-3 py-1.5 rounded-lg font-medium transition-all whitespace-nowrap ${
                   activeTab === "subtitles"
                     ? "bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/20"
                     : "text-slate-400 hover:text-white"
@@ -1580,7 +1592,7 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => setActiveTab("single")}
-                className={`px-3 py-1.5 rounded-lg font-medium transition-all ${
+                className={`px-3 py-1.5 rounded-lg font-medium transition-all whitespace-nowrap ${
                   activeTab === "single"
                     ? "bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/20"
                     : "text-slate-400 hover:text-white"
@@ -1591,7 +1603,7 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => setActiveTab("story")}
-                className={`px-3 py-1.5 rounded-lg font-medium transition-all flex items-center gap-1.5 ${
+                className={`px-3 py-1.5 rounded-lg font-medium transition-all flex items-center gap-1.5 whitespace-nowrap ${
                   activeTab === "story"
                     ? "bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/20"
                     : "text-slate-400 hover:text-white"
@@ -1603,7 +1615,7 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => setActiveTab("bgm")}
-                className={`px-3 py-1.5 rounded-lg font-medium transition-all flex items-center gap-1.5 ${
+                className={`px-3 py-1.5 rounded-lg font-medium transition-all flex items-center gap-1.5 whitespace-nowrap ${
                   activeTab === "bgm"
                     ? "bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/20"
                     : "text-slate-400 hover:text-white"
@@ -1612,28 +1624,200 @@ export default function App() {
                 <Music className="w-3.5 h-3.5" />
                 <span>Tạo Nhạc Nền</span>
               </button>
-            </div>
+            </nav>
 
-            {/* Nút Dọn Dẹp Audio nổi bật trên Header (Requirement: Nút Dọn Dẹp Audio trên giao diện) */}
+            {/* Nút Dọn Dẹp Audio trên Header */}
             <button
               type="button"
               onClick={() => setShowAudioCleanupModal(true)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-rose-300 hover:text-rose-100 bg-rose-950/50 hover:bg-rose-900/70 rounded-xl transition-all border border-rose-800/80 shadow-sm"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-rose-300 hover:text-rose-100 bg-rose-950/50 hover:bg-rose-900/70 rounded-xl transition-all border border-rose-800/80 shadow-sm shrink-0 whitespace-nowrap"
               title="Dọn dẹp toàn bộ file audio TTS tạm thời trong hệ thống"
             >
               <Trash2 className="w-3.5 h-3.5 text-rose-400" />
               <span>Dọn Dẹp Audio</span>
             </button>
 
+            {/* Mã Nguồn Button */}
             <button
+              type="button"
               onClick={() => setShowApiModal(true)}
-              className="hidden md:inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-300 hover:text-white bg-slate-800/80 hover:bg-slate-700/80 rounded-lg transition-colors border border-slate-700/60"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-300 hover:text-white bg-slate-800/80 hover:bg-slate-700/80 rounded-lg transition-colors border border-slate-700/60 shrink-0 whitespace-nowrap"
             >
               <Code className="w-3.5 h-3.5 text-amber-400" />
               <span>Mã Nguồn</span>
             </button>
           </div>
+
+          {/* Mobile Hamburger Controls (< lg screens) */}
+          <div className="flex items-center gap-2 lg:hidden shrink-0">
+            <button
+              type="button"
+              onClick={() => setShowAudioCleanupModal(true)}
+              className="p-2 rounded-xl text-rose-300 bg-rose-950/40 border border-rose-900/60 hover:bg-rose-900/60 transition-colors"
+              title="Dọn dẹp Audio"
+            >
+              <Trash2 className="w-4 h-4 text-rose-400" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setMobileMenuOpen((prev) => !prev)}
+              aria-label="Mở menu chuyển tab và tính năng"
+              className={`p-2 rounded-xl border transition-colors flex items-center justify-center ${
+                mobileMenuOpen
+                  ? "bg-amber-500/20 border-amber-500/40 text-amber-400"
+                  : "bg-slate-800/80 border-slate-700/70 text-slate-300 hover:text-white hover:bg-slate-700/80"
+              }`}
+            >
+              {mobileMenuOpen ? (
+                <X className="w-5 h-5 text-amber-400" />
+              ) : (
+                <Menu className="w-5 h-5 text-slate-200" />
+              )}
+            </button>
+          </div>
         </div>
+
+        {/* Mobile Dropdown Menu: Chứa toàn bộ menu chức năng khi ở mobile view */}
+        {mobileMenuOpen && (
+          <>
+            {/* Backdrop for closing menu on outside tap */}
+            <div
+              className="fixed inset-0 top-16 bg-black/60 z-30 lg:hidden backdrop-blur-xs"
+              onClick={() => setMobileMenuOpen(false)}
+            />
+            <div className="relative z-40 lg:hidden border-t border-slate-800 bg-slate-900/98 backdrop-blur-xl px-4 py-4 space-y-4 shadow-2xl">
+              <div>
+                <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-2 px-1">
+                  Chế độ làm việc
+                </div>
+                <div className="grid grid-cols-1 gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveTab("subtitles");
+                      setMobileMenuOpen(false);
+                    }}
+                    className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl font-medium text-sm transition-all ${
+                      activeTab === "subtitles"
+                        ? "bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/20"
+                        : "bg-slate-950/60 text-slate-300 hover:text-white hover:bg-slate-800/60 border border-slate-800/70"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <FileText className={`w-4 h-4 ${activeTab === "subtitles" ? "text-slate-950" : "text-amber-400"}`} />
+                      <span>Đồng Bộ Phụ Đề (SRT)</span>
+                    </div>
+                    {activeTab === "subtitles" && (
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-950/20 text-slate-950">
+                        Đang chọn
+                      </span>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveTab("single");
+                      setMobileMenuOpen(false);
+                    }}
+                    className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl font-medium text-sm transition-all ${
+                      activeTab === "single"
+                        ? "bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/20"
+                        : "bg-slate-950/60 text-slate-300 hover:text-white hover:bg-slate-800/60 border border-slate-800/70"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <Zap className={`w-4 h-4 ${activeTab === "single" ? "text-slate-950" : "text-amber-400"}`} />
+                      <span>Đọc Đoạn Văn Nhanh</span>
+                    </div>
+                    {activeTab === "single" && (
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-950/20 text-slate-950">
+                        Đang chọn
+                      </span>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveTab("story");
+                      setMobileMenuOpen(false);
+                    }}
+                    className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl font-medium text-sm transition-all ${
+                      activeTab === "story"
+                        ? "bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/20"
+                        : "bg-slate-950/60 text-slate-300 hover:text-white hover:bg-slate-800/60 border border-slate-800/70"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <BookOpen className={`w-4 h-4 ${activeTab === "story" ? "text-slate-950" : "text-amber-400"}`} />
+                      <span>Kể Truyện</span>
+                    </div>
+                    {activeTab === "story" && (
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-950/20 text-slate-950">
+                        Đang chọn
+                      </span>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveTab("bgm");
+                      setMobileMenuOpen(false);
+                    }}
+                    className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl font-medium text-sm transition-all ${
+                      activeTab === "bgm"
+                        ? "bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/20"
+                        : "bg-slate-950/60 text-slate-300 hover:text-white hover:bg-slate-800/60 border border-slate-800/70"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <Music className={`w-4 h-4 ${activeTab === "bgm" ? "text-slate-950" : "text-amber-400"}`} />
+                      <span>Tạo Nhạc Nền</span>
+                    </div>
+                    {activeTab === "bgm" && (
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-950/20 text-slate-950">
+                        Đang chọn
+                      </span>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              <div className="pt-3 border-t border-slate-800/80">
+                <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-2 px-1">
+                  Công cụ tiện ích
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowAudioCleanupModal(true);
+                      setMobileMenuOpen(false);
+                    }}
+                    className="flex items-center justify-center gap-2 px-3 py-2.5 text-xs font-semibold text-rose-300 bg-rose-950/50 hover:bg-rose-900/70 rounded-xl border border-rose-800/80 transition-colors"
+                  >
+                    <Trash2 className="w-4 h-4 text-rose-400" />
+                    <span>Dọn Dẹp Audio</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowApiModal(true);
+                      setMobileMenuOpen(false);
+                    }}
+                    className="flex items-center justify-center gap-2 px-3 py-2.5 text-xs font-medium text-slate-300 bg-slate-800/80 hover:bg-slate-700/80 rounded-xl border border-slate-700/70 transition-colors"
+                  >
+                    <Code className="w-4 h-4 text-amber-400" />
+                    <span>Mã Nguồn</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </>
+        )}
       </header>
 
       {/* Main Container */}

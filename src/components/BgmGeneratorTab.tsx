@@ -633,30 +633,32 @@ export default function BgmGeneratorTab({ voices }: BgmGeneratorTabProps) {
 
       // Auto play the generated track with full volume
       if (audioRef.current) {
-        setIsPlaying(false);
         audioRef.current.src = newTrack.audioUrl;
         audioRef.current.volume = 1.0;
         setVolume(1.0);
         setIsMuted(false);
         audioRef.current.loop = loopPlayback;
-        try {
-          await audioRef.current.play();
-          setIsPlaying(true);
-        } catch (error) {
-          const detail =
-            error instanceof Error ? ` (${error.message})` : "";
-          showToast(
-            `Đã tạo nhạc nhưng không thể tự phát audio${detail}. Hãy bấm nút Phát để thử lại.`,
-            "error",
-          );
-          return;
-        }
+        audioRef.current.play()
+          .then(() => {
+            setIsPlaying(true);
+            showToast(
+              `Đã tạo xong "${newTrack.title}" (${newTrack.duration}s)! Đang phát âm thanh...`,
+              "success",
+            );
+          })
+          .catch(() => {
+            setIsPlaying(false);
+            showToast(
+              `Đã tạo thành công "${newTrack.title}"! Hãy bấm nút "Phát" (▶) bên phải để nghe thử.`,
+              "success",
+            );
+          });
+      } else {
+        showToast(
+          `Đã tạo thành công "${newTrack.title}" (${newTrack.duration}s loop)!`,
+          "success",
+        );
       }
-
-      showToast(
-        `Đã tạo thành công "${newTrack.title}" (${newTrack.duration}s loop)! Đang phát âm thanh...`,
-        "success",
-      );
     } catch (err: any) {
       console.error(err);
       showToast(err.message || "Lỗi trong quá trình tạo nhạc.", "error");
@@ -1536,31 +1538,90 @@ export default function BgmGeneratorTab({ voices }: BgmGeneratorTabProps) {
             )}
 
             {/* Action Generate Button */}
-            <div className="pt-2">
-              <button
-                type="button"
-                disabled={isGenerating}
-                onClick={() => handleGenerate()}
-                className="w-full py-4 px-6 rounded-2xl bg-gradient-to-r from-amber-500 via-amber-400 to-purple-600 hover:from-amber-400 hover:to-purple-500 text-slate-950 font-black text-sm sm:text-base tracking-wide flex items-center justify-center gap-3 shadow-xl shadow-amber-500/20 active:scale-[0.99] transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {isGenerating ? (
-                  <>
-                    <RefreshCw className="w-5 h-5 animate-spin text-slate-950" />
-                    <span>
-                      {engine === "neural"
-                        ? `${selectedModelId === "audioldm-soundscape" ? "AudioLDM" : "MusicGen"} ${generationProgress.percent}%`
-                        : `Đang tạo nhạc nền (${generationProgress.percent}%)`}
+            <div className="pt-2 space-y-2">
+              {engine === "neural" && activeModel?.status === "downloading" ? (
+                <div className="p-4 rounded-2xl bg-purple-950/70 border border-purple-700/80 text-purple-200 text-xs space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-white flex items-center gap-2">
+                      <RefreshCw className="w-4 h-4 text-purple-400 animate-spin" />
+                      <span>Đang tải mô hình {activeModel.name}...</span>
                     </span>
-                  </>
-                ) : (
-                  <>
-                    <Sparkles className="w-5 h-5 text-slate-950" />
-                    <span>
-                      Tạo Nhạc Nền Bằng {engine === "neural" ? "AI Neural Model" : "Động Cơ Siêu Tốc"} ({duration}s)
+                    <span className="font-mono font-black text-purple-300">
+                      {activeModel.downloadProgress}% ({activeModel.downloadSpeedMb} MB/s)
                     </span>
-                  </>
-                )}
-              </button>
+                  </div>
+                  <div className="w-full h-2 rounded-full bg-slate-900 overflow-hidden">
+                    <div
+                      className="h-full bg-gradient-to-r from-purple-500 to-indigo-400 transition-all duration-300"
+                      style={{ width: `${activeModel.downloadProgress}%` }}
+                    />
+                  </div>
+                  <div className="flex items-center justify-between text-[11px] text-slate-400 pt-1">
+                    <span>Vui lòng đợi tải xong để tạo nhạc AI chất lượng cao.</span>
+                    <button
+                      type="button"
+                      onClick={() => handleCancelDownload(selectedModelId)}
+                      className="text-rose-400 hover:text-rose-300 font-semibold"
+                    >
+                      Hủy tải
+                    </button>
+                  </div>
+                </div>
+              ) : engine === "neural" && activeModel?.status !== "ready" ? (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowModelManager(true);
+                      handleStartDownload(selectedModelId);
+                    }}
+                    className="py-4 px-5 rounded-2xl bg-gradient-to-r from-purple-600 via-indigo-600 to-purple-700 hover:from-purple-500 hover:to-indigo-500 text-white font-black text-xs sm:text-sm flex items-center justify-center gap-2 shadow-xl shadow-purple-900/30 transition-all cursor-pointer"
+                  >
+                    <DownloadCloud className="w-4 h-4 shrink-0 text-amber-300" />
+                    <span>Tải Model AI ({activeModel?.sizeFormatted || "2.2GB"})</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEngine("procedural");
+                      handleGenerate("procedural");
+                    }}
+                    className="py-4 px-5 rounded-2xl bg-gradient-to-r from-amber-500 via-amber-400 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-black text-xs sm:text-sm flex items-center justify-center gap-2 shadow-xl shadow-amber-500/20 transition-all cursor-pointer"
+                  >
+                    <Zap className="w-4 h-4 shrink-0 fill-current" />
+                    <span>Dùng Bộ Siêu Tốc (0MB, Nghe Luôn)</span>
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  disabled={isGenerating}
+                  onClick={() => handleGenerate()}
+                  className="w-full py-4 px-6 rounded-2xl bg-gradient-to-r from-amber-500 via-amber-400 to-purple-600 hover:from-amber-400 hover:to-purple-500 text-slate-950 font-black text-sm sm:text-base tracking-wide flex items-center justify-center gap-3 shadow-xl shadow-amber-500/20 active:scale-[0.99] transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isGenerating ? (
+                    <>
+                      <RefreshCw className="w-5 h-5 animate-spin text-slate-950" />
+                      <span>
+                        {engine === "neural"
+                          ? `${selectedModelId === "audioldm-soundscape" ? "AudioLDM" : "MusicGen"} ${generationProgress.percent}%`
+                          : `Đang tạo nhạc nền (${generationProgress.percent}%)`}
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="w-5 h-5 text-slate-950" />
+                      <span>
+                        {engine === "neural"
+                          ? `Tạo Nhạc AI (${activeModel?.name?.split("(")[0] || "Neural"}) · ${duration}s`
+                          : `⚡ Tạo Nhạc Nền Bằng Bộ Siêu Tốc (DSP · ${duration}s)`}
+                      </span>
+                    </>
+                  )}
+                </button>
+              )}
+
               {isGenerating && (
                 <div
                   className="mt-3 rounded-xl border border-slate-800 bg-slate-950/80 p-3 space-y-2"

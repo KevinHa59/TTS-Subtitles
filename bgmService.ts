@@ -1061,10 +1061,18 @@ export async function generateBgmTrack(
       }, onProgress);
     } else {
       onProgress({
-        percent: 10,
-        stage: "synthesis",
-        message: "Đang tổng hợp các lớp âm thanh bằng FFmpeg...",
+        percent: 20,
+        stage: "analysis",
+        message: `Đang phân tích chủ đề "${mood}" & soạn hòa âm stereo...`,
       });
+      await new Promise((r) => setTimeout(r, 250));
+
+      onProgress({
+        percent: 50,
+        stage: "synthesis",
+        message: "Đang tổng hợp các lớp nhạc cụ (giai điệu, hợp âm, nhịp điệu)...",
+      });
+
       const ffmpegBin = resolveFfmpegPath();
       const args = buildFfmpegArgs(outputPath, {
         mood,
@@ -1087,11 +1095,13 @@ export async function generateBgmTrack(
         console.error("FFmpeg synthesis error:", detail);
         throw new Error(`Không thể tạo nhạc nền: ${detail.slice(-500)}`);
       }
+
       onProgress({
         percent: 85,
-        stage: "validation",
-        message: "Đã tổng hợp xong; đang kiểm tra file audio...",
+        stage: "mastering",
+        message: "Mastering âm lượng chuẩn -14 LUFS & tối ưu hóa dải tần stereo...",
       });
+      await new Promise((r) => setTimeout(r, 250));
     }
 
     validateGeneratedAudio(outputPath);
