@@ -20,6 +20,18 @@ import {
   normalizeVietnameseDollars,
   normalizeVietnameseUnits,
 } from "./src/utils/textNormalizer";
+import {
+  startBgmGeneration,
+  getBgmGenerationJob,
+  getBgmHistory,
+  deleteBgmTrack,
+} from "./bgmService";
+import {
+  getBgmSystemStatus,
+  startModelDownload,
+  cancelModelDownload,
+  deleteModel as deleteBgmModel,
+} from "./bgmModelManager";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -2800,6 +2812,104 @@ app.post("/api/tts/download", async (req: Request, res: Response) => {
   } catch (error: any) {
     console.error("[PiperTTS] Download error:", error);
     res.status(500).send("Lỗi khi tải file audio.");
+  }
+});
+
+// -------------------------------------------------------------
+// BGM (BACKGROUND MUSIC / SOUNDSCAPE) ENDPOINTS (100% OFFLINE)
+// -------------------------------------------------------------
+app.get("/api/bgm/history", (_req: Request, res: Response) => {
+  try {
+    const list = getBgmHistory();
+    res.json({ success: true, tracks: list });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/bgm/generate", (req: Request, res: Response) => {
+  try {
+    const jobId = startBgmGeneration(req.body);
+    res.status(202).json({ success: true, jobId });
+  } catch (err: any) {
+    console.error("[BGM Generate Error]:", err);
+    res.status(500).json({ error: err.message || "Lỗi khi tạo nhạc nền." });
+  }
+});
+
+app.get("/api/bgm/generate/:jobId", (req: Request, res: Response) => {
+  const job = getBgmGenerationJob(req.params.jobId);
+  if (!job) {
+    return res.status(404).json({ error: "Không tìm thấy tiến trình tạo nhạc." });
+  }
+  res.json({ success: true, job });
+});
+
+app.delete("/api/bgm/:id", (req: Request, res: Response) => {
+  try {
+    const ok = deleteBgmTrack(req.params.id);
+    if (!ok) return res.status(404).json({ error: "Không tìm thấy đoạn nhạc." });
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/bgm/audio/:filename", (req: Request, res: Response) => {
+  const safeFilename = path.basename(req.params.filename);
+  const filePath = path.join(path.resolve("./bgm_storage"), safeFilename);
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).send("Tệp audio không tồn tại.");
+  }
+  const isMp3 = safeFilename.endsWith(".mp3");
+  res.setHeader("Content-Type", isMp3 ? "audio/mpeg" : "audio/wav");
+  res.setHeader("Cache-Control", "public, max-age=86400");
+  fs.createReadStream(filePath).pipe(res);
+});
+
+app.get("/api/bgm/download/:filename", (req: Request, res: Response) => {
+  const safeFilename = path.basename(req.params.filename);
+  const filePath = path.join(path.resolve("./bgm_storage"), safeFilename);
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).send("Tệp audio không tồn tại.");
+  }
+  res.download(filePath, safeFilename);
+});
+
+// BGM Model Management (On-Demand Download, RAM Monitoring & Storage)
+app.get("/api/bgm/models/status", (_req: Request, res: Response) => {
+  try {
+    const status = getBgmSystemStatus();
+    res.json({ success: true, ...status });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/bgm/models/:id/download", (req: Request, res: Response) => {
+  try {
+    const result = startModelDownload(req.params.id);
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post("/api/bgm/models/:id/cancel", (req: Request, res: Response) => {
+  try {
+    const ok = cancelModelDownload(req.params.id);
+    res.json({ success: ok });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete("/api/bgm/models/:id", (req: Request, res: Response) => {
+  try {
+    const ok = deleteBgmModel(req.params.id);
+    res.json({ success: ok });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
   }
 });
 

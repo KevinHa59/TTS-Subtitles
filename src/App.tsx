@@ -86,6 +86,7 @@ import {
   SAMPLE_TEST_50_SRT,
 } from "./utils/sampleData";
 import StorytellingTab from "./components/StorytellingTab";
+import BgmGeneratorTab from "./components/BgmGeneratorTab";
 import AudioCleanupModal from "./components/AudioCleanupModal";
 
 export interface ProjectPreset {
@@ -142,10 +143,10 @@ interface VoiceOption {
 }
 
 export default function App() {
-  // Navigation: 'subtitles' (Phụ đề Timeline) | 'single' (Đọc văn bản đơn) | 'story' (Kể Truyện)
-  const [activeTab, setActiveTab] = useState<"subtitles" | "single" | "story">(
-    "subtitles",
-  );
+  // Navigation: 'subtitles' (Phụ đề Timeline) | 'single' (Đọc văn bản đơn) | 'story' (Kể Truyện) | 'bgm' (Tạo Nhạc Nền)
+  const [activeTab, setActiveTab] = useState<
+    "subtitles" | "single" | "story" | "bgm"
+  >("subtitles");
   const [showAudioCleanupModal, setShowAudioCleanupModal] = useState<boolean>(false);
 
   // Voices
@@ -1598,6 +1599,18 @@ export default function App() {
               >
                 <BookOpen className="w-3.5 h-3.5" />
                 <span>Kể Truyện</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab("bgm")}
+                className={`px-3 py-1.5 rounded-lg font-medium transition-all flex items-center gap-1.5 ${
+                  activeTab === "bgm"
+                    ? "bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/20"
+                    : "text-slate-400 hover:text-white"
+                }`}
+              >
+                <Music className="w-3.5 h-3.5" />
+                <span>Tạo Nhạc Nền</span>
               </button>
             </div>
 
@@ -3639,6 +3652,13 @@ export default function App() {
             voices={voices}
             onOpenCleanupModal={() => setShowAudioCleanupModal(true)}
           />
+        )}
+
+        {/* ========================================================= */}
+        {/* TAB 4: BGM GENERATOR (TẠO NHẠC NỀN & LOOP AUDIO OFFLINE) */}
+        {/* ========================================================= */}
+        {activeTab === "bgm" && (
+          <BgmGeneratorTab voices={voices} />
         )}
       </main>
 

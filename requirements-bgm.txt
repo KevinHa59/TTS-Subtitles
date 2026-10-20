@@ -1,0 +1,9 @@
+torch>=2.2
+transformers>=4.45,<5
+accelerate>=0.34
+huggingface_hub>=0.34,<1.0
+safetensors>=0.4
+sentencepiece>=0.2
+numpy>=1.24
+diffusers>=0.30,<0.40
+scipy>=1.10
