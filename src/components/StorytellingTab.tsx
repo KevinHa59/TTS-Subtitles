@@ -348,7 +348,100 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
     }
   };
 
-  // Auto split raw text into paragraphs based on blank lines
+interface ParsedStoryBlock {
+  text: string;
+  pauseBefore?: number;
+}
+
+// Auto-parse raw story text into paragraphs and extract [PAUSE: ns] tags into pauseBefore values
+function parseRawStoryContent(raw: string): ParsedStoryBlock[] {
+  if (!raw || !raw.trim()) return [];
+  const ONLY_PAUSE_LINE_REGEX = /^\s*\[(?:PAUSE|pause)\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*s?\]\s*$/i;
+  const lines = raw.split(/\r?\n/);
+  const blocks: ParsedStoryBlock[] = [];
+  let currentLines: string[] = [];
+  let pendingPause: number | undefined = undefined;
+  let currentPause: number | undefined = undefined;
+
+  const flushParagraph = () => {
+    if (currentLines.length === 0) return;
+    let fullText = currentLines.join("\n").trim();
+    // Remove any embedded pause tags from the spoken text so TTS does not read them
+    fullText = fullText.replace(/\[(?:PAUSE|pause)\s*:\s*[0-9]+(?:\.[0-9]+)?\s*s?\]/gi, "").trim();
+    if (fullText.length > 0) {
+      blocks.push({
+        text: fullText,
+        pauseBefore: currentPause,
+      });
+    }
+    currentLines = [];
+    currentPause = undefined;
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    // 1. Line is solely a [PAUSE: ns] tag
+    const onlyPauseMatch = trimmed.match(ONLY_PAUSE_LINE_REGEX);
+    if (onlyPauseMatch) {
+      flushParagraph();
+      const val = parseFloat(onlyPauseMatch[1]);
+      if (!isNaN(val) && val >= 0) {
+        pendingPause = val;
+      }
+      continue;
+    }
+
+    // 2. Blank line indicates paragraph break
+    if (trimmed === "") {
+      flushParagraph();
+      continue;
+    }
+
+    // 3. Line starts with [PAUSE: ns] followed by text
+    const startsWithPauseMatch = trimmed.match(/^\s*\[(?:PAUSE|pause)\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*s?\]\s*(.+)$/i);
+    if (startsWithPauseMatch) {
+      flushParagraph();
+      const val = parseFloat(startsWithPauseMatch[1]);
+      if (!isNaN(val) && val >= 0) {
+        pendingPause = val;
+      }
+      currentPause = pendingPause;
+      pendingPause = undefined;
+      currentLines.push(startsWithPauseMatch[2]);
+      continue;
+    }
+
+    // 4. Line ends with [PAUSE: ns]
+    const endsWithPauseMatch = trimmed.match(/^(.+?)\s*\[(?:PAUSE|pause)\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*s?\]\s*$/i);
+    if (endsWithPauseMatch) {
+      if (currentLines.length === 0 && pendingPause !== undefined) {
+        currentPause = pendingPause;
+        pendingPause = undefined;
+      }
+      currentLines.push(endsWithPauseMatch[1]);
+      flushParagraph();
+      const val = parseFloat(endsWithPauseMatch[2]);
+      if (!isNaN(val) && val >= 0) {
+        pendingPause = val;
+      }
+      continue;
+    }
+
+    // 5. Normal text line
+    if (currentLines.length === 0 && pendingPause !== undefined) {
+      currentPause = pendingPause;
+      pendingPause = undefined;
+    }
+    currentLines.push(trimmed);
+  }
+
+  flushParagraph();
+  return blocks;
+}
+
+  // Auto split raw text into paragraphs based on blank lines & [PAUSE: ns] tags
   const handleSplitFromRawText = () => {
     if (!activeStory) return;
     if (!rawText.trim()) {
@@ -356,28 +449,32 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
       return;
     }
 
-    const rawParagraphs = rawText
-      .split(/\n\s*\n+/)
-      .map((p) => p.trim())
-      .filter((p) => p.length > 0);
+    const parsedBlocks = parseRawStoryContent(rawText);
 
-    if (rawParagraphs.length === 0) {
+    if (parsedBlocks.length === 0) {
       showToast("Không tìm thấy đoạn văn nào hợp lệ.", "error");
       return;
     }
 
     const defaultCharId = activeStory.characters[0]?.id || "char_default";
 
-    const newParagraphs: StoryParagraph[] = rawParagraphs.map((text, idx) => {
+    const newParagraphs: StoryParagraph[] = parsedBlocks.map((block, idx) => {
       const existing = activeStory.paragraphs[idx];
       return {
         id: existing?.id || `p_${Date.now()}_${idx + 1}`,
         index: idx + 1,
         characterId: existing?.characterId || defaultCharId,
-        text,
+        text: block.text,
+        pauseBefore: block.pauseBefore,
         status: "pending",
       };
     });
+
+    const pausesDetected = parsedBlocks.filter((b) => b.pauseBefore !== undefined).length;
+    const pauseNote =
+      pausesDetected > 0
+        ? ` (đã tự động gán ${pausesDetected} khoảng đợi [PAUSE: ns] vào Đợi Trước)`
+        : "";
 
     const updated: Story = {
       ...activeStory,
@@ -389,7 +486,7 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
 
     setActiveStory(updated);
     setShowRawInput(false);
-    showToast(`Đã tự động chia thành ${newParagraphs.length} đoạn dựa trên dòng trống!`, "success");
+    showToast(`Đã tự động chia thành ${newParagraphs.length} đoạn${pauseNote}!`, "success");
   };
 
   // Add new character
@@ -1157,17 +1254,17 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
                   rows={6}
                   value={rawText}
                   onChange={(e) => setRawText(e.target.value)}
-                  placeholder="Dán toàn bộ nội dung kịch bản truyện tại đây. Giữa các đoạn hãy để 1 dòng trống..."
+                  placeholder="Dán toàn bộ kịch bản truyện tại đây. Giữa các đoạn có thể để dòng trống hoặc chèn thẻ [PAUSE: 2s] để tự động thiết lập thời gian đợi trước cho đoạn ngay phía dưới..."
                   className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl p-3 text-xs sm:text-sm text-slate-200 focus:outline-none font-mono leading-relaxed resize-y"
                 />
                 <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
                   <span className="text-[11px] text-slate-400">
-                    Mẹo: Sau khi chia, bạn có thể gán từng đoạn cho các nhân vật khác nhau trong bảng bên dưới.
+                    💡 Hỗ trợ tag <strong className="text-amber-400 font-mono">[PAUSE: ns]</strong> (ví dụ: <span className="text-amber-300 font-mono">[PAUSE: 2s]</span>, <span className="text-amber-300 font-mono">[PAUSE: 1.5s]</span>) — Hệ thống sẽ tự động gán vào <strong>Đợi Trước (s)</strong> của đoạn ngay phía dưới!
                   </span>
                   <button
                     type="button"
                     onClick={handleSplitFromRawText}
-                    className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold shadow-md shadow-amber-500/20 transition-all shrink-0"
+                    className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold shadow-md shadow-amber-500/20 transition-all shrink-0 cursor-pointer"
                   >
                     <Scissors className="w-3.5 h-3.5" />
                     <span>Tự Động Phân Chia Đoạn</span>
