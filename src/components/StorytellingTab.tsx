@@ -32,6 +32,7 @@ import {
   X,
   VolumeX,
   Copy,
+  Zap,
 } from "lucide-react";
 import { Story, StoryCharacter, StoryParagraph } from "../types/story";
 
@@ -110,6 +111,8 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
   const [masterDuration, setMasterDuration] = useState(0);
   const masterAudioRef = useRef<HTMLAudioElement | null>(null);
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+  const [isRemerging, setIsRemerging] = useState<boolean>(false);
+  const [regeneratingParaIndex, setRegeneratingParaIndex] = useState<number | null>(null);
 
   // SSE Event Source for live generation updates
   const sseRef = useRef<EventSource | null>(null);
@@ -541,7 +544,20 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
       paragraphs: activeStory.paragraphs.map((p) =>
         p.id === id ? { ...p, pauseBefore: validNum } : p
       ),
-      masterAudio: undefined,
+    });
+  };
+
+  const handleParagraphSpeedChange = (id: string, value: string) => {
+    if (!activeStory) return;
+    const trimmed = value.trim();
+    const num = trimmed === "" ? undefined : parseFloat(trimmed);
+    const validNum = num !== undefined && !isNaN(num) ? Math.max(0.5, Math.min(2.0, num)) : undefined;
+
+    setActiveStory({
+      ...activeStory,
+      paragraphs: activeStory.paragraphs.map((p) =>
+        p.id === id ? { ...p, speed: validNum } : p
+      ),
     });
   };
 
@@ -812,6 +828,110 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
       );
     } catch (err: any) {
       showToast("Lỗi khởi chạy tạo audio: " + err.message, "error");
+    }
+  };
+
+  // Re-merge master audio fast (1-2s) using already generated paragraph WAVs with updated pauses/speeds
+  const handleRemergeMaster = async () => {
+    if (!activeStory) return;
+    if (activeStory.paragraphs.length === 0) {
+      showToast("Truyện chưa có đoạn văn nào.", "error");
+      return;
+    }
+
+    setIsRemerging(true);
+    try {
+      await handleSaveStory();
+
+      const res = await fetch(`/api/stories/${activeStory.id}/remerge`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          paragraphs: activeStory.paragraphs,
+          gapMs: activeStory.gapMs,
+        }),
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || "Không thể ghép lại master audio.");
+      }
+
+      const data = await res.json();
+      if (data.story) {
+        setActiveStory(data.story);
+      } else if (data.masterAudio) {
+        setActiveStory((prev) =>
+          prev
+            ? {
+                ...prev,
+                masterAudio: data.masterAudio,
+                status: "completed",
+              }
+            : null,
+        );
+      }
+
+      if (masterAudioRef.current) {
+        masterAudioRef.current.load();
+      }
+
+      showToast(
+        `⚡ Đã ghép lại Master Audio thành công (${data.masterAudio?.duration || 0}s) với thời gian đợi và tốc độ mới mà KHÔNG cần TTS lại!`,
+        "success",
+      );
+    } catch (err: any) {
+      showToast("Lỗi ghép lại Master: " + err.message, "error");
+    } finally {
+      setIsRemerging(false);
+    }
+  };
+
+  // Re-generate ONLY a single paragraph
+  const handleRegenerateSingleParagraph = async (p: StoryParagraph) => {
+    if (!activeStory) return;
+    setRegeneratingParaIndex(p.index);
+
+    try {
+      const res = await fetch(
+        `/api/stories/${activeStory.id}/paragraphs/${p.index}/regenerate`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            speed: p.speed,
+            text: p.text,
+            characterId: p.characterId,
+            pauseBefore: p.pauseBefore,
+          }),
+        },
+      );
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || "Không thể tạo lại audio đoạn này.");
+      }
+
+      const data = await res.json();
+      if (data.paragraph) {
+        setActiveStory((prev) => {
+          if (!prev) return null;
+          return {
+            ...prev,
+            paragraphs: prev.paragraphs.map((item) =>
+              item.index === p.index ? { ...item, ...data.paragraph } : item,
+            ),
+          };
+        });
+      }
+      showToast(
+        `Đã tạo lại audio câu #${p.index} thành công (${p.speed ? p.speed + "x" : "tốc độ nhân vật"}, ${data.paragraph?.duration || 0}s)! Hãy bấm "Ghép Lại Master" để nối vào file tổng.`,
+        "success",
+      );
+    } catch (err: any) {
+      showToast("Lỗi tạo lại đoạn: " + err.message, "error");
+    } finally {
+      setRegeneratingParaIndex(null);
     }
   };
 
@@ -1165,10 +1285,16 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
                         <span>Đợi Trước (s)</span>
                       </div>
                     </th>
+                    <th scope="col" className="py-3 px-2 w-28 text-center" title="Tốc độ đọc riêng cho đoạn này. Để trống dùng tốc độ nhân vật.">
+                      <div className="flex items-center justify-center gap-1">
+                        <Sliders className="w-3.5 h-3.5 text-amber-400" />
+                        <span>Tốc Độ</span>
+                      </div>
+                    </th>
                     <th scope="col" className="py-3 px-3 w-28 text-center">
                       Thời Lượng
                     </th>
-                    <th scope="col" className="py-3 px-3 w-48 text-right">
+                    <th scope="col" className="py-3 px-3 w-56 text-right">
                       Thao Tác
                     </th>
                   </tr>
@@ -1176,7 +1302,7 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
                 <tbody className="divide-y divide-slate-800/60">
                   {filteredParagraphs.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="py-12 text-center text-slate-500">
+                      <td colSpan={7} className="py-12 text-center text-slate-500">
                         Không tìm thấy đoạn văn nào phù hợp.
                       </td>
                     </tr>
@@ -1285,6 +1411,35 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
                             </div>
                           </td>
 
+                          {/* Speed Override Column */}
+                          <td className="py-3 px-2 text-center align-top">
+                            <div className="flex flex-col items-center justify-center gap-1 pt-1">
+                              <div className="relative inline-flex items-center">
+                                <input
+                                  type="number"
+                                  min="0.5"
+                                  max="2.0"
+                                  step="0.05"
+                                  value={
+                                    p.speed !== undefined && p.speed !== null
+                                      ? p.speed
+                                      : ""
+                                  }
+                                  onChange={(e) => handleParagraphSpeedChange(p.id, e.target.value)}
+                                  placeholder={`${assignedChar?.speed || 1.0}`}
+                                  className="w-16 bg-slate-950/80 border border-slate-800 focus:border-amber-500 rounded-xl px-2 py-1.5 text-xs text-center font-mono font-bold text-amber-300 focus:outline-none placeholder:text-slate-600 transition-colors"
+                                  title={`Tốc độ đọc riêng cho đoạn này (0.5x - 2.0x). Để trống dùng tốc độ nhân vật (${assignedChar?.speed || 1.0}x)`}
+                                />
+                                <span className="ml-1 text-[11px] font-mono text-slate-500">x</span>
+                              </div>
+                              <span className="text-[10px] text-slate-500 font-mono">
+                                {p.speed !== undefined && p.speed !== null
+                                  ? `${p.speed}x riêng`
+                                  : `NV (${assignedChar?.speed || 1.0}x)`}
+                              </span>
+                            </div>
+                          </td>
+
                           {/* Duration & Status Column */}
                           <td className="py-3 px-3 text-center align-top">
                             {isGenerating && (
@@ -1311,6 +1466,24 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
                           {/* Action Buttons Column */}
                           <td className="py-3 px-3 align-top text-right">
                             <div className="flex items-center justify-end gap-1">
+                              {/* Re-generate ONLY this paragraph */}
+                              <button
+                                type="button"
+                                onClick={() => handleRegenerateSingleParagraph(p)}
+                                disabled={regeneratingParaIndex === p.index || activeStory.status === "running"}
+                                className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 hover:text-white border border-amber-500/30 transition-all disabled:opacity-30"
+                                title="Tạo lại giọng đọc riêng cho đoạn này với tốc độ/nội dung mới (không render lại cả truyện)"
+                              >
+                                {regeneratingParaIndex === p.index ? (
+                                  <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-400" />
+                                ) : (
+                                  <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                                )}
+                                <span className="hidden xl:inline">
+                                  {regeneratingParaIndex === p.index ? "Đang tạo..." : "Tạo lại"}
+                                </span>
+                              </button>
+
                               {/* Preview paragraph */}
                               <button
                                 type="button"
@@ -1808,6 +1981,33 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
                       <span>Tạo Phụ Đề SRT</span>
                     </button>
                   </>
+                )}
+
+                {/* NÚT GHÉP LẠI MASTER SIÊU TỐC (RE-MERGE 1S KHÔNG CẦN TTS LẠI TOÀN BỘ) */}
+                {activeStory.paragraphs.some((p) => p.audioUrl || p.duration) && (
+                  <button
+                    type="button"
+                    disabled={
+                      activeStory.status === "running" ||
+                      isRemerging ||
+                      activeStory.paragraphs.length === 0
+                    }
+                    onClick={handleRemergeMaster}
+                    className="px-4 sm:px-5 py-2.5 bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 active:scale-95 text-slate-950 font-black rounded-xl text-xs sm:text-sm flex items-center gap-1.5 shadow-xl shadow-emerald-500/25 disabled:opacity-40 disabled:cursor-not-allowed transition-all cursor-pointer"
+                    title="Ghép lại Master audio ngay lập tức (1s) với thời gian đợi trước và tốc độ câu mới mà KHÔNG cần TTS lại toàn bộ truyện"
+                  >
+                    {isRemerging ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 animate-spin text-slate-950" />
+                        <span>Đang Ghép...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Zap className="w-4 h-4 fill-current text-slate-950" />
+                        <span>Ghép Lại Master (1s)</span>
+                      </>
+                    )}
+                  </button>
                 )}
 
                 {/* NÚT TẠO TOÀN BỘ AUDIO TRUYỆN (Requirement 4) */}

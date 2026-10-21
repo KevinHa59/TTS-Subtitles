@@ -14,6 +14,7 @@ export interface StoryParagraph {
   characterId: string;
   text: string;
   pauseBefore?: number;
+  speed?: number;
   audioUrl?: string;
   duration?: number;
   status: 'pending' | 'generating' | 'completed' | 'failed';

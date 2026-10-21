@@ -652,6 +652,7 @@ export interface StoryParagraph {
   characterId: string;
   text: string;
   pauseBefore?: number;
+  speed?: number;
   audioUrl?: string;
   duration?: number;
   status: "pending" | "generating" | "completed" | "failed";
@@ -878,6 +879,176 @@ function loadAllStoriesFromDisk() {
   }
 }
 
+// Synthesize a single paragraph with its character and speed configuration
+async function synthesizeSingleStoryParagraph(
+  story: StoryJob,
+  para: StoryParagraph,
+): Promise<void> {
+  const storyDir = path.join(STORIES_DIR, story.id);
+  const paraDir = path.join(storyDir, "paragraphs");
+  if (!fs.existsSync(paraDir)) {
+    fs.mkdirSync(paraDir, { recursive: true });
+  }
+
+  const char =
+    story.characters.find((c) => c.id === para.characterId) ||
+    story.characters[0] || {
+      id: "default",
+      name: "Người kể chuyện",
+      voiceId: DEFAULT_MODEL,
+      speed: 1.0,
+    };
+
+  const tts = await getOrLoadModel(char.voiceId);
+  const cleaned = normalizeVietnameseText(para.text);
+  const espeakVoice = tts.getConfig().espeakVoice || "vi";
+  const synthesisText = applyVietnameseRPronunciation(
+    cleaned,
+    char.voiceId,
+    espeakVoice,
+  );
+
+  const effectiveSpeed =
+    para.speed !== undefined && !isNaN(Number(para.speed)) && Number(para.speed) > 0
+      ? Number(para.speed)
+      : Number(char.speed) || 1.0;
+  const speed = Math.max(0.5, Math.min(2.0, effectiveSpeed));
+  const lengthScale = 1.0 / speed;
+
+  const synthRes = await tts.synthesize(synthesisText, {
+    outputFormat: "wav",
+    lengthScale,
+    speakerId: char.speakerId,
+  });
+
+  const paraWavPath = path.join(paraDir, `para_${para.index}.wav`);
+  fs.writeFileSync(paraWavPath, synthRes.audio as Buffer);
+
+  const dur = getAudioDuration(paraWavPath) || 0;
+  para.duration = Number(dur.toFixed(2));
+  para.audioUrl = `/api/stories/${story.id}/paragraph-audio/${para.index}?t=${Date.now()}`;
+  para.status = "completed";
+  para.error = undefined;
+}
+
+// Fast merge of already-generated paragraph WAVs with custom pauses into master audio
+async function mergeStoryParagraphsToMaster(story: StoryJob): Promise<boolean> {
+  const storyDir = path.join(STORIES_DIR, story.id);
+  const paraDir = path.join(storyDir, "paragraphs");
+  if (!fs.existsSync(paraDir)) {
+    fs.mkdirSync(paraDir, { recursive: true });
+  }
+
+  const sampleRate = 22050;
+  const pcmChunks: Buffer[] = [];
+  const defaultGapMs = Math.max(0, Math.min(30000, Number(story.gapMs) || 300));
+  const defaultGapSec = defaultGapMs / 1000;
+
+  for (let i = 0; i < story.paragraphs.length; i++) {
+    const para = story.paragraphs[i];
+    const hasCustomPause =
+      para.pauseBefore !== undefined &&
+      para.pauseBefore !== null &&
+      (typeof para.pauseBefore === "number" ||
+        (typeof para.pauseBefore === "string" && (para.pauseBefore as string).trim() !== "")) &&
+      !isNaN(Number(para.pauseBefore));
+
+    const pauseSec = hasCustomPause
+      ? Math.max(0, Math.min(120, Number(para.pauseBefore)))
+      : (i === 0 ? 0 : defaultGapSec);
+
+    if (pauseSec > 0) {
+      const pauseSamples = Math.floor(pauseSec * sampleRate);
+      if (pauseSamples > 0) {
+        const silenceBuffer = Buffer.alloc(pauseSamples * 2, 0);
+        pcmChunks.push(silenceBuffer);
+      }
+    }
+
+    const paraWavPath = path.join(paraDir, `para_${para.index}.wav`);
+    // If wav doesn't exist yet, synthesize it!
+    if (!fs.existsSync(paraWavPath)) {
+      await synthesizeSingleStoryParagraph(story, para);
+    }
+
+    if (fs.existsSync(paraWavPath)) {
+      const fileBuf = fs.readFileSync(paraWavPath);
+      let pcmOffset = 44;
+      const dataIdx = fileBuf.indexOf("data");
+      if (dataIdx !== -1 && dataIdx + 8 <= fileBuf.length) {
+        pcmOffset = dataIdx + 8;
+      }
+      const pcmData = fileBuf.subarray(pcmOffset);
+      pcmChunks.push(pcmData);
+    }
+  }
+
+  const masterPcm = Buffer.concat(pcmChunks);
+  const wavHeader = createWavHeader(masterPcm.length, sampleRate, 1, 16);
+  const fullMasterWav = Buffer.concat([wavHeader, masterPcm]);
+
+  const tempMasterWav = path.join(storyDir, "master_temp.wav");
+  const tempMasterMp3 = path.join(storyDir, "master_temp.mp3");
+  fs.writeFileSync(tempMasterWav, fullMasterWav);
+
+  const finalMasterWav = path.join(storyDir, "master.wav");
+  const finalMasterMp3 = path.join(storyDir, "master.mp3");
+
+  let mp3Created = false;
+  const ffmpegBin = resolveFfmpegPath();
+  try {
+    const res = spawnSync(
+      ffmpegBin,
+      [
+        "-y",
+        "-i",
+        tempMasterWav,
+        "-codec:a",
+        "libmp3lame",
+        "-b:a",
+        "192k",
+        tempMasterMp3,
+      ],
+      { stdio: "ignore" },
+    );
+    mp3Created =
+      res.status === 0 &&
+      fs.existsSync(tempMasterMp3) &&
+      fs.statSync(tempMasterMp3).size > 0;
+  } catch (e) {
+    console.warn("[FFmpeg] Không thể chuyển master truyện sang MP3:", e);
+  }
+
+  if (fs.existsSync(tempMasterWav)) {
+    if (fs.existsSync(finalMasterWav))
+      fs.rmSync(finalMasterWav, { force: true });
+    fs.renameSync(tempMasterWav, finalMasterWav);
+  }
+  if (mp3Created && fs.existsSync(tempMasterMp3)) {
+    if (fs.existsSync(finalMasterMp3))
+      fs.rmSync(finalMasterMp3, { force: true });
+    fs.renameSync(tempMasterMp3, finalMasterMp3);
+  }
+
+  const finalPath = mp3Created ? finalMasterMp3 : finalMasterWav;
+  const stat = fs.statSync(finalPath);
+  const totalDuration =
+    getAudioDuration(finalPath) || masterPcm.length / (sampleRate * 2);
+
+  const vTimestamp = Date.now();
+  story.masterAudio = {
+    url: `/api/stories/${story.id}/master-audio?format=${mp3Created ? "mp3" : "wav"}&v=${vTimestamp}`,
+    downloadUrl: `/api/stories/${story.id}/master-audio?format=${mp3Created ? "mp3" : "wav"}&download=1&v=${vTimestamp}`,
+    duration: Number(totalDuration.toFixed(2)),
+    format: mp3Created ? "mp3" : "wav",
+    sizeBytes: stat.size,
+  };
+  story.status = "completed";
+  saveStoryToDisk(story);
+  broadcastStoryEvent(story.id, "story_completed", story);
+  return true;
+}
+
 async function runStoryProcessor(story: StoryJob) {
   if (story.status === "running") return;
   story.status = "running";
@@ -894,15 +1065,6 @@ async function runStoryProcessor(story: StoryJob) {
     "INFO",
     `Bắt đầu tạo audio truyện: "${story.title}" (${story.paragraphs.length} đoạn)...`,
   );
-
-  const storyDir = path.join(STORIES_DIR, story.id);
-  const paraDir = path.join(storyDir, "paragraphs");
-  if (!fs.existsSync(paraDir)) {
-    fs.mkdirSync(paraDir, { recursive: true });
-  }
-
-  const sampleRate = 22050;
-  const pcmChunks: Buffer[] = [];
 
   try {
     for (let i = 0; i < story.paragraphs.length; i++) {
@@ -929,31 +1091,7 @@ async function runStoryProcessor(story: StoryJob) {
         `Đoạn #${para.index} (${char.name} - ${char.voiceId.replace(/^local:/, "")}): "${para.text.slice(0, 35)}..."`,
       );
 
-      const tts = await getOrLoadModel(char.voiceId);
-      const cleaned = normalizeVietnameseText(para.text);
-      const espeakVoice = tts.getConfig().espeakVoice || "vi";
-      const synthesisText = applyVietnameseRPronunciation(
-        cleaned,
-        char.voiceId,
-        espeakVoice,
-      );
-
-      const speed = Math.max(0.5, Math.min(2.0, Number(char.speed) || 1.0));
-      const lengthScale = 1.0 / speed;
-
-      const synthRes = await tts.synthesize(synthesisText, {
-        outputFormat: "wav",
-        lengthScale,
-        speakerId: char.speakerId,
-      });
-
-      const paraWavPath = path.join(paraDir, `para_${para.index}.wav`);
-      fs.writeFileSync(paraWavPath, synthRes.audio as Buffer);
-
-      const dur = getAudioDuration(paraWavPath) || 0;
-      para.duration = Number(dur.toFixed(2));
-      para.audioUrl = `/api/stories/${story.id}/paragraph-audio/${para.index}`;
-      para.status = "completed";
+      await synthesizeSingleStoryParagraph(story, para);
 
       story.progress.completed = i + 1;
       story.progress.percent = Math.round(
@@ -974,117 +1112,20 @@ async function runStoryProcessor(story: StoryJob) {
       `Đang ghép nối toàn bộ ${story.paragraphs.length} đoạn thành master audio với khoảng nghỉ ${story.gapMs || 300}ms...`,
     );
 
-    const defaultGapMs = Math.max(0, Math.min(30000, Number(story.gapMs) || 300));
-    const defaultGapSec = defaultGapMs / 1000;
+    await mergeStoryParagraphsToMaster(story);
 
-    for (let i = 0; i < story.paragraphs.length; i++) {
-      const para = story.paragraphs[i];
-      const hasCustomPause =
-        para.pauseBefore !== undefined &&
-        para.pauseBefore !== null &&
-        (typeof para.pauseBefore === "number" ||
-          (typeof para.pauseBefore === "string" && (para.pauseBefore as string).trim() !== "")) &&
-        !isNaN(Number(para.pauseBefore));
-
-      const pauseSec = hasCustomPause
-        ? Math.max(0, Math.min(120, Number(para.pauseBefore)))
-        : (i === 0 ? 0 : defaultGapSec);
-
-      if (pauseSec > 0) {
-        const pauseSamples = Math.floor(pauseSec * sampleRate);
-        if (pauseSamples > 0) {
-          const silenceBuffer = Buffer.alloc(pauseSamples * 2, 0);
-          pcmChunks.push(silenceBuffer);
-        }
-      }
-
-      const paraWavPath = path.join(paraDir, `para_${para.index}.wav`);
-      if (fs.existsSync(paraWavPath)) {
-        const fileBuf = fs.readFileSync(paraWavPath);
-        let pcmOffset = 44;
-        const dataIdx = fileBuf.indexOf("data");
-        if (dataIdx !== -1 && dataIdx + 8 <= fileBuf.length) {
-          pcmOffset = dataIdx + 8;
-        }
-        const pcmData = fileBuf.subarray(pcmOffset);
-        pcmChunks.push(pcmData);
-      }
-    }
-
-    const masterPcm = Buffer.concat(pcmChunks);
-    const wavHeader = createWavHeader(masterPcm.length, sampleRate, 1, 16);
-    const fullMasterWav = Buffer.concat([wavHeader, masterPcm]);
-
-    const tempMasterWav = path.join(storyDir, "master_temp.wav");
-    const tempMasterMp3 = path.join(storyDir, "master_temp.mp3");
-    fs.writeFileSync(tempMasterWav, fullMasterWav);
-
-    const finalMasterWav = path.join(storyDir, "master.wav");
-    const finalMasterMp3 = path.join(storyDir, "master.mp3");
-
-    let mp3Created = false;
-    const ffmpegBin = resolveFfmpegPath();
-    try {
-      const res = spawnSync(
-        ffmpegBin,
-        [
-          "-y",
-          "-i",
-          tempMasterWav,
-          "-codec:a",
-          "libmp3lame",
-          "-b:a",
-          "192k",
-          tempMasterMp3,
-        ],
-        { stdio: "ignore" },
-      );
-      mp3Created =
-        res.status === 0 &&
-        fs.existsSync(tempMasterMp3) &&
-        fs.statSync(tempMasterMp3).size > 0;
-    } catch (e) {
-      console.warn("[FFmpeg] Không thể chuyển master truyện sang MP3:", e);
-    }
-
-    if (fs.existsSync(tempMasterWav)) {
-      if (fs.existsSync(finalMasterWav))
-        fs.rmSync(finalMasterWav, { force: true });
-      fs.renameSync(tempMasterWav, finalMasterWav);
-    }
-    if (mp3Created && fs.existsSync(tempMasterMp3)) {
-      if (fs.existsSync(finalMasterMp3))
-        fs.rmSync(finalMasterMp3, { force: true });
-      fs.renameSync(tempMasterMp3, finalMasterMp3);
-    }
-
-    const finalPath = mp3Created ? finalMasterMp3 : finalMasterWav;
-    const stat = fs.statSync(finalPath);
-    const totalDuration =
-      getAudioDuration(finalPath) || masterPcm.length / (sampleRate * 2);
-
-    story.masterAudio = {
-      url: `/api/stories/${story.id}/master-audio?format=${mp3Created ? "mp3" : "wav"}`,
-      downloadUrl: `/api/stories/${story.id}/master-audio?format=${mp3Created ? "mp3" : "wav"}&download=1`,
-      duration: Number(totalDuration.toFixed(2)),
-      format: mp3Created ? "mp3" : "wav",
-      sizeBytes: stat.size,
-    };
-    story.status = "completed";
     addStoryLog(
       story,
       "SUCCESS",
-      `Đã tạo xong master audio thành công! Thời lượng: ${totalDuration.toFixed(2)}s (${(stat.size / (1024 * 1024)).toFixed(2)} MB).`,
+      `Đã tạo xong master audio thành công! Thời lượng: ${story.masterAudio?.duration || 0}s (${story.masterAudio?.sizeBytes ? (story.masterAudio.sizeBytes / (1024 * 1024)).toFixed(2) : 0} MB).`,
     );
-
-    saveStoryToDisk(story);
-    broadcastStoryEvent(story.id, "story_completed", story);
   } catch (err: any) {
     console.error(`[Story] Lỗi tạo audio truyện ${story.id}:`, err);
     story.status = "failed";
     story.error = err.message || "Lỗi không xác định khi tạo audio truyện.";
     addStoryLog(story, "ERROR", `Lỗi: ${story.error}`);
     try {
+      const storyDir = path.join(STORIES_DIR, story.id);
       const tempWav = path.join(storyDir, "master_temp.wav");
       const tempMp3 = path.join(storyDir, "master_temp.mp3");
       if (fs.existsSync(tempWav)) fs.rmSync(tempWav, { force: true });
@@ -2483,6 +2524,125 @@ app.post("/api/stories/:storyId/generate", (req: Request, res: Response) => {
   runStoryProcessor(story);
   res.json({ message: "Đã bắt đầu tạo audio truyện.", storyId: story.id });
 });
+
+// Fast re-merge existing paragraphs without full re-TTS (1-2s instant merge)
+app.post("/api/stories/:storyId/remerge", async (req: Request, res: Response) => {
+  const story = storyJobs.get(req.params.storyId);
+  if (!story) return res.status(404).json({ error: "Không tìm thấy truyện." });
+
+  if (story.status === "running") {
+    return res.status(400).json({ error: "Tiến trình tạo audio truyện đang chạy." });
+  }
+
+  // Update paragraphs and gapMs if provided in body
+  const { paragraphs, gapMs } = req.body || {};
+  if (paragraphs !== undefined && Array.isArray(paragraphs)) {
+    story.paragraphs = paragraphs.map((p: any, idx: number) => ({
+      ...p,
+      index: idx + 1,
+      pauseBefore:
+        p.pauseBefore !== undefined &&
+        p.pauseBefore !== null &&
+        (typeof p.pauseBefore === "number" ||
+          (typeof p.pauseBefore === "string" && (p.pauseBefore as string).trim() !== "")) &&
+        !isNaN(Number(p.pauseBefore))
+          ? Number(p.pauseBefore)
+          : undefined,
+      speed:
+        p.speed !== undefined && !isNaN(Number(p.speed)) && Number(p.speed) > 0
+          ? Number(p.speed)
+          : undefined,
+    }));
+  }
+  if (gapMs !== undefined && !isNaN(Number(gapMs))) {
+    story.gapMs = Number(gapMs);
+  }
+
+  addStoryLog(
+    story,
+    "INFO",
+    `[⚡ Ghép lại Master] Bắt đầu ghép lại nhanh ${story.paragraphs.length} đoạn với khoảng nghỉ/tốc độ mới...`,
+  );
+
+  try {
+    await mergeStoryParagraphsToMaster(story);
+    addStoryLog(
+      story,
+      "SUCCESS",
+      `[⚡ Ghép lại Master] Đã ghép lại thành công trong 1s! Thời lượng: ${story.masterAudio?.duration || 0}s.`,
+    );
+    res.json({
+      success: true,
+      message: "Đã ghép lại master audio thành công!",
+      masterAudio: story.masterAudio,
+      story,
+    });
+  } catch (err: any) {
+    console.error(`[Story] Lỗi ghép lại master truyện ${story.id}:`, err);
+    res.status(500).json({ error: err.message || "Lỗi khi ghép lại master audio." });
+  }
+});
+
+// Regenerate single paragraph audio (with new speed or updated text)
+app.post(
+  "/api/stories/:storyId/paragraphs/:index/regenerate",
+  async (req: Request, res: Response) => {
+    const story = storyJobs.get(req.params.storyId);
+    if (!story) return res.status(404).json({ error: "Không tìm thấy truyện." });
+
+    const paraIdx = parseInt(req.params.index, 10);
+    const para = story.paragraphs.find((p) => p.index === paraIdx);
+    if (!para) return res.status(404).json({ error: "Không tìm thấy đoạn văn." });
+
+    const { speed, text, characterId, pauseBefore } = req.body || {};
+    if (speed !== undefined && !isNaN(Number(speed)) && Number(speed) > 0) {
+      para.speed = Number(speed);
+    }
+    if (text !== undefined && typeof text === "string" && text.trim()) {
+      para.text = text;
+    }
+    if (characterId !== undefined) {
+      para.characterId = characterId;
+    }
+    if (pauseBefore !== undefined) {
+      para.pauseBefore = !isNaN(Number(pauseBefore)) ? Number(pauseBefore) : undefined;
+    }
+
+    para.status = "generating";
+    broadcastStoryEvent(story.id, "paragraph_start", {
+      index: para.index,
+      characterId: para.characterId,
+    });
+
+    try {
+      await synthesizeSingleStoryParagraph(story, para);
+      saveStoryToDisk(story);
+
+      broadcastStoryEvent(story.id, "paragraph_completed", {
+        index: para.index,
+        duration: para.duration,
+        audioUrl: para.audioUrl,
+      });
+
+      addStoryLog(
+        story,
+        "SUCCESS",
+        `[Đoạn #${para.index}] Đã tạo lại audio thành công (tốc độ: ${para.speed || "mặc định"}x, thời lượng: ${para.duration}s).`,
+      );
+
+      res.json({
+        success: true,
+        message: `Đã tạo lại đoạn #${para.index} thành công!`,
+        paragraph: para,
+      });
+    } catch (err: any) {
+      para.status = "failed";
+      para.error = err.message;
+      saveStoryToDisk(story);
+      res.status(500).json({ error: err.message || "Lỗi khi tạo lại đoạn văn." });
+    }
+  },
+);
 
 // SSE events stream for story
 app.get("/api/stories/:storyId/events", (req: Request, res: Response) => {
