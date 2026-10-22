@@ -47,13 +47,24 @@ Truy cập kho mô hình chính thức: [pnnbao-ump/VieNeu-TTS-v3-Turbo trên Hu
 
 ## 3. Cài đặt thư viện Python `vieneu`
 
-Mô hình VieNeu-TTS chạy trên nền tảng Python SDK `vieneu` (tối ưu hóa torch-free qua ONNX Runtime trên CPU, không cần cài đặt nặng nề). Bạn chỉ cần mở cửa sổ Terminal/Command Prompt trong thư mục project và chạy lệnh:
+VieNeu-TTS chạy trên Python SDK `vieneu`. Hãy cài SDK trong môi trường Python riêng để tránh xung đột với các thư viện khác của ứng dụng (ví dụ `transformers` yêu cầu `huggingface_hub<1.0`, trong khi `vieneu` có thể cài phiên bản mới hơn). Ứng dụng tự ưu tiên `.venv-vieneu` trong thư mục project khi chạy model VieNeu; môi trường Python dùng cho các model khác sẽ không bị thay đổi.
 
-```bash
-pip install vieneu
+Mở PowerShell tại thư mục project và chạy:
+
+```powershell
+python -m venv .venv-vieneu
+.\.venv-vieneu\Scripts\python.exe -m pip install --upgrade pip
+.\.venv-vieneu\Scripts\python.exe -m pip install vieneu
+.\.venv-vieneu\Scripts\python.exe -m pip check
 ```
 
-*(Nếu máy bạn có GPU NVIDIA CUDA và muốn tăng tốc batching thì có thể cài đặt thêm `torch` và `torchaudio` theo hướng dẫn của thư viện).*
+Nếu dùng Python khác hoặc đặt môi trường ở vị trí khác, cấu hình biến `VIENEU_PYTHON` trỏ đến file Python của môi trường đó. Ví dụ:
+
+```powershell
+$env:VIENEU_PYTHON = "D:\duong-dan\.venv-vieneu\Scripts\python.exe"
+```
+
+Sau đó khởi động ứng dụng từ cửa sổ PowerShell đó. (Nếu máy bạn có GPU NVIDIA và muốn tăng tốc batching thì có thể cài đặt thêm `torch` và `torchaudio` trong chính môi trường VieNeu theo hướng dẫn của thư viện).
 
 ---
 

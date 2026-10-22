@@ -250,17 +250,34 @@ async function synthesizeVieNeuVoice(
   speed = 1.0,
 ): Promise<{ success: boolean; duration: number }> {
   const cleanVoice = voiceId.replace(/^vieneu:/, "").trim();
+  const catalogVoice = AVAILABLE_MODELS.find(
+    (voice) => voice.id === voiceId || voice.modelId === voiceId,
+  );
+  const vieneuVoice = catalogVoice
+    ? catalogVoice.name.replace(/\s+\(VieNeu Turbo\)$/, "")
+    : cleanVoice;
   const scriptPath = path.resolve(__dirname, "scripts", "generate_vieneu.py");
+  const vieneuVenvPython = path.resolve(
+    __dirname,
+    ".venv-vieneu",
+    process.platform === "win32" ? "Scripts/python.exe" : "bin/python",
+  );
+  const python =
+    process.env.VIENEU_PYTHON ||
+    (fs.existsSync(vieneuVenvPython)
+      ? vieneuVenvPython
+      : process.env.PYTHON ||
+        (process.platform === "win32" ? "python" : "python3"));
 
   return new Promise((resolve, reject) => {
     const proc = spawnSync(
-      "python3",
+      python,
       [
         scriptPath,
         "--text",
         text,
         "--voice",
-        cleanVoice,
+        vieneuVoice,
         "--output",
         outputWavPath,
         "--speed",
@@ -271,6 +288,11 @@ async function synthesizeVieNeuVoice(
       {
         encoding: "utf-8",
         cwd: __dirname,
+        env: {
+          ...process.env,
+          PYTHONUTF8: "1",
+          PYTHONIOENCODING: "utf-8",
+        },
       },
     );
 

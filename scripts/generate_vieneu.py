@@ -42,7 +42,7 @@ def resolve_vieneu_model_file(model_dir: Path) -> Path | None:
 def main():
     parser = argparse.ArgumentParser(description="VieNeu-TTS v3 Turbo Audio Generator")
     parser.add_argument("--text", type=str, required=True, help="Văn bản tiếng Việt cần đọc")
-    parser.add_argument("--voice", type=str, default="minh_quan_pro", help="Tên giọng đọc VieNeu (vd: minh_quan_pro, truc_ly...)")
+    parser.add_argument("--voice", type=str, default="Minh Quân Pro", help="Tên giọng hoặc alias VieNeu (vd: Minh Quân Pro, Trúc Ly...)")
     parser.add_argument("--output", type=str, required=True, help="Đường dẫn file WAV đầu ra")
     parser.add_argument("--speed", type=float, default=1.0, help="Tốc độ đọc (0.5 - 2.0)")
     parser.add_argument("--model-dir", type=str, default="models/vieneu", help="Thư mục chứa weights VieNeu")
@@ -78,7 +78,7 @@ def main():
     if not has_library:
         error_msg = (
             "Chưa cài đặt thư viện 'vieneu'. "
-            "Vui lòng mở Terminal và chạy lệnh: pip install vieneu\n"
+            "Hãy cài 'vieneu' trong môi trường Python riêng tại .venv-vieneu. "
             "Chi tiết xem tại tài liệu hướng dẫn: HD-VIENEU-TTS.md"
         )
         print(json.dumps({"error": error_msg, "code": "MISSING_LIBRARY"}, ensure_ascii=False), file=sys.stderr)
@@ -104,14 +104,9 @@ def main():
         audio = tts.infer(args.text, voice=clean_voice)
         tts.save(audio, str(output_path))
     except Exception as e:
-        # Nếu giọng không tìm thấy, thử fallback sang giọng mặc định minh_quan_pro
-        try:
-            audio = tts.infer(args.text, voice="minh_quan_pro")
-            tts.save(audio, str(output_path))
-        except Exception as e2:
-            error_msg = f"Lỗi tạo âm thanh VieNeu-TTS với giọng '{clean_voice}': {e2}"
-            print(json.dumps({"error": error_msg, "code": "SYNTHESIS_ERROR"}, ensure_ascii=False), file=sys.stderr)
-            sys.exit(4)
+        error_msg = f"Lỗi tạo âm thanh VieNeu-TTS với giọng '{clean_voice}': {e}"
+        print(json.dumps({"error": error_msg, "code": "SYNTHESIS_ERROR"}, ensure_ascii=False), file=sys.stderr)
+        sys.exit(4)
 
     # Chuẩn hóa âm thanh đầu ra: 22050 Hz, 1 channel, 16-bit PCM (và điều chỉnh speed nếu có)
     if output_path.exists():
