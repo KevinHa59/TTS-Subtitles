@@ -142,6 +142,9 @@ interface VoiceOption {
   hasLocalFile?: boolean;
   localFilePath?: string | null;
   isLoaded?: boolean;
+  engine?: "piper" | "vieneu";
+  region?: "Bắc" | "Trung" | "Nam";
+  style?: string;
 }
 
 export default function App() {
@@ -162,7 +165,7 @@ export default function App() {
   const [showVoiceModal, setShowVoiceModal] = useState<boolean>(false);
   const [voiceSearchQuery, setVoiceSearchQuery] = useState<string>("");
   const [voiceGenderFilter, setVoiceGenderFilter] = useState<
-    "all" | "female" | "male" | "recommended"
+    "all" | "female" | "male" | "recommended" | "vieneu" | "piper"
   >("all");
   const [previewVoiceId, setPreviewVoiceId] = useState<string | null>(null);
   const [previewLoadingVoiceId, setPreviewLoadingVoiceId] = useState<
@@ -1462,11 +1465,15 @@ export default function App() {
   const femaleVoicesCount = voices.filter((v) => v.gender === "female").length;
   const maleVoicesCount = voices.filter((v) => v.gender === "male").length;
   const recommendedVoicesCount = voices.filter((v) => v.recommended).length;
+  const vieneuVoicesCount = voices.filter((v) => v.id.startsWith("vieneu:") || v.engine === "vieneu").length;
+  const piperVoicesCount = voices.filter((v) => !v.id.startsWith("vieneu:") && v.engine !== "vieneu").length;
 
   const filteredVoices = voices.filter((v) => {
     if (voiceGenderFilter === "recommended" && !v.recommended) return false;
     if (voiceGenderFilter === "female" && v.gender !== "female") return false;
     if (voiceGenderFilter === "male" && v.gender !== "male") return false;
+    if (voiceGenderFilter === "vieneu" && !v.id.startsWith("vieneu:") && v.engine !== "vieneu") return false;
+    if (voiceGenderFilter === "piper" && (v.id.startsWith("vieneu:") || v.engine === "vieneu")) return false;
     if (voiceSearchQuery.trim()) {
       const q = voiceSearchQuery.toLowerCase();
       return (
@@ -3927,6 +3934,30 @@ export default function App() {
                 </button>
                 <button
                   type="button"
+                  onClick={() => setVoiceGenderFilter("vieneu")}
+                  className={`px-2.5 py-1 rounded-lg font-semibold transition-all cursor-pointer flex items-center gap-1 text-xs ${
+                    voiceGenderFilter === "vieneu"
+                      ? "bg-purple-600 text-white font-bold shadow-sm shadow-purple-600/30"
+                      : "bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700 border border-slate-700/60"
+                  }`}
+                >
+                  <span className="w-1.5 h-1.5 rounded-full bg-purple-400" />
+                  <span>VieNeu Turbo ({vieneuVoicesCount})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setVoiceGenderFilter("piper")}
+                  className={`px-2.5 py-1 rounded-lg font-semibold transition-all cursor-pointer flex items-center gap-1 text-xs ${
+                    voiceGenderFilter === "piper"
+                      ? "bg-sky-600 text-white font-bold shadow-sm shadow-sky-600/30"
+                      : "bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700 border border-slate-700/60"
+                  }`}
+                >
+                  <span className="w-1.5 h-1.5 rounded-full bg-sky-400" />
+                  <span>Piper ({piperVoicesCount})</span>
+                </button>
+                <button
+                  type="button"
                   onClick={() => setVoiceGenderFilter("female")}
                   className={`px-2.5 py-1 rounded-lg font-semibold transition-all cursor-pointer flex items-center gap-1 text-xs ${
                     voiceGenderFilter === "female"
@@ -4020,6 +4051,7 @@ export default function App() {
                       const isCurrent = v.id === selectedVoiceId;
                       const isPreviewing = previewVoiceId === v.id;
                       const isLoadingPreview = previewLoadingVoiceId === v.id;
+                      const isVieNeu = v.id.startsWith("vieneu:") || v.engine === "vieneu";
 
                       return (
                         <tr
@@ -4028,7 +4060,7 @@ export default function App() {
                             isCurrent ? "bg-amber-500/10" : ""
                           }`}
                         >
-                          {/* 1. Cột Tên: Tên + Badges (Bỏ hoàn toàn description, ID và text) */}
+                          {/* 1. Cột Tên: Tên + Badges */}
                           <td className="py-1.5 px-4 whitespace-nowrap">
                             <div className="flex items-center gap-2">
                               <span
@@ -4040,9 +4072,26 @@ export default function App() {
                               >
                                 {v.name}
                               </span>
+                              {isVieNeu ? (
+                                <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-purple-500/20 text-purple-300 border border-purple-500/30 shrink-0">
+                                  VieNeu 48kHz
+                                </span>
+                              ) : (
+                                <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-sky-500/15 text-sky-300 border border-sky-500/25 shrink-0">
+                                  Piper
+                                </span>
+                              )}
                               {v.recommended && (
                                 <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30 shrink-0">
                                   Khuyên dùng
+                                </span>
+                              )}
+                              {v.hasLocalFile === false && isVieNeu && (
+                                <span
+                                  className="px-1.5 py-0.2 rounded text-[9px] font-medium bg-amber-500/15 text-amber-300 border border-amber-500/30 shrink-0"
+                                  title="Cần đặt file mô hình vào models/vieneu/. Xem chi tiết trong file HD-VIENEU-TTS.md"
+                                >
+                                  Cần tải model
                                 </span>
                               )}
                               {isCurrent && (

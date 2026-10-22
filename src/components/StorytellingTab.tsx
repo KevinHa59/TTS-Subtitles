@@ -49,6 +49,9 @@ interface VoiceOption {
   hasLocalFile?: boolean;
   localFilePath?: string | null;
   isLoaded?: boolean;
+  engine?: "piper" | "vieneu";
+  region?: "Bắc" | "Trung" | "Nam";
+  style?: string;
 }
 
 interface StorytellingTabProps {
@@ -74,9 +77,10 @@ function getCharacterVoice(voices: VoiceOption[], character: StoryCharacter) {
   return (
     voices.find(
       (voice) =>
-        voice.modelId === character.voiceId &&
-        voice.speakerId === character.speakerId,
-    ) || voices.find((voice) => voice.modelId === character.voiceId)
+        voice.id === character.voiceId ||
+        (voice.modelId === character.voiceId &&
+        voice.speakerId === character.speakerId),
+    ) || voices.find((voice) => voice.modelId === character.voiceId || voice.id === character.voiceId)
   );
 }
 
@@ -1786,18 +1790,31 @@ function parseRawStoryContent(raw: string): ParsedStoryBlock[] {
                                 const voice = voices.find((item) => item.id === e.target.value);
                                 if (voice) {
                                   handleUpdateCharacter(char.id, {
-                                    voiceId: voice.modelId,
+                                    voiceId: voice.id || voice.modelId,
                                     speakerId: voice.speakerId,
                                   });
                                 }
                               }}
                               className="w-full bg-slate-900 border border-slate-700 text-xs text-amber-300 font-medium rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-amber-500"
                             >
-                              {voices.map((v) => (
-                                <option key={v.id} value={v.id}>
-                                  {v.name} ({v.tag})
-                                </option>
-                              ))}
+                              <optgroup label="✨ VieNeu-TTS v3 Turbo (48 kHz)">
+                                {voices
+                                  .filter((v) => v.id.startsWith("vieneu:") || v.engine === "vieneu")
+                                  .map((v) => (
+                                    <option key={v.id} value={v.id}>
+                                      {v.name} ({v.tag})
+                                    </option>
+                                  ))}
+                              </optgroup>
+                              <optgroup label="🎙️ Piper TTS (100% Offline)">
+                                {voices
+                                  .filter((v) => !v.id.startsWith("vieneu:") && v.engine !== "vieneu")
+                                  .map((v) => (
+                                    <option key={v.id} value={v.id}>
+                                      {v.name} ({v.tag})
+                                    </option>
+                                  ))}
+                              </optgroup>
                             </select>
                           </td>
 

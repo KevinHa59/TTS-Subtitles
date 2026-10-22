@@ -220,6 +220,91 @@ if (!fs.existsSync(STORIES_DIR)) {
   fs.mkdirSync(STORIES_DIR, { recursive: true });
 }
 
+// VieNeu-TTS v3 Turbo Model Directory (48 kHz Neural TTS)
+const VIENEU_MODELS_DIR = path.resolve(MODELS_DIR, "vieneu");
+if (!fs.existsSync(VIENEU_MODELS_DIR)) {
+  fs.mkdirSync(VIENEU_MODELS_DIR, { recursive: true });
+}
+
+function checkVieNeuModelAvailable(): { available: boolean; fileName?: string } {
+  if (!fs.existsSync(VIENEU_MODELS_DIR)) return { available: false };
+  try {
+    const files = fs.readdirSync(VIENEU_MODELS_DIR);
+    const match = files.find(
+      (f) =>
+        (f.endsWith(".gguf") ||
+          f.endsWith(".onnx") ||
+          f.endsWith(".bin") ||
+          f.endsWith(".safetensors")) &&
+        fs.statSync(path.join(VIENEU_MODELS_DIR, f)).size > 1000,
+    );
+    if (match) return { available: true, fileName: match };
+  } catch {}
+  return { available: false };
+}
+
+async function synthesizeVieNeuVoice(
+  voiceId: string,
+  text: string,
+  outputWavPath: string,
+  speed = 1.0,
+): Promise<{ success: boolean; duration: number }> {
+  const cleanVoice = voiceId.replace(/^vieneu:/, "").trim();
+  const scriptPath = path.resolve(__dirname, "scripts", "generate_vieneu.py");
+
+  return new Promise((resolve, reject) => {
+    const proc = spawnSync(
+      "python3",
+      [
+        scriptPath,
+        "--text",
+        text,
+        "--voice",
+        cleanVoice,
+        "--output",
+        outputWavPath,
+        "--speed",
+        String(speed),
+        "--model-dir",
+        path.relative(__dirname, VIENEU_MODELS_DIR),
+      ],
+      {
+        encoding: "utf-8",
+        cwd: __dirname,
+      },
+    );
+
+    if (
+      proc.status === 0 &&
+      fs.existsSync(outputWavPath) &&
+      fs.statSync(outputWavPath).size > 44
+    ) {
+      const dur = getAudioDuration(outputWavPath) || 0;
+      return resolve({ success: true, duration: dur });
+    }
+
+    let errorDetail = "";
+    if (proc.stderr) {
+      try {
+        const parsed = JSON.parse(proc.stderr.trim());
+        if (parsed.error) errorDetail = parsed.error;
+      } catch {
+        errorDetail = proc.stderr.trim();
+      }
+    }
+
+    if (!errorDetail && proc.stdout) {
+      errorDetail = proc.stdout.trim();
+    }
+
+    const friendlyError =
+      errorDetail ||
+      `Chưa tìm thấy mô hình VieNeu-TTS v3 Turbo hoặc chưa cài đặt thư viện 'vieneu'. Vui lòng mở file HD-VIENEU-TTS.md để xem hướng dẫn tải và vị trí đặt file mô hình tại 'models/vieneu/'.`;
+
+    reject(new Error(friendlyError));
+  });
+}
+
 // In-memory cache for Piper Native TTS instances
 const modelCache = new Map<string, any>();
 const loadingPromises = new Map<string, Promise<any>>();
@@ -227,6 +312,10 @@ const loadingPromises = new Map<string, Promise<any>>();
 // Resolve 100% local ONNX model path from models/ directory without any internet dependency
 function resolveLocalModelPath(modelId: string): string | null {
   if (!modelId) return null;
+  if (modelId.startsWith("vieneu:")) {
+    const vn = checkVieNeuModelAvailable();
+    return vn.fileName ? path.join(VIENEU_MODELS_DIR, vn.fileName) : null;
+  }
   const cleanId = modelId.replace(/^(local:|hub:)/, "").trim();
   const localKey = `local:${cleanId}`;
 
@@ -292,6 +381,52 @@ function resolveLocalModelPath(modelId: string): string | null {
 }
 
 async function getOrLoadModel(modelId: string) {
+  if (modelId.startsWith("vieneu:")) {
+    return {
+      isVieNeu: true,
+      voiceId: modelId,
+      getConfig: () => ({ espeakVoice: "vi" }),
+      synthesize: async (text: string, options: any = {}) => {
+        const tempWav = path.join(
+          JOBS_DIR,
+          `vn_${Date.now()}_${Math.random().toString(36).substring(2, 6)}.wav`,
+        );
+        const speed = options.lengthScale ? 1.0 / options.lengthScale : 1.0;
+        await synthesizeVieNeuVoice(modelId, text, tempWav, speed);
+
+        if (options.outputFormat === "mp3") {
+          const tempMp3 = tempWav.replace(/\.wav$/, ".mp3");
+          const ffmpegBin = resolveFfmpegPath();
+          const proc = spawnSync(
+            ffmpegBin,
+            ["-y", "-i", tempWav, "-codec:a", "libmp3lame", "-b:a", "192k", tempMp3],
+            { stdio: "ignore" },
+          );
+          if (proc.status === 0 && fs.existsSync(tempMp3)) {
+            const mp3Buf = fs.readFileSync(tempMp3);
+            try {
+              fs.unlinkSync(tempWav);
+              fs.unlinkSync(tempMp3);
+            } catch {}
+            return {
+              audio: mp3Buf,
+              sampleRate: 22050,
+            };
+          }
+        }
+
+        const audioBuf = fs.readFileSync(tempWav);
+        try {
+          fs.unlinkSync(tempWav);
+        } catch {}
+        return {
+          audio: audioBuf,
+          sampleRate: 22050,
+        };
+      },
+    };
+  }
+
   const cleanId = (modelId || "").replace(/^(local:|hub:)/, "").trim();
   const normalizedModelId = `local:${cleanId}`;
 
@@ -2820,11 +2955,25 @@ app.get("/api/stories/:storyId/subtitles.srt", (req: Request, res: Response) => 
 
 
 app.get("/api/voices", (req: Request, res: Response) => {
+  const vnCheck = checkVieNeuModelAvailable();
   res.json({
     defaultModel: DEFAULT_MODEL,
     espeakAvailable: checkEspeakAvailable(),
     espeakPath: resolveEspeakPath(),
+    vieneuAvailable: vnCheck.available,
+    vieneuModelFile: vnCheck.fileName || null,
     voices: AVAILABLE_MODELS.map((v) => {
+      if (v.id.startsWith("vieneu:")) {
+        return {
+          ...v,
+          isLoaded: vnCheck.available,
+          hasLocalFile: vnCheck.available,
+          localFilePath: vnCheck.fileName
+            ? path.join("models", "vieneu", vnCheck.fileName)
+            : "models/vieneu/vieneu-v3-turbo-q8_0.gguf",
+          engine: "vieneu",
+        };
+      }
       const cleanId = v.modelId.replace(/^(local:|hub:)/, "").trim();
       const normalized = `local:${cleanId}`;
       const isLoaded = modelCache.has(normalized) || modelCache.has(v.modelId);
@@ -2834,6 +2983,7 @@ app.get("/api/voices", (req: Request, res: Response) => {
         isLoaded,
         hasLocalFile: !!(localPath && fs.existsSync(localPath)),
         localFilePath: localPath ? path.basename(localPath) : null,
+        engine: "piper",
       };
     }),
   });
