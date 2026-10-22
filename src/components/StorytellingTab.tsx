@@ -33,6 +33,15 @@ import {
   VolumeX,
   Copy,
   Zap,
+  Smartphone,
+  SkipBack,
+  SkipForward,
+  FastForward,
+  ListMusic,
+  Disc3,
+  Wifi,
+  Battery,
+  SlidersHorizontal,
 } from "lucide-react";
 import { Story, StoryCharacter, StoryParagraph } from "../types/story";
 
@@ -117,6 +126,15 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
   const [isRemerging, setIsRemerging] = useState<boolean>(false);
   const [regeneratingParaIndex, setRegeneratingParaIndex] = useState<number | null>(null);
+
+  // 9:16 Mobile Overflow Media Player States
+  const [showMobilePlayer, setShowMobilePlayer] = useState<boolean>(false);
+  const [mobilePlayerTab, setMobilePlayerTab] = useState<"lyrics" | "cover">("lyrics");
+  const [playbackSpeed, setPlaybackSpeed] = useState<number>(1.0);
+  const [playerVolume, setPlayerVolume] = useState<number>(1.0);
+  const [playerMuted, setPlayerMuted] = useState<boolean>(false);
+  const [autoScrollLyrics, setAutoScrollLyrics] = useState<boolean>(true);
+  const activeLyricRef = useRef<HTMLDivElement | null>(null);
 
   // SSE Event Source for live generation updates
   const sseRef = useRef<EventSource | null>(null);
@@ -1036,6 +1054,129 @@ function parseRawStoryContent(raw: string): ParsedStoryBlock[] {
     }
   };
 
+  // Calculate exact time boundaries for each paragraph within master audio
+  const paragraphTimelines = useMemo(() => {
+    if (!activeStory) return [];
+    const defaultGap = (activeStory.gapMs || 300) / 1000;
+    let currTime = 0;
+    return activeStory.paragraphs.map((p, idx) => {
+      const hasCustomPause =
+        p.pauseBefore !== undefined &&
+        p.pauseBefore !== null &&
+        (typeof p.pauseBefore === "number" ||
+          (typeof p.pauseBefore === "string" && (p.pauseBefore as string).trim() !== "")) &&
+        !isNaN(Number(p.pauseBefore));
+
+      const pauseSec = hasCustomPause
+        ? Math.max(0, Number(p.pauseBefore))
+        : idx === 0
+          ? 0
+          : defaultGap;
+
+      const start = currTime + pauseSec;
+      const duration = p.duration || Math.max(1.0, Number((p.text.length * 0.08).toFixed(2)));
+      const end = start + duration;
+      currTime = end;
+
+      const character =
+        activeStory.characters.find((c) => c.id === p.characterId) || activeStory.characters[0];
+
+      return {
+        id: p.id,
+        index: p.index,
+        text: p.text,
+        characterId: p.characterId,
+        character,
+        start,
+        end,
+        duration,
+        pauseSec,
+      };
+    });
+  }, [activeStory?.paragraphs, activeStory?.characters, activeStory?.gapMs]);
+
+  // Current active paragraph index in master audio based on currentTime
+  const activeTimelineIndex = useMemo(() => {
+    if (!paragraphTimelines.length) return -1;
+    const found = paragraphTimelines.findIndex(
+      (pt) => masterCurrentTime >= pt.start && masterCurrentTime < pt.end,
+    );
+    if (found !== -1) return found;
+
+    if (masterCurrentTime >= (paragraphTimelines[paragraphTimelines.length - 1]?.end || 0)) {
+      return paragraphTimelines.length - 1;
+    }
+    for (let i = 0; i < paragraphTimelines.length - 1; i++) {
+      if (masterCurrentTime >= paragraphTimelines[i].end && masterCurrentTime < paragraphTimelines[i + 1].start) {
+        return i + 1;
+      }
+    }
+    return 0;
+  }, [paragraphTimelines, masterCurrentTime]);
+
+  // Auto-scroll lyrics to keep active paragraph centered in mobile player
+  useEffect(() => {
+    if (showMobilePlayer && autoScrollLyrics && activeLyricRef.current) {
+      activeLyricRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, [activeTimelineIndex, showMobilePlayer, autoScrollLyrics, mobilePlayerTab]);
+
+  const seekMasterAudio = (timeSec: number) => {
+    const maxDur = masterDuration || activeStory?.masterAudio?.duration || 99999;
+    const clamped = Math.max(0, Math.min(maxDur, timeSec));
+    setMasterCurrentTime(clamped);
+    if (masterAudioRef.current) {
+      masterAudioRef.current.currentTime = clamped;
+    }
+  };
+
+  const handleSkipTime = (delta: number) => {
+    seekMasterAudio(masterCurrentTime + delta);
+  };
+
+  const handlePrevParagraph = () => {
+    if (!paragraphTimelines.length) return;
+    const targetIdx = Math.max(0, activeTimelineIndex - 1);
+    seekMasterAudio(paragraphTimelines[targetIdx].start);
+  };
+
+  const handleNextParagraph = () => {
+    if (!paragraphTimelines.length) return;
+    const targetIdx = Math.min(paragraphTimelines.length - 1, activeTimelineIndex + 1);
+    seekMasterAudio(paragraphTimelines[targetIdx].start);
+  };
+
+  const handleCycleSpeed = () => {
+    const speeds = [0.8, 1.0, 1.25, 1.5];
+    const currIdx = speeds.indexOf(playbackSpeed);
+    const nextSpeed = speeds[(currIdx + 1) % speeds.length];
+    setPlaybackSpeed(nextSpeed);
+    if (masterAudioRef.current) {
+      masterAudioRef.current.playbackRate = nextSpeed;
+    }
+  };
+
+  const handleToggleMute = () => {
+    if (!masterAudioRef.current) return;
+    if (playerMuted) {
+      masterAudioRef.current.muted = false;
+      masterAudioRef.current.volume = playerVolume || 1;
+      setPlayerMuted(false);
+    } else {
+      masterAudioRef.current.muted = true;
+      setPlayerMuted(true);
+    }
+  };
+
+  const handleVolumeChange = (newVol: number) => {
+    setPlayerVolume(newVol);
+    if (masterAudioRef.current) {
+      masterAudioRef.current.volume = newVol;
+      masterAudioRef.current.muted = newVol === 0;
+      setPlayerMuted(newVol === 0);
+    }
+  };
+
   // Master Audio playback handlers
   const handleToggleMasterPlay = () => {
     if (!masterAudioRef.current) return;
@@ -1045,15 +1186,14 @@ function parseRawStoryContent(raw: string): ParsedStoryBlock[] {
     } else {
       masterAudioRef.current.play();
       setIsPlayingMaster(true);
+      // Khi play master, tự động mở overflow panel mobile 9x16
+      setShowMobilePlayer(true);
     }
   };
 
   const handleMasterSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
     const time = parseFloat(e.target.value);
-    setMasterCurrentTime(time);
-    if (masterAudioRef.current) {
-      masterAudioRef.current.currentTime = time;
-    }
+    seekMasterAudio(time);
   };
 
   const formatTime = (secs: number) => {
@@ -1331,15 +1471,26 @@ function parseRawStoryContent(raw: string): ParsedStoryBlock[] {
               </span>
 
               {activeStory.masterAudio && (
-                <button
-                  type="button"
-                  onClick={() => setShowSrtModal(true)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 text-xs font-bold transition-all shadow-sm"
-                  title="Tạo và xuất file phụ đề .SRT theo timeline của các đoạn truyện"
-                >
-                  <FileText className="w-3.5 h-3.5 text-amber-400" />
-                  <span>Xuất Phụ Đề SRT</span>
-                </button>
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setShowMobilePlayer(true)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-gradient-to-r from-amber-500/20 via-orange-500/20 to-rose-500/20 hover:from-amber-500/30 hover:to-rose-500/30 border border-amber-500/40 text-amber-300 text-xs font-bold transition-all shadow-sm"
+                    title="Mở Trình Phát Di Động 9:16 (Mobile Overflow Player)"
+                  >
+                    <Smartphone className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Trình Phát 9:16</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowSrtModal(true)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 text-xs font-bold transition-all shadow-sm"
+                    title="Tạo và xuất file phụ đề .SRT theo timeline của các đoạn truyện"
+                  >
+                    <FileText className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Xuất Phụ Đề SRT</span>
+                  </button>
+                </>
               )}
 
               <button
@@ -2074,6 +2225,17 @@ function parseRawStoryContent(raw: string): ParsedStoryBlock[] {
                       )}
                     </button>
 
+                    {/* Nút Mở Trình Phát 9:16 Mobile Overflow */}
+                    <button
+                      type="button"
+                      onClick={() => setShowMobilePlayer(true)}
+                      className="px-3 py-2 bg-gradient-to-r from-amber-500/20 via-orange-500/20 to-rose-500/20 hover:from-amber-500/30 hover:to-rose-500/30 text-amber-300 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm border border-amber-500/40"
+                      title="Mở Trình Phát Di Động 9:16 (Mobile Overflow Player)"
+                    >
+                      <Smartphone className="w-3.5 h-3.5 text-amber-400" />
+                      <span className="hidden sm:inline">Trình Phát 9:16</span>
+                    </button>
+
                     {/* Download Master */}
                     <a
                       href={`/api/stories/${activeStory.id}/master-audio?format=mp3&download=1`}
@@ -2278,6 +2440,390 @@ function parseRawStoryContent(raw: string): ParsedStoryBlock[] {
             </div>
           </div>
         </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* 5. OVERFLOW PANEL MOBILE SIZE 9:16 WITH MEDIA PLAYER     */}
+      {/* (Requirement: khi play master, có thể tạo 1 overflow       */}
+      {/* panel mobile size 9x16, tạo 1 media player trong đó)     */}
+      {/* ========================================================= */}
+      {showMobilePlayer && activeStory && activeStory.masterAudio && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Trình Phát Di Động 9:16"
+          className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/85 backdrop-blur-md animate-fadeIn"
+          onClick={() => setShowMobilePlayer(false)}
+        >
+          {/* Mobile Phone Container (Strict 9:16 Aspect Ratio) */}
+          <div
+            className="relative w-full max-w-[360px] sm:max-w-[390px] aspect-[9/16] max-h-[92vh] bg-slate-950 rounded-[48px] border-[8px] border-slate-800 shadow-[0_25px_70px_rgba(0,0,0,0.95)] ring-1 ring-slate-700/60 overflow-hidden flex flex-col text-slate-100 select-none animate-in fade-in zoom-in-95 duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Top Phone Simulated Status Bar */}
+            <div className="flex items-center justify-between px-6 pt-3 pb-1 text-[11px] font-semibold text-slate-300 shrink-0">
+              <span className="font-mono text-slate-200 tracking-tight">
+                {new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+              </span>
+
+              {/* Dynamic Island Notch */}
+              <div className="w-28 h-5 bg-black rounded-full flex items-center justify-between px-2.5 shadow-inner border border-slate-800/80">
+                <span className="w-2 h-2 rounded-full bg-slate-900 border border-slate-700/60" />
+                {isPlayingMaster && (
+                  <div className="flex items-center gap-0.5">
+                    <span className="w-1 h-2 bg-emerald-400 rounded-full animate-pulse" />
+                    <span className="w-1 h-3 bg-amber-400 rounded-full animate-pulse" style={{ animationDelay: "150ms" }} />
+                    <span className="w-1 h-1.5 bg-orange-400 rounded-full animate-pulse" style={{ animationDelay: "300ms" }} />
+                  </div>
+                )}
+                <span className={`w-1.5 h-1.5 rounded-full ${isPlayingMaster ? "bg-emerald-500 animate-pulse" : "bg-slate-700"}`} />
+              </div>
+
+              {/* Right Phone Status Icons */}
+              <div className="flex items-center gap-1.5 text-slate-300">
+                <Wifi className="w-3 h-3 text-slate-300" />
+                <span className="text-[10px] font-mono">5G</span>
+                <div className="flex items-center gap-0.5">
+                  <span className="text-[10px] font-mono text-emerald-400">98%</span>
+                  <Battery className="w-3.5 h-3.5 text-emerald-400" />
+                </div>
+              </div>
+            </div>
+
+            {/* In-App Header & Tab Switcher */}
+            <div className="px-4 py-2 border-b border-slate-800/80 bg-slate-900/60 flex items-center justify-between gap-2 shrink-0">
+              <div className="flex items-center gap-2 min-w-0 flex-1">
+                <div className="w-7 h-7 rounded-lg bg-amber-500/15 text-amber-400 border border-amber-500/25 flex items-center justify-center shrink-0">
+                  <BookOpen className="w-3.5 h-3.5" />
+                </div>
+                <div className="min-w-0 flex-1 leading-tight">
+                  <h3 className="text-xs font-bold text-white truncate" title={activeStory.title}>
+                    {activeStory.title}
+                  </h3>
+                  <div className="flex items-center gap-1.5 text-[10px] text-slate-400">
+                    <span className="text-emerald-400 font-semibold">Master Player</span>
+                    <span>·</span>
+                    <span className="font-mono">{formatTime(activeStory.masterAudio.duration)}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Tab Switcher: Kịch Bản (Lyrics) vs Sóng Nhạc (Visualizer) */}
+              <div className="flex items-center bg-slate-950 p-0.5 rounded-xl border border-slate-800 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setMobilePlayerTab("lyrics")}
+                  className={`px-2 py-1 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-all ${
+                    mobilePlayerTab === "lyrics"
+                      ? "bg-amber-500 text-slate-950 shadow-sm"
+                      : "text-slate-400 hover:text-slate-200"
+                  }`}
+                  title="Xem lời thoại kịch bản đồng bộ"
+                >
+                  <ListMusic className="w-3 h-3" />
+                  <span>Kịch Bản</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMobilePlayerTab("cover")}
+                  className={`px-2 py-1 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-all ${
+                    mobilePlayerTab === "cover"
+                      ? "bg-amber-500 text-slate-950 shadow-sm"
+                      : "text-slate-400 hover:text-slate-200"
+                  }`}
+                  title="Xem sóng nhạc và bìa đĩa"
+                >
+                  <Disc3 className="w-3 h-3" />
+                  <span>Sóng Nhạc</span>
+                </button>
+              </div>
+
+              {/* Close Button */}
+              <button
+                type="button"
+                onClick={() => setShowMobilePlayer(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors shrink-0"
+                title="Đóng trình phát (audio vẫn tiếp tục phát ngầm)"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Main Phone Screen View (Flex-1) */}
+            <div className="flex-1 overflow-hidden relative flex flex-col">
+              {mobilePlayerTab === "lyrics" ? (
+                /* TAB 1: SYNCHRONIZED KARAOKE SCRIPT */
+                <div className="flex-1 flex flex-col overflow-hidden">
+                  <div className="px-4 py-1.5 bg-slate-950/70 border-b border-slate-900 flex items-center justify-between text-[11px] text-slate-400 shrink-0">
+                    <span className="font-mono text-[10px]">
+                      Đoạn <strong className="text-amber-400 font-bold">{activeTimelineIndex + 1}</strong> / {paragraphTimelines.length}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setAutoScrollLyrics(!autoScrollLyrics)}
+                      className={`text-[10px] px-2 py-0.5 rounded-full border transition-all ${
+                        autoScrollLyrics
+                          ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30 font-semibold"
+                          : "bg-slate-800 text-slate-400 border-slate-700"
+                      }`}
+                    >
+                      {autoScrollLyrics ? "✓ Tự Cuộn: Bật" : "Tự Cuộn: Tắt"}
+                    </button>
+                  </div>
+
+                  {/* Scrollable Karaoke Paragraphs */}
+                  <div className="flex-1 overflow-y-auto px-3 py-3 space-y-2.5 scroll-smooth">
+                    {paragraphTimelines.map((pt, idx) => {
+                      const isActive = idx === activeTimelineIndex;
+                      const charColor = getColorConfig(pt.character?.color);
+
+                      return (
+                        <div
+                          key={pt.id}
+                          ref={isActive ? activeLyricRef : null}
+                          onClick={() => seekMasterAudio(pt.start)}
+                          className={`p-3 rounded-2xl border transition-all cursor-pointer relative group ${
+                            isActive
+                              ? "bg-gradient-to-r from-amber-500/20 via-orange-500/15 to-slate-900 border-amber-500/50 shadow-lg shadow-amber-500/10 scale-[1.01]"
+                              : "bg-slate-900/60 hover:bg-slate-900 border-slate-800/80 opacity-75 hover:opacity-100"
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-1.5 mb-1.5">
+                            <div className="flex items-center gap-1.5">
+                              <span
+                                className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${charColor.bg} ${charColor.text} ${charColor.border}`}
+                              >
+                                {pt.character?.name || "Nhân vật"}
+                              </span>
+                              {pt.pauseSec > 0 && (
+                                <span className="text-[9px] font-mono text-orange-400 bg-orange-500/10 border border-orange-500/20 px-1.5 py-0.5 rounded">
+                                  +{pt.pauseSec}s
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-1.5 text-[10px] font-mono text-slate-400">
+                              {isActive && isPlayingMaster && (
+                                <span className="flex items-center gap-0.5 text-amber-400 mr-1">
+                                  <span className="w-1 h-2 bg-amber-400 rounded-full animate-bounce" />
+                                  <span className="w-1 h-3 bg-amber-400 rounded-full animate-bounce" style={{ animationDelay: "100ms" }} />
+                                  <span className="w-1 h-1.5 bg-amber-400 rounded-full animate-bounce" style={{ animationDelay: "200ms" }} />
+                                </span>
+                              )}
+                              <span>{formatTime(pt.start)}</span>
+                            </div>
+                          </div>
+                          <p
+                            className={`text-xs leading-relaxed ${
+                              isActive ? "text-amber-200 font-semibold" : "text-slate-300"
+                            }`}
+                          >
+                            {pt.text}
+                          </p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : (
+                /* TAB 2: COVER ARTWORK & SPECTRUM VISUALIZER */
+                <div className="flex-1 flex flex-col items-center justify-between p-4 overflow-y-auto">
+                  {/* Rotating Vinyl Disc Artwork */}
+                  <div className="relative my-auto flex items-center justify-center">
+                    <div
+                      className={`w-36 h-36 rounded-full bg-gradient-to-tr from-slate-900 via-slate-800 to-black p-2 border-4 border-slate-700/80 shadow-2xl flex items-center justify-center transition-transform duration-700 ${
+                        isPlayingMaster ? "animate-[spin_10s_linear_infinite]" : ""
+                      }`}
+                    >
+                      <div className="w-full h-full rounded-full border-2 border-dashed border-amber-500/30 flex items-center justify-center bg-gradient-to-br from-amber-600 via-orange-600 to-rose-700 shadow-inner">
+                        <div className="w-10 h-10 rounded-full bg-slate-950 border-4 border-white/20 flex items-center justify-center text-amber-300">
+                          <BookOpen className="w-4 h-4" />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Character Spotlight */}
+                  {paragraphTimelines[activeTimelineIndex] && (
+                    <div className="w-full text-center space-y-1 mb-2">
+                      <span className="text-[10px] uppercase font-bold tracking-wider text-amber-400">
+                        Đang đọc thoại
+                      </span>
+                      <h4 className="text-sm font-extrabold text-white">
+                        {paragraphTimelines[activeTimelineIndex]?.character?.name || "Nhân vật"}
+                      </h4>
+                      <p className="text-[11px] text-slate-400 italic line-clamp-2 px-3">
+                        “{paragraphTimelines[activeTimelineIndex]?.text}”
+                      </p>
+                    </div>
+                  )}
+
+                  {/* 16-Bar Animated Audio Visualizer Spectrum */}
+                  <div className="flex items-end justify-center gap-1 h-12 w-full px-6 py-1">
+                    {[40, 70, 90, 50, 80, 100, 60, 45, 85, 95, 65, 75, 55, 90, 60, 40].map((height, i) => (
+                      <div
+                        key={i}
+                        className={`w-1.5 rounded-full transition-all duration-150 ${
+                          isPlayingMaster
+                            ? "bg-gradient-to-t from-amber-500 to-orange-400 animate-pulse"
+                            : "bg-slate-700 h-2"
+                        }`}
+                        style={{
+                          height: isPlayingMaster ? `${height}%` : "8px",
+                          animationDelay: `${i * 60}ms`,
+                        }}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Bottom Media Deck: Scrubber, Transport & Secondary Controls */}
+            <div className="px-4 pt-2.5 pb-2 bg-slate-900/90 border-t border-slate-800/80 shrink-0 space-y-2">
+              {/* Timeline Scrubber */}
+              <div className="space-y-1">
+                <input
+                  type="range"
+                  min="0"
+                  max={masterDuration || activeStory.masterAudio.duration || 100}
+                  step="0.1"
+                  value={masterCurrentTime}
+                  onChange={handleMasterSeek}
+                  className="w-full accent-amber-500 cursor-pointer h-1.5 bg-slate-800 rounded-lg"
+                />
+                <div className="flex items-center justify-between text-[10px] font-mono text-slate-400">
+                  <span className="text-amber-400 font-semibold">{formatTime(masterCurrentTime)}</span>
+                  <span>{formatTime(masterDuration || activeStory.masterAudio.duration || 0)}</span>
+                </div>
+              </div>
+
+              {/* Primary Transport Controls */}
+              <div className="flex items-center justify-between px-2">
+                {/* -5s Skip */}
+                <button
+                  type="button"
+                  onClick={() => handleSkipTime(-5)}
+                  className="p-1.5 rounded-full text-slate-400 hover:text-white hover:bg-slate-800 transition-colors flex items-center justify-center flex-col text-[8px]"
+                  title="Lùi lại 5 giây"
+                >
+                  <RotateCcw className="w-4 h-4" />
+                  <span className="font-mono mt-0.5">-5s</span>
+                </button>
+
+                {/* Previous Paragraph */}
+                <button
+                  type="button"
+                  onClick={handlePrevParagraph}
+                  className="p-2 rounded-full text-slate-300 hover:text-white hover:bg-slate-800 transition-colors"
+                  title="Đoạn trước"
+                >
+                  <SkipBack className="w-4 h-4" />
+                </button>
+
+                {/* Big Center Play / Pause Button */}
+                <button
+                  type="button"
+                  onClick={handleToggleMasterPlay}
+                  className="w-12 h-12 rounded-full bg-gradient-to-tr from-amber-500 via-orange-500 to-rose-500 hover:from-amber-400 hover:to-rose-400 active:scale-95 text-slate-950 font-black shadow-lg shadow-amber-500/30 flex items-center justify-center transition-all cursor-pointer"
+                  title={isPlayingMaster ? "Tạm dừng" : "Phát tiếp"}
+                >
+                  {isPlayingMaster ? (
+                    <Pause className="w-5 h-5 fill-current" />
+                  ) : (
+                    <Play className="w-5 h-5 fill-current ml-0.5" />
+                  )}
+                </button>
+
+                {/* Next Paragraph */}
+                <button
+                  type="button"
+                  onClick={handleNextParagraph}
+                  className="p-2 rounded-full text-slate-300 hover:text-white hover:bg-slate-800 transition-colors"
+                  title="Đoạn tiếp theo"
+                >
+                  <SkipForward className="w-4 h-4" />
+                </button>
+
+                {/* +5s Skip */}
+                <button
+                  type="button"
+                  onClick={() => handleSkipTime(5)}
+                  className="p-1.5 rounded-full text-slate-400 hover:text-white hover:bg-slate-800 transition-colors flex items-center justify-center flex-col text-[8px]"
+                  title="Tua tới 5 giây"
+                >
+                  <FastForward className="w-4 h-4" />
+                  <span className="font-mono mt-0.5">+5s</span>
+                </button>
+              </div>
+
+              {/* Secondary Utility Controls: Speed, Volume, Download */}
+              <div className="flex items-center justify-between pt-1 border-t border-slate-800/60 px-1 text-[11px]">
+                {/* Speed Toggle */}
+                <button
+                  type="button"
+                  onClick={handleCycleSpeed}
+                  className="px-2 py-0.5 rounded-full bg-slate-800 hover:bg-slate-700 text-amber-300 font-mono text-[10px] font-bold border border-slate-700 transition-all"
+                  title="Thay đổi tốc độ phát"
+                >
+                  {playbackSpeed.toFixed(2)}x
+                </button>
+
+                {/* Volume slider & mute */}
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={handleToggleMute}
+                    className="p-1 text-slate-400 hover:text-white transition-colors"
+                    title={playerMuted ? "Bật âm" : "Tắt âm"}
+                  >
+                    {playerMuted ? (
+                      <VolumeX className="w-3.5 h-3.5 text-rose-400" />
+                    ) : (
+                      <Volume2 className="w-3.5 h-3.5 text-slate-300" />
+                    )}
+                  </button>
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.05"
+                    value={playerMuted ? 0 : playerVolume}
+                    onChange={(e) => handleVolumeChange(parseFloat(e.target.value))}
+                    className="w-16 accent-amber-500 cursor-pointer h-1 bg-slate-800 rounded-lg"
+                    title="Âm lượng"
+                  />
+                </div>
+
+                {/* Download Master MP3 */}
+                <a
+                  href={`/api/stories/${activeStory.id}/master-audio?format=mp3&download=1`}
+                  download={`story-${activeStory.id}.mp3`}
+                  className="p-1 text-slate-400 hover:text-amber-400 transition-colors"
+                  title="Tải tệp MP3"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                </a>
+              </div>
+
+              {/* Bottom Home Indicator Bar */}
+              <div className="w-24 h-1 bg-slate-700/80 rounded-full mx-auto mt-1 mb-0.5" />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Floating Re-Open Badge if user minimizes 9:16 player while playing */}
+      {activeStory?.masterAudio && isPlayingMaster && !showMobilePlayer && (
+        <button
+          type="button"
+          onClick={() => setShowMobilePlayer(true)}
+          className="fixed bottom-24 right-5 z-40 flex items-center gap-2 px-3.5 py-2 rounded-full bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500 text-slate-950 font-bold text-xs shadow-2xl hover:scale-105 active:scale-95 transition-all animate-bounce border border-amber-300/40 cursor-pointer"
+          title="Mở lại Trình Phát Di Động 9:16"
+        >
+          <Smartphone className="w-4 h-4" />
+          <span>Mở Trình Phát 9:16</span>
+          <span className="w-2 h-2 rounded-full bg-slate-950 animate-ping" />
+        </button>
       )}
     </div>
   );
