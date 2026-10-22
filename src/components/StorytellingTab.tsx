@@ -2517,9 +2517,9 @@ function parseRawStoryContent(raw: string): ParsedStoryBlock[] {
             setShowPlayerOptions(false);
           }}
         >
-          {/* Mobile Phone Screen Frame (9:16 Aspect Ratio) */}
+          {/* Mobile Phone Screen Frame (9:16 Aspect Ratio - Góc Vuông Sắc Nét) */}
           <div
-            className="relative w-full max-w-[360px] sm:max-w-[385px] aspect-[9/16] max-h-[92vh] rounded-[36px] sm:rounded-[40px] border border-slate-700/60 shadow-[0_25px_80px_rgba(0,0,0,0.95)] overflow-hidden flex flex-col text-slate-100 select-none animate-in fade-in zoom-in-95 duration-200"
+            className="relative w-full max-w-[360px] sm:max-w-[385px] aspect-[9/16] max-h-[92vh] rounded-none border-2 border-slate-700 shadow-[0_25px_80px_rgba(0,0,0,0.95)] overflow-hidden flex flex-col text-slate-100 select-none animate-in fade-in zoom-in-95 duration-200"
             onClick={(e) => {
               e.stopPropagation();
               setShowPlayerOptions(false);
@@ -2682,7 +2682,7 @@ function parseRawStoryContent(raw: string): ParsedStoryBlock[] {
                   {activeStory.title}
                 </h2>
                 <p className="text-xs text-slate-400 font-medium truncate mt-0.5">
-                  {paragraphTimelines[activeTimelineIndex]?.character?.name || "Kể Truyện TTS"} · Đoạn {activeTimelineIndex + 1}/{paragraphTimelines.length}
+                  {paragraphTimelines[activeTimelineIndex]?.character?.name || "Kể Truyện TTS"}
                 </p>
               </div>
 
@@ -2783,44 +2783,34 @@ function parseRawStoryContent(raw: string): ParsedStoryBlock[] {
               </button>
             </div>
 
-            {/* Lyrics Card: Constrained & Overflow Scrollable */}
-            <div className="px-4 pb-4 pt-1 flex-1 min-h-[120px] max-h-[170px] sm:max-h-[190px] flex flex-col shrink-0 z-10 overflow-hidden">
-              <div className="flex-1 min-h-0 bg-gradient-to-b from-[#181b36]/90 via-[#14162e]/90 to-[#0e1022]/95 border border-purple-500/25 rounded-2xl p-3.5 shadow-xl backdrop-blur-xl flex flex-col overflow-hidden">
-                {/* Lyrics Header */}
-                <div className="flex items-center justify-between pb-1.5 border-b border-purple-500/15 shrink-0">
-                  <span className="text-xs font-bold text-white tracking-wide">Lyrics</span>
-                  <ChevronDown className="w-4 h-4 text-slate-400" />
+            {/* Subtitle / Phụ Đề Card (Chỉ hiện câu đang đọc, không scroll, fading in/out) */}
+            <div className="px-4 pb-4 pt-1 flex-1 min-h-[110px] max-h-[150px] sm:max-h-[170px] flex flex-col shrink-0 z-10">
+              <div className="flex-1 bg-gradient-to-b from-[#181b36]/90 via-[#14162e]/90 to-[#0e1022]/95 border border-purple-500/25 rounded-2xl p-3 shadow-xl backdrop-blur-xl flex flex-col justify-between overflow-hidden">
+                {/* Subtitle Card Header */}
+                <div className="flex items-center justify-between pb-1 border-b border-purple-500/15 shrink-0">
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-pink-500 animate-pulse" />
+                    <span className="text-[10px] font-bold text-white tracking-wider uppercase">Phụ Đề</span>
+                  </div>
+                  <span className="text-[10px] font-mono text-purple-300">
+                    {paragraphTimelines[activeTimelineIndex]
+                      ? formatTime(paragraphTimelines[activeTimelineIndex].start)
+                      : "00:00"}
+                  </span>
                 </div>
 
-                {/* Scrollable Script Area: Constrained so it never displaces controls */}
-                <div className="flex-1 min-h-0 overflow-y-auto space-y-2 pt-2 scroll-smooth">
+                {/* Subtitle Content: Chỉ hiện duy nhất câu đang đọc với hiệu ứng fade-in mượt mà */}
+                <div className="flex-1 flex items-center justify-center p-2 text-center overflow-hidden">
                   {paragraphTimelines[activeTimelineIndex] ? (
-                    <>
-                      {/* Current Spoken Line Highlighted in Vivid Pink */}
-                      <p
-                        ref={activeLyricRef}
-                        className="text-xs sm:text-sm font-semibold text-pink-400 leading-relaxed drop-shadow-sm select-text whitespace-pre-wrap"
-                      >
-                        {paragraphTimelines[activeTimelineIndex].text}
-                      </p>
-
-                      {/* Next Upcoming Line Preview in Dimmed Slate */}
-                      {paragraphTimelines[activeTimelineIndex + 1] && (
-                        <p className="text-xs text-slate-400/90 leading-relaxed font-normal select-text">
-                          {paragraphTimelines[activeTimelineIndex + 1].text}
-                        </p>
-                      )}
-
-                      {/* Following Line Preview */}
-                      {paragraphTimelines[activeTimelineIndex + 2] && (
-                        <p className="text-xs text-slate-500/80 leading-relaxed font-normal select-text">
-                          {paragraphTimelines[activeTimelineIndex + 2].text}
-                        </p>
-                      )}
-                    </>
+                    <p
+                      key={`subtitle_line_${activeTimelineIndex}`}
+                      className="text-xs sm:text-sm font-semibold text-pink-300 leading-relaxed drop-shadow-md select-text animate-subtitle"
+                    >
+                      {paragraphTimelines[activeTimelineIndex].text}
+                    </p>
                   ) : (
-                    <p className="text-xs text-slate-400 italic text-center py-2">
-                      (Chưa có nội dung script)
+                    <p className="text-xs text-slate-500 italic select-none">
+                      (Đang chờ phát...)
                     </p>
                   )}
                 </div>
