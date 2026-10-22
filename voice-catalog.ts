@@ -23,7 +23,7 @@ export const LOCAL_MODEL_FILES: Record<string, string | string[]> = {
   "local:hoaimy-vietnamese-vi-congchualong":
     "hoaimy-vietnamese-vi-congchualong.onnx",
   "local:hoaimy-vietnamese-vi-nmh19xx": "hoaimy-vietnamese-vi-nmh19xx.onnx",
-  "local:ban-mai-vietnamese-vi-medium": "ban-mai-vietnamese-vi-medium.onnx",
+  "local:banmai": "banmai.onnx",
   "local:thanh-nien-tu-tin-vietnamese-vi-medium":
     "thanh-nien-tu-tin-vietnamese-vi-medium.onnx",
   "local:vietthao3886": "vietthao3886.onnx",
@@ -95,8 +95,8 @@ export const AVAILABLE_MODELS: VoiceDefinition[] = [
     recommended: false,
   },
   {
-    id: "local:ban-mai-vietnamese-vi-medium",
-    modelId: "local:ban-mai-vietnamese-vi-medium",
+    id: "local:banmai",
+    modelId: "local:banmai",
     name: "Ban Mai",
     tag: "Nữ · Miền Bắc · Trong trẻo, năng động (Offline)",
     gender: "female",
@@ -275,8 +275,10 @@ export const AVAILABLE_MODELS: VoiceDefinition[] = [
     name: "Minh Quân Pro (VieNeu Turbo)",
     tag: "VieNeu Turbo · Nam · Miền Bắc · Tự nhiên (48 kHz)",
     gender: "male",
-    description: "Giọng nam miền Bắc tự nhiên chuẩn 48 kHz của VieNeu-TTS v3 Turbo (Mặc định).",
-    sampleText: "Xin chào, đây là giọng đọc Minh Quân Pro của mô hình VieNeu-TTS v3 Turbo.",
+    description:
+      "Giọng nam miền Bắc tự nhiên chuẩn 48 kHz của VieNeu-TTS v3 Turbo (Mặc định).",
+    sampleText:
+      "Xin chào, đây là giọng đọc Minh Quân Pro của mô hình VieNeu-TTS v3 Turbo.",
     recommended: true,
     engine: "vieneu",
     region: "Bắc",
@@ -289,7 +291,8 @@ export const AVAILABLE_MODELS: VoiceDefinition[] = [
     tag: "VieNeu Turbo · Nam · Miền Bắc · Hài hước, tự nhiên (48 kHz)",
     gender: "male",
     description: "Phong cách trẻ trung, dí dỏm, độc đáo và lôi cuốn.",
-    sampleText: "Chào anh em, hôm nay chúng ta cùng khám phá điều vô cùng thú vị nhé!",
+    sampleText:
+      "Chào anh em, hôm nay chúng ta cùng khám phá điều vô cùng thú vị nhé!",
     recommended: true,
     engine: "vieneu",
     region: "Bắc",
@@ -302,7 +305,8 @@ export const AVAILABLE_MODELS: VoiceDefinition[] = [
     tag: "VieNeu Turbo · Nữ · Miền Bắc · Tự nhiên, dịu dàng (48 kHz)",
     gender: "female",
     description: "Giọng nữ miền Bắc thanh thoát, tròn vành rõ chữ, truyền cảm.",
-    sampleText: "Chào bạn, rất vui được gặp bạn trong chương trình ngày hôm nay.",
+    sampleText:
+      "Chào bạn, rất vui được gặp bạn trong chương trình ngày hôm nay.",
     recommended: true,
     engine: "vieneu",
     region: "Bắc",
@@ -315,7 +319,8 @@ export const AVAILABLE_MODELS: VoiceDefinition[] = [
     tag: "VieNeu Turbo · Nam · Miền Bắc · Kể chuyện (48 kHz)",
     gender: "male",
     description: "Giọng nam miền Bắc phong cách kể chuyện kịch tính, lôi cuốn.",
-    sampleText: "Màn đêm buông xuống, khu rừng bắt đầu phát ra những âm thanh kỳ lạ.",
+    sampleText:
+      "Màn đêm buông xuống, khu rừng bắt đầu phát ra những âm thanh kỳ lạ.",
     recommended: true,
     engine: "vieneu",
     region: "Bắc",
@@ -327,8 +332,10 @@ export const AVAILABLE_MODELS: VoiceDefinition[] = [
     name: "Mai Anh (VieNeu Turbo)",
     tag: "VieNeu Turbo · Nữ · Miền Bắc · Tin tức (48 kHz)",
     gender: "female",
-    description: "Giọng nữ chuẩn phát thanh viên tin tức rành mạch, chuyên nghiệp.",
-    sampleText: "Bản tin tổng hợp thời sự kinh tế và xã hội hôm nay xin kính chào quý khán giả.",
+    description:
+      "Giọng nữ chuẩn phát thanh viên tin tức rành mạch, chuyên nghiệp.",
+    sampleText:
+      "Bản tin tổng hợp thời sự kinh tế và xã hội hôm nay xin kính chào quý khán giả.",
     recommended: true,
     engine: "vieneu",
     region: "Bắc",
@@ -340,8 +347,10 @@ export const AVAILABLE_MODELS: VoiceDefinition[] = [
     name: "Thùy Dung (VieNeu Turbo)",
     tag: "VieNeu Turbo · Nữ · Miền Nam · Tin tức (48 kHz)",
     gender: "female",
-    description: "Âm sắc miền Nam tự nhiên, nhã nhặn, giọng đọc tin tức chuẩn xác.",
-    sampleText: "Kính chào quý thính giả đang theo dõi bản tin sáng trên làn sóng phát thanh.",
+    description:
+      "Âm sắc miền Nam tự nhiên, nhã nhặn, giọng đọc tin tức chuẩn xác.",
+    sampleText:
+      "Kính chào quý thính giả đang theo dõi bản tin sáng trên làn sóng phát thanh.",
     recommended: true,
     engine: "vieneu",
     region: "Nam",
@@ -353,8 +362,10 @@ export const AVAILABLE_MODELS: VoiceDefinition[] = [
     name: "Thiền Tâm Đức (VieNeu Turbo)",
     tag: "VieNeu Turbo · Nam · Miền Bắc · Tâm sự, triết lý (48 kHz)",
     gender: "male",
-    description: "Tông giọng trầm ấm, sâu lắng, mang năng lượng an tĩnh, thiền định.",
-    sampleText: "Hít vào một hơi thật sâu, cảm nhận sự bình an đang lan tỏa khắp cơ thể.",
+    description:
+      "Tông giọng trầm ấm, sâu lắng, mang năng lượng an tĩnh, thiền định.",
+    sampleText:
+      "Hít vào một hơi thật sâu, cảm nhận sự bình an đang lan tỏa khắp cơ thể.",
     recommended: true,
     engine: "vieneu",
     region: "Bắc",
@@ -367,7 +378,8 @@ export const AVAILABLE_MODELS: VoiceDefinition[] = [
     tag: "VieNeu Turbo · Nữ · Miền Bắc · Tự nhiên, ngọt ngào (48 kHz)",
     gender: "female",
     description: "Giọng nữ trẻ miền Bắc ngọt ngào, trong sáng, thân thiện.",
-    sampleText: "Chúc các bạn có một ngày mới ngập tràn niềm vui và năng lượng tích cực.",
+    sampleText:
+      "Chúc các bạn có một ngày mới ngập tràn niềm vui và năng lượng tích cực.",
     recommended: true,
     engine: "vieneu",
     region: "Bắc",
@@ -379,8 +391,10 @@ export const AVAILABLE_MODELS: VoiceDefinition[] = [
     name: "Quang Sơn (VieNeu Turbo)",
     tag: "VieNeu Turbo · Nam · Miền Trung · Tự nhiên (48 kHz)",
     gender: "male",
-    description: "Âm sắc miền Trung mộc mạc, phóng khoáng, chân thật và gần gũi.",
-    sampleText: "Xin chào bà con cô bác, hôm nay mình cùng về thăm vùng đất miền Trung nắng gió.",
+    description:
+      "Âm sắc miền Trung mộc mạc, phóng khoáng, chân thật và gần gũi.",
+    sampleText:
+      "Xin chào bà con cô bác, hôm nay mình cùng về thăm vùng đất miền Trung nắng gió.",
     recommended: true,
     engine: "vieneu",
     region: "Trung",
@@ -392,7 +406,8 @@ export const AVAILABLE_MODELS: VoiceDefinition[] = [
     name: "Ngọc Trân (VieNeu Turbo)",
     tag: "VieNeu Turbo · Nữ · Miền Trung · Tự nhiên, duyên dáng (48 kHz)",
     gender: "female",
-    description: "Giọng nữ miền Trung đằm thắm, mang nét duyên dáng, ngọt ngào.",
+    description:
+      "Giọng nữ miền Trung đằm thắm, mang nét duyên dáng, ngọt ngào.",
     sampleText: "Mời bạn ghé lại miền Trung nghe câu hò câu hát quê hương.",
     recommended: true,
     engine: "vieneu",
@@ -405,7 +420,8 @@ export const AVAILABLE_MODELS: VoiceDefinition[] = [
     name: "Minh Đức (VieNeu Turbo)",
     tag: "VieNeu Turbo · Nam · Miền Bắc · Tin tức (48 kHz)",
     gender: "male",
-    description: "Giọng nam miền Bắc dõng dạc, nghiêm túc, phong thái phát thanh viên.",
+    description:
+      "Giọng nam miền Bắc dõng dạc, nghiêm túc, phong thái phát thanh viên.",
     sampleText: "Bản tin thời sự hôm nay có những nội dung đáng chú ý sau đây.",
     recommended: false,
     engine: "vieneu",
@@ -419,7 +435,8 @@ export const AVAILABLE_MODELS: VoiceDefinition[] = [
     tag: "VieNeu Turbo · Nam · Miền Bắc · Tự nhiên (48 kHz)",
     gender: "male",
     description: "Giọng nam miền Bắc tự nhiên, gần gũi, đời thường.",
-    sampleText: "Chào anh em, hôm nay thời tiết đẹp quá, chúng ta bắt đầu công việc thôi.",
+    sampleText:
+      "Chào anh em, hôm nay thời tiết đẹp quá, chúng ta bắt đầu công việc thôi.",
     recommended: false,
     engine: "vieneu",
     region: "Bắc",
@@ -431,8 +448,10 @@ export const AVAILABLE_MODELS: VoiceDefinition[] = [
     name: "Thái Sơn (VieNeu Turbo)",
     tag: "VieNeu Turbo · Nam · Miền Nam · Kể chuyện (48 kHz)",
     gender: "male",
-    description: "Trầm ấm, hào sảng Nam Bộ, thích hợp đọc truyện dã sử hoặc phiêu lưu.",
-    sampleText: "Vào những năm tháng ấy, khắp miền sông nước Cửu Long dấy lên phong trào hào kiệt.",
+    description:
+      "Trầm ấm, hào sảng Nam Bộ, thích hợp đọc truyện dã sử hoặc phiêu lưu.",
+    sampleText:
+      "Vào những năm tháng ấy, khắp miền sông nước Cửu Long dấy lên phong trào hào kiệt.",
     recommended: false,
     engine: "vieneu",
     region: "Nam",
@@ -444,8 +463,10 @@ export const AVAILABLE_MODELS: VoiceDefinition[] = [
     name: "Xuân Vĩnh (VieNeu Turbo)",
     tag: "VieNeu Turbo · Nam · Miền Bắc · Tự nhiên (48 kHz)",
     gender: "male",
-    description: "Nhanh nhẹn, biểu cảm linh hoạt, phong cách tự nhiên hiện đại.",
-    sampleText: "Hãy cùng theo dõi để xem kết quả bất ngờ trong video ngày hôm nay.",
+    description:
+      "Nhanh nhẹn, biểu cảm linh hoạt, phong cách tự nhiên hiện đại.",
+    sampleText:
+      "Hãy cùng theo dõi để xem kết quả bất ngờ trong video ngày hôm nay.",
     recommended: false,
     engine: "vieneu",
     region: "Bắc",
@@ -458,7 +479,8 @@ export const AVAILABLE_MODELS: VoiceDefinition[] = [
     tag: "VieNeu Turbo · Nam · Miền Bắc · Kể chuyện (48 kHz)",
     gender: "male",
     description: "Sâu lắng, nhịp điệu thong thả, thích hợp tản văn và hồi ký.",
-    sampleText: "Mỗi con phố của Hà Nội mùa này đều vương vấn mùi hoa sữa nồng nàn.",
+    sampleText:
+      "Mỗi con phố của Hà Nội mùa này đều vương vấn mùi hoa sữa nồng nàn.",
     recommended: false,
     engine: "vieneu",
     region: "Bắc",
@@ -470,8 +492,10 @@ export const AVAILABLE_MODELS: VoiceDefinition[] = [
     name: "Ngọc Linh (VieNeu Turbo)",
     tag: "VieNeu Turbo · Nữ · Miền Bắc · Kể chuyện (48 kHz)",
     gender: "female",
-    description: "Hút hồn, diễn cảm tốt theo từng chuyển biến tâm trạng nhân vật.",
-    sampleText: "Cô bước ra hiên nhà, ánh mắt dõi theo bóng người xa dần nơi ngõ nhỏ.",
+    description:
+      "Hút hồn, diễn cảm tốt theo từng chuyển biến tâm trạng nhân vật.",
+    sampleText:
+      "Cô bước ra hiên nhà, ánh mắt dõi theo bóng người xa dần nơi ngõ nhỏ.",
     recommended: false,
     engine: "vieneu",
     region: "Bắc",
@@ -484,7 +508,8 @@ export const AVAILABLE_MODELS: VoiceDefinition[] = [
     tag: "VieNeu Turbo · Nữ · Miền Bắc · Tự nhiên (48 kHz)",
     gender: "female",
     description: "Tươi tắn, tự nhiên, gần gũi, giọng đọc nhẹ nhàng duyên dáng.",
-    sampleText: "Cảm ơn bạn đã luôn đồng hành cùng kênh trong suốt thời gian qua.",
+    sampleText:
+      "Cảm ơn bạn đã luôn đồng hành cùng kênh trong suốt thời gian qua.",
     recommended: false,
     engine: "vieneu",
     region: "Bắc",
@@ -496,7 +521,8 @@ export const AVAILABLE_MODELS: VoiceDefinition[] = [
     name: "Thục Đoan (VieNeu Turbo)",
     tag: "VieNeu Turbo · Nữ · Miền Nam · Kể chuyện (48 kHz)",
     gender: "female",
-    description: "Ngọt ngào miền Nam, truyền tải trọn vẹn sự tinh tế và cảm xúc.",
+    description:
+      "Ngọt ngào miền Nam, truyền tải trọn vẹn sự tinh tế và cảm xúc.",
     sampleText: "Bến nước chiều hôm gió thổi lay nhẹ rặng dừa xanh soi bóng.",
     recommended: false,
     engine: "vieneu",
@@ -509,7 +535,8 @@ export const AVAILABLE_MODELS: VoiceDefinition[] = [
     name: "Minh Triết (VieNeu Turbo)",
     tag: "VieNeu Turbo · Nam · Miền Nam · Tin tức (48 kHz)",
     gender: "male",
-    description: "Chững chạc, phát âm rõ ràng, chuẩn phong cách phóng sự tài liệu miền Nam.",
+    description:
+      "Chững chạc, phát âm rõ ràng, chuẩn phong cách phóng sự tài liệu miền Nam.",
     sampleText: "Sau đây là các diễn biến mới nhất trên thị trường tài chính.",
     recommended: false,
     engine: "vieneu",
@@ -522,8 +549,10 @@ export const AVAILABLE_MODELS: VoiceDefinition[] = [
     name: "Mỹ Duyên (VieNeu Turbo)",
     tag: "VieNeu Turbo · Nữ · Miền Nam · Đọc truyện (48 kHz)",
     gender: "female",
-    description: "Êm đềm, ngọt lịm, rất thích hợp đọc tiểu thuyết, truyện ngôn tình.",
-    sampleText: "Dù năm tháng trôi qua, những kỷ niệm thời thanh xuân vẫn nguyên vẹn.",
+    description:
+      "Êm đềm, ngọt lịm, rất thích hợp đọc tiểu thuyết, truyện ngôn tình.",
+    sampleText:
+      "Dù năm tháng trôi qua, những kỷ niệm thời thanh xuân vẫn nguyên vẹn.",
     recommended: false,
     engine: "vieneu",
     region: "Nam",
@@ -535,8 +564,10 @@ export const AVAILABLE_MODELS: VoiceDefinition[] = [
     name: "Quỳnh Anh (VieNeu Turbo)",
     tag: "VieNeu Turbo · Nữ · Miền Bắc · Đọc truyện (48 kHz)",
     gender: "female",
-    description: "Sâu sắc, ấm áp, nhịp điệu ngắt nghỉ điêu luyện, phù hợp truyện audio.",
-    sampleText: "Từng trang sách mở ra như dẫn dắt người đọc vào thế giới nhiệm màu.",
+    description:
+      "Sâu sắc, ấm áp, nhịp điệu ngắt nghỉ điêu luyện, phù hợp truyện audio.",
+    sampleText:
+      "Từng trang sách mở ra như dẫn dắt người đọc vào thế giới nhiệm màu.",
     recommended: false,
     engine: "vieneu",
     region: "Bắc",
@@ -548,8 +579,10 @@ export const AVAILABLE_MODELS: VoiceDefinition[] = [
     name: "Đức Trí (VieNeu Turbo)",
     tag: "VieNeu Turbo · Nam · Miền Nam · Đọc truyện (48 kHz)",
     gender: "male",
-    description: "Giọng nam miền Nam lôi cuốn, có chiều sâu, thích hợp truyện trinh thám phiêu lưu.",
-    sampleText: "Dấu vết để lại tại hiện trường khiến vụ án càng trở nên bí ẩn.",
+    description:
+      "Giọng nam miền Nam lôi cuốn, có chiều sâu, thích hợp truyện trinh thám phiêu lưu.",
+    sampleText:
+      "Dấu vết để lại tại hiện trường khiến vụ án càng trở nên bí ẩn.",
     recommended: false,
     engine: "vieneu",
     region: "Nam",
@@ -561,8 +594,10 @@ export const AVAILABLE_MODELS: VoiceDefinition[] = [
     name: "Kim Thanh (VieNeu Turbo)",
     tag: "VieNeu Turbo · Nữ · Miền Nam · Đọc truyện (48 kHz)",
     gender: "female",
-    description: "Trong trẻo, thanh tú, tự nhiên, thích hợp đọc truyện tuổi học trò.",
-    sampleText: "Tiếng trống tan trường rộn rã báo hiệu mùa hè rực nắng đã đến.",
+    description:
+      "Trong trẻo, thanh tú, tự nhiên, thích hợp đọc truyện tuổi học trò.",
+    sampleText:
+      "Tiếng trống tan trường rộn rã báo hiệu mùa hè rực nắng đã đến.",
     recommended: false,
     engine: "vieneu",
     region: "Nam",
@@ -575,7 +610,8 @@ export const AVAILABLE_MODELS: VoiceDefinition[] = [
     tag: "VieNeu Turbo · Nam · Miền Nam · Tự nhiên (48 kHz)",
     gender: "male",
     description: "Hiện đại, tự nhiên, sinh động, mang phong cách trẻ trung.",
-    sampleText: "Chào mừng các bạn đã quay trở lại với chuỗi video công nghệ của mình.",
+    sampleText:
+      "Chào mừng các bạn đã quay trở lại với chuỗi video công nghệ của mình.",
     recommended: false,
     engine: "vieneu",
     region: "Nam",
@@ -587,12 +623,13 @@ export const AVAILABLE_MODELS: VoiceDefinition[] = [
     name: "Mạnh Dũng (VieNeu Turbo)",
     tag: "VieNeu Turbo · Nam · Miền Bắc · Tự nhiên (48 kHz)",
     gender: "male",
-    description: "Vững chãi, chân phương, mộc mạc, giọng đọc nam tính tự nhiên.",
-    sampleText: "Cuộc sống luôn có những thử thách, nhưng lòng kiên định sẽ đưa ta tới đích.",
+    description:
+      "Vững chãi, chân phương, mộc mạc, giọng đọc nam tính tự nhiên.",
+    sampleText:
+      "Cuộc sống luôn có những thử thách, nhưng lòng kiên định sẽ đưa ta tới đích.",
     recommended: false,
     engine: "vieneu",
     region: "Bắc",
     style: "Tự nhiên",
   },
 ];
-
