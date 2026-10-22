@@ -42,6 +42,11 @@ import {
   Wifi,
   Battery,
   SlidersHorizontal,
+  Heart,
+  Repeat,
+  Shuffle,
+  MoreVertical,
+  Image as ImageIcon,
 } from "lucide-react";
 import { Story, StoryCharacter, StoryParagraph } from "../types/story";
 
@@ -134,6 +139,11 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
   const [playerVolume, setPlayerVolume] = useState<number>(1.0);
   const [playerMuted, setPlayerMuted] = useState<boolean>(false);
   const [autoScrollLyrics, setAutoScrollLyrics] = useState<boolean>(true);
+  const [customBgImage, setCustomBgImage] = useState<string | null>(null);
+  const [isDraggingOver, setIsDraggingOver] = useState<boolean>(false);
+  const [isFavorited, setIsFavorited] = useState<boolean>(false);
+  const [showPlayerOptions, setShowPlayerOptions] = useState<boolean>(false);
+  const bgFileInputRef = useRef<HTMLInputElement | null>(null);
   const activeLyricRef = useRef<HTMLDivElement | null>(null);
 
   // SSE Event Source for live generation updates
@@ -1175,6 +1185,56 @@ function parseRawStoryContent(raw: string): ParsedStoryBlock[] {
       masterAudioRef.current.muted = newVol === 0;
       setPlayerMuted(newVol === 0);
     }
+  };
+
+  // Drag and drop image handlers for modern media player background
+  const handleDropImage = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDraggingOver(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file && file.type.startsWith("image/")) {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        if (typeof event.target?.result === "string") {
+          setCustomBgImage(event.target.result);
+          showToast("Đã cập nhật hình nền Media Player thành công!", "success");
+        }
+      };
+      reader.readAsDataURL(file);
+    } else {
+      showToast("Vui lòng kéo thả tệp hình ảnh hợp lệ (PNG, JPG, WEBP).", "error");
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingOver(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingOver(false);
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file && file.type.startsWith("image/")) {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        if (typeof event.target?.result === "string") {
+          setCustomBgImage(event.target.result);
+          showToast("Đã tải hình nền thành công!", "success");
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleRemoveBgImage = () => {
+    setCustomBgImage(null);
+    showToast("Đã khôi phục giao diện mặc định.", "info");
   };
 
   // Master Audio playback handlers
@@ -2443,14 +2503,8 @@ function parseRawStoryContent(raw: string): ParsedStoryBlock[] {
       )}
 
       {/* ========================================================= */}
-      {/* 5. OVERFLOW PANEL MOBILE SIZE 9:16 WITH MEDIA PLAYER     */}
-      {/* (Requirement: khi play master, có thể tạo 1 overflow       */}
-      {/* panel mobile size 9x16, tạo 1 media player trong đó)     */}
-      {/* ========================================================= */}
-      {/* ========================================================= */}
-      {/* 5. OVERFLOW PANEL MOBILE SIZE 9:16 WITH MEDIA PLAYER     */}
-      {/* (Requirement: các góc không bo tròn, bỏ status bar,       */}
-      {/*  bỏ title bar, để tên truyện phía trên đĩa, script overflow)*/}
+      {/* 5. MODERN 9:16 MEDIA PLAYER (MATCHING REFERENCE DESIGN)   */}
+      {/* (Kèm tính năng Kéo & Thả ảnh nền tùy chọn / Drag & Drop) */}
       {/* ========================================================= */}
       {showMobilePlayer && activeStory && activeStory.masterAudio && (
         <div
@@ -2458,89 +2512,198 @@ function parseRawStoryContent(raw: string): ParsedStoryBlock[] {
           aria-modal="true"
           aria-label="Trình Phát Media 9:16"
           className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/85 backdrop-blur-md animate-fadeIn"
-          onClick={() => setShowMobilePlayer(false)}
+          onClick={() => {
+            setShowMobilePlayer(false);
+            setShowPlayerOptions(false);
+          }}
         >
-          {/* Mobile Panel 9:16 (Không bo góc - rounded-none, viền sắc nét) */}
+          {/* Mobile Phone Screen Frame (9:16 Aspect Ratio) */}
           <div
-            className="relative w-full max-w-[360px] sm:max-w-[390px] aspect-[9/16] max-h-[92vh] bg-slate-950 rounded-none border-2 border-slate-700 shadow-[0_25px_70px_rgba(0,0,0,0.95)] overflow-hidden flex flex-col text-slate-100 select-none animate-in fade-in zoom-in-95 duration-200"
-            onClick={(e) => e.stopPropagation()}
+            className="relative w-full max-w-[360px] sm:max-w-[385px] aspect-[9/16] max-h-[92vh] rounded-[36px] sm:rounded-[40px] border border-slate-700/60 shadow-[0_25px_80px_rgba(0,0,0,0.95)] overflow-hidden flex flex-col text-slate-100 select-none animate-in fade-in zoom-in-95 duration-200"
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowPlayerOptions(false);
+            }}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDropImage}
           >
-            {/* Minimalist Close Button (Góc trên bên phải) */}
-            <button
-              type="button"
-              onClick={() => setShowMobilePlayer(false)}
-              className="absolute top-2.5 right-2.5 z-30 p-1.5 text-slate-400 hover:text-white bg-slate-900/90 hover:bg-slate-800 border border-slate-700 transition-colors cursor-pointer rounded-none"
-              title="Đóng trình phát"
-            >
-              <X className="w-4 h-4" />
-            </button>
+            {/* Hidden File Input for Image Upload */}
+            <input
+              ref={bgFileInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={handleFileSelect}
+            />
 
-            {/* Tên truyện phía trên cái đĩa */}
-            <div className="w-full text-center px-9 pt-4 pb-2 shrink-0 border-b border-slate-800/80 bg-slate-900/50">
-              <h3 className="text-sm sm:text-base font-bold text-white truncate tracking-wide" title={activeStory.title}>
-                {activeStory.title}
-              </h3>
-              <p className="text-[10px] font-mono text-slate-400 mt-0.5">
-                {formatTime(masterCurrentTime)} / {formatTime(masterDuration || activeStory.masterAudio.duration || 0)}
-              </p>
-            </div>
-
-            {/* Khu vực trung tâm: Đĩa nhạc xoay & Sóng nhạc visualizer (Shrink-0) */}
-            <div className="pt-3 pb-2 flex flex-col items-center justify-center shrink-0">
-              {/* Rotating Vinyl Disc */}
+            {/* Background Layer: Custom Drag-and-Drop Image or Default Deep Indigo Theme */}
+            {customBgImage ? (
               <div
-                className={`w-32 h-32 sm:w-36 sm:h-36 rounded-full bg-gradient-to-tr from-slate-900 via-slate-800 to-black p-2 border-4 border-slate-700 shadow-xl flex items-center justify-center transition-transform duration-700 ${
-                  isPlayingMaster ? "animate-[spin_10s_linear_infinite]" : ""
-                }`}
+                className="absolute inset-0 bg-cover bg-center z-0 transition-all duration-700"
+                style={{ backgroundImage: `url(${customBgImage})` }}
               >
-                <div className="w-full h-full rounded-full border-2 border-dashed border-amber-500/30 flex items-center justify-center bg-gradient-to-br from-amber-600 via-orange-600 to-rose-700 shadow-inner">
-                  <div className="w-9 h-9 rounded-full bg-slate-950 border-2 border-white/20 flex items-center justify-center text-amber-300">
-                    <BookOpen className="w-4 h-4" />
+                {/* Deep dark gradient overlay so UI elements remain pristine & readable */}
+                <div className="absolute inset-0 bg-gradient-to-b from-[#0b0c1c]/85 via-[#0e1026]/90 to-[#070812]/95 backdrop-blur-md" />
+              </div>
+            ) : (
+              /* Default Modern Dark Theme matching reference image */
+              <div className="absolute inset-0 bg-gradient-to-b from-[#0b0c1c] via-[#101229] to-[#080914] z-0 pointer-events-none" />
+            )}
+
+            {/* Drag & Drop Visual Dropzone Overlay */}
+            {isDraggingOver && (
+              <div className="absolute inset-0 z-50 bg-purple-950/90 backdrop-blur-md border-4 border-dashed border-pink-400 flex flex-col items-center justify-center text-center p-6 animate-pulse">
+                <ImageIcon className="w-14 h-14 text-pink-400 mb-3 animate-bounce" />
+                <h3 className="text-base font-bold text-white mb-1">Thả hình ảnh vào đây</h3>
+                <p className="text-xs text-pink-200">Hình ảnh sẽ được đặt làm hình nền và ảnh đĩa nhạc</p>
+              </div>
+            )}
+
+            {/* Top Bar: Chevron Down (Left), "Now Playing" (Center), More (Right) */}
+            <div className="px-5 pt-4 pb-2 flex items-center justify-between shrink-0 z-10">
+              {/* Chevron Down Button to Minimize/Close */}
+              <button
+                type="button"
+                onClick={() => setShowMobilePlayer(false)}
+                className="w-10 h-10 rounded-full bg-slate-800/60 hover:bg-slate-700/80 backdrop-blur-md flex items-center justify-center text-slate-200 hover:text-white transition-all shadow-sm cursor-pointer"
+                title="Thu nhỏ / Đóng trình phát"
+              >
+                <ChevronDown className="w-5 h-5" />
+              </button>
+
+              {/* Center "Now Playing" Title */}
+              <span className="text-sm font-semibold text-white tracking-wide">
+                Now Playing
+              </span>
+
+              {/* Right More Options Button */}
+              <div className="relative" onClick={(e) => e.stopPropagation()}>
+                <button
+                  type="button"
+                  onClick={() => setShowPlayerOptions(!showPlayerOptions)}
+                  className="w-10 h-10 rounded-full bg-slate-800/60 hover:bg-slate-700/80 backdrop-blur-md flex items-center justify-center text-slate-200 hover:text-white transition-all shadow-sm cursor-pointer"
+                  title="Tùy chọn trình phát"
+                >
+                  <MoreVertical className="w-5 h-5" />
+                </button>
+
+                {/* Dropdown Menu */}
+                {showPlayerOptions && (
+                  <div className="absolute right-0 top-12 z-50 w-52 bg-slate-900/95 border border-slate-700 rounded-2xl shadow-2xl p-1.5 space-y-1 text-xs backdrop-blur-xl">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        bgFileInputRef.current?.click();
+                        setShowPlayerOptions(false);
+                      }}
+                      className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-left hover:bg-slate-800 text-slate-200 hover:text-white transition-colors"
+                    >
+                      <ImageIcon className="w-4 h-4 text-pink-400" />
+                      <span>Chọn ảnh nền / bìa...</span>
+                    </button>
+                    {customBgImage && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          handleRemoveBgImage();
+                          setShowPlayerOptions(false);
+                        }}
+                        className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-left hover:bg-rose-950/60 text-rose-300 transition-colors"
+                      >
+                        <X className="w-4 h-4" />
+                        <span>Xóa ảnh nền đã chọn</span>
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowMobilePlayer(false);
+                        setShowPlayerOptions(false);
+                      }}
+                      className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-left hover:bg-slate-800 text-slate-400 transition-colors border-t border-slate-800"
+                    >
+                      <X className="w-4 h-4" />
+                      <span>Đóng trình phát</span>
+                    </button>
                   </div>
-                </div>
-              </div>
-
-              {/* 16-Bar Animated Audio Visualizer Spectrum */}
-              <div className="flex items-end justify-center gap-1 h-6 w-full px-8 mt-2.5">
-                {[35, 65, 85, 45, 75, 95, 55, 40, 80, 90, 60, 70, 50, 85, 55, 35].map((height, i) => (
-                  <div
-                    key={i}
-                    className={`w-1 rounded-none transition-all duration-150 ${
-                      isPlayingMaster
-                        ? "bg-gradient-to-t from-amber-500 to-orange-400 animate-pulse"
-                        : "bg-slate-700 h-1.5"
-                    }`}
-                    style={{
-                      height: isPlayingMaster ? `${height}%` : "4px",
-                      animationDelay: `${i * 60}ms`,
-                    }}
-                  />
-                ))}
-              </div>
-            </div>
-
-            {/* Khu vực Script đang đọc: Tự động Overflow cuộn nội dung, không ảnh hưởng component khác */}
-            <div className="flex-1 min-h-0 px-3.5 py-2 flex flex-col overflow-hidden">
-              <div className="flex-1 min-h-0 bg-slate-900/90 border border-slate-800 p-3 overflow-y-auto scroll-smooth">
-                {paragraphTimelines[activeTimelineIndex] ? (
-                  <p
-                    ref={activeLyricRef}
-                    className="text-xs sm:text-sm text-amber-200 leading-relaxed font-medium select-text whitespace-pre-wrap"
-                  >
-                    {paragraphTimelines[activeTimelineIndex].text}
-                  </p>
-                ) : (
-                  <p className="text-xs text-slate-500 italic text-center py-2">
-                    (Chưa có nội dung đang đọc)
-                  </p>
                 )}
               </div>
             </div>
 
-            {/* Bottom Media Controls Deck (Không bo góc) */}
-            <div className="px-4 pt-2.5 pb-3 bg-slate-900 border-t border-slate-800 shrink-0 space-y-2">
-              {/* Timeline Scrubber */}
-              <div className="space-y-1">
+            {/* Central Circular Artwork with Ambient Glowing Spheres */}
+            <div className="relative my-auto flex items-center justify-center py-2 shrink-0 z-10">
+              {/* Ambient Glowing Planetary Sphere (Top-Left) */}
+              <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-full bg-gradient-to-br from-rose-600 via-pink-600 to-purple-800 absolute -top-2 left-6 sm:left-10 opacity-70 blur-[1px] pointer-events-none" />
+
+              {/* Ambient Glowing Planetary Sphere (Bottom-Right) */}
+              <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-gradient-to-br from-purple-700 via-violet-800 to-indigo-900 absolute -bottom-1 right-8 sm:right-12 opacity-80 blur-[1px] pointer-events-none" />
+
+              {/* Main Central Circular Disc Artwork */}
+              <div
+                onClick={() => bgFileInputRef.current?.click()}
+                className="relative w-44 h-44 sm:w-52 sm:h-52 rounded-full overflow-hidden shadow-[0_20px_50px_rgba(0,0,0,0.7)] border-2 border-white/10 flex items-center justify-center cursor-pointer group z-10 transition-transform duration-500 hover:scale-[1.02]"
+                title="Bấm hoặc kéo thả ảnh vào đây để đổi ảnh đại diện / hình nền"
+              >
+                {customBgImage ? (
+                  <img
+                    src={customBgImage}
+                    alt="Cover"
+                    className={`w-full h-full object-cover transition-transform duration-700 ${
+                      isPlayingMaster ? "animate-[spin_24s_linear_infinite]" : ""
+                    }`}
+                  />
+                ) : (
+                  /* Default Glowing Neon Sunset Gradient matching reference image */
+                  <div
+                    className={`w-full h-full flex flex-col items-center justify-center bg-gradient-to-tr from-amber-600 via-rose-600 to-purple-900 p-4 text-center transition-transform duration-700 ${
+                      isPlayingMaster ? "animate-[spin_24s_linear_infinite]" : ""
+                    }`}
+                  >
+                    <BookOpen className="w-12 h-12 text-white/95 drop-shadow-md mb-1" />
+                    <span className="text-[10px] text-white/90 font-bold tracking-wider uppercase drop-shadow-sm">
+                      TTS Story
+                    </span>
+                  </div>
+                )}
+
+                {/* Subtle Hover Overlay */}
+                <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center text-white text-[11px] font-medium p-2 text-center backdrop-blur-xs z-20">
+                  <ImageIcon className="w-6 h-6 mb-1 text-pink-300" />
+                  <span>Kéo thả hoặc bấm để đổi ảnh</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Story Title & Favorite Heart Row */}
+            <div className="px-6 flex items-center justify-between gap-3 shrink-0 z-10">
+              <div className="min-w-0 flex-1 leading-tight">
+                <h2 className="text-base sm:text-lg font-bold text-white tracking-tight truncate" title={activeStory.title}>
+                  {activeStory.title}
+                </h2>
+                <p className="text-xs text-slate-400 font-medium truncate mt-0.5">
+                  {paragraphTimelines[activeTimelineIndex]?.character?.name || "Kể Truyện TTS"} · Đoạn {activeTimelineIndex + 1}/{paragraphTimelines.length}
+                </p>
+              </div>
+
+              {/* Heart Favorite Button */}
+              <button
+                type="button"
+                onClick={() => setIsFavorited(!isFavorited)}
+                className={`w-10 h-10 rounded-full border flex items-center justify-center transition-all shrink-0 cursor-pointer ${
+                  isFavorited
+                    ? "bg-purple-900/40 border-purple-500 text-purple-300 shadow-md shadow-purple-500/20"
+                    : "bg-slate-800/60 hover:bg-slate-800 border-slate-700/60 text-slate-400 hover:text-white"
+                }`}
+                title={isFavorited ? "Đã yêu thích" : "Yêu thích truyện này"}
+              >
+                <Heart className={`w-4 h-4 ${isFavorited ? "fill-purple-400 text-purple-400" : ""}`} />
+              </button>
+            </div>
+
+            {/* Timeline Progress Scrubber with Neon Gradient */}
+            <div className="px-6 pt-3 shrink-0 z-10 space-y-1">
+              <div className="relative flex items-center">
                 <input
                   type="range"
                   min="0"
@@ -2548,123 +2711,119 @@ function parseRawStoryContent(raw: string): ParsedStoryBlock[] {
                   step="0.1"
                   value={masterCurrentTime}
                   onChange={handleMasterSeek}
-                  className="w-full accent-amber-500 cursor-pointer h-1.5 bg-slate-800 rounded-none"
+                  className="w-full accent-pink-500 cursor-pointer h-1.5 bg-slate-800/90 rounded-full appearance-none outline-none focus:outline-none"
+                  style={{
+                    background: `linear-gradient(to right, #f97316 0%, #ec4899 ${(masterCurrentTime / (masterDuration || activeStory.masterAudio.duration || 100)) * 100}%, #1e293b ${(masterCurrentTime / (masterDuration || activeStory.masterAudio.duration || 100)) * 100}%, #1e293b 100%)`
+                  }}
                 />
-                <div className="flex items-center justify-between text-[10px] font-mono text-slate-400">
-                  <span className="text-amber-400 font-semibold">{formatTime(masterCurrentTime)}</span>
-                  <span className="text-slate-500 font-sans">
-                    Đoạn {activeTimelineIndex + 1}/{paragraphTimelines.length}
-                  </span>
-                  <span>{formatTime(masterDuration || activeStory.masterAudio.duration || 0)}</span>
-                </div>
               </div>
+              <div className="flex items-center justify-between text-[11px] font-mono text-slate-400">
+                <span>{formatTime(masterCurrentTime)}</span>
+                <span>{formatTime(masterDuration || activeStory.masterAudio.duration || 0)}</span>
+              </div>
+            </div>
 
-              {/* Primary Transport Controls */}
-              <div className="flex items-center justify-between px-2">
-                {/* -5s Skip */}
-                <button
-                  type="button"
-                  onClick={() => handleSkipTime(-5)}
-                  className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 transition-colors flex items-center justify-center flex-col text-[8px] rounded-none"
-                  title="Lùi lại 5 giây"
-                >
-                  <RotateCcw className="w-4 h-4" />
-                  <span className="font-mono mt-0.5">-5s</span>
-                </button>
+            {/* Playback Controls Row (Repeat, Prev, Big Gradient Play/Pause, Next, Shuffle) */}
+            <div className="px-6 py-1 flex items-center justify-between shrink-0 z-10">
+              {/* Speed / Repeat Button */}
+              <button
+                type="button"
+                onClick={handleCycleSpeed}
+                className="p-2 text-slate-400 hover:text-white transition-colors relative cursor-pointer"
+                title={`Tốc độ đọc: ${playbackSpeed.toFixed(2)}x`}
+              >
+                <Repeat className="w-5 h-5" />
+                <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 text-[9px] font-mono text-pink-400 font-bold">
+                  {playbackSpeed}x
+                </span>
+              </button>
 
-                {/* Previous Paragraph */}
-                <button
-                  type="button"
-                  onClick={handlePrevParagraph}
-                  className="p-2 text-slate-300 hover:text-white hover:bg-slate-800 transition-colors rounded-none"
-                  title="Đoạn trước"
-                >
-                  <SkipBack className="w-4 h-4" />
-                </button>
+              {/* Previous Paragraph */}
+              <button
+                type="button"
+                onClick={handlePrevParagraph}
+                className="p-2 text-slate-200 hover:text-white transition-colors cursor-pointer"
+                title="Đoạn trước"
+              >
+                <SkipBack className="w-6 h-6 fill-current" />
+              </button>
 
-                {/* Center Play / Pause Button */}
-                <button
-                  type="button"
-                  onClick={handleToggleMasterPlay}
-                  className="w-12 h-12 bg-gradient-to-tr from-amber-500 via-orange-500 to-rose-500 hover:from-amber-400 hover:to-rose-400 active:scale-95 text-slate-950 font-black shadow-lg shadow-amber-500/30 flex items-center justify-center transition-all cursor-pointer rounded-none"
-                  title={isPlayingMaster ? "Tạm dừng" : "Phát tiếp"}
-                >
-                  {isPlayingMaster ? (
-                    <Pause className="w-5 h-5 fill-current" />
+              {/* Center Play / Pause Button with Purple-Pink-Orange Gradient */}
+              <button
+                type="button"
+                onClick={handleToggleMasterPlay}
+                className="w-14 h-14 rounded-full bg-gradient-to-tr from-purple-700 via-rose-600 to-orange-500 hover:from-purple-600 hover:to-orange-400 active:scale-95 text-white flex items-center justify-center shadow-xl shadow-rose-600/35 transition-all cursor-pointer"
+                title={isPlayingMaster ? "Tạm dừng" : "Phát tiếp"}
+              >
+                {isPlayingMaster ? (
+                  <Pause className="w-6 h-6 fill-current" />
+                ) : (
+                  <Play className="w-6 h-6 fill-current ml-0.5" />
+                )}
+              </button>
+
+              {/* Next Paragraph */}
+              <button
+                type="button"
+                onClick={handleNextParagraph}
+                className="p-2 text-slate-200 hover:text-white transition-colors cursor-pointer"
+                title="Đoạn tiếp theo"
+              >
+                <SkipForward className="w-6 h-6 fill-current" />
+              </button>
+
+              {/* Shuffle / Mute Button */}
+              <button
+                type="button"
+                onClick={handleToggleMute}
+                className="p-2 text-slate-400 hover:text-white transition-colors cursor-pointer"
+                title={playerMuted ? "Bật âm" : "Tắt âm"}
+              >
+                <Shuffle className={`w-5 h-5 ${playerMuted ? "text-rose-400" : ""}`} />
+              </button>
+            </div>
+
+            {/* Lyrics Card: Constrained & Overflow Scrollable */}
+            <div className="px-4 pb-4 pt-1 flex-1 min-h-[120px] max-h-[170px] sm:max-h-[190px] flex flex-col shrink-0 z-10 overflow-hidden">
+              <div className="flex-1 min-h-0 bg-gradient-to-b from-[#181b36]/90 via-[#14162e]/90 to-[#0e1022]/95 border border-purple-500/25 rounded-2xl p-3.5 shadow-xl backdrop-blur-xl flex flex-col overflow-hidden">
+                {/* Lyrics Header */}
+                <div className="flex items-center justify-between pb-1.5 border-b border-purple-500/15 shrink-0">
+                  <span className="text-xs font-bold text-white tracking-wide">Lyrics</span>
+                  <ChevronDown className="w-4 h-4 text-slate-400" />
+                </div>
+
+                {/* Scrollable Script Area: Constrained so it never displaces controls */}
+                <div className="flex-1 min-h-0 overflow-y-auto space-y-2 pt-2 scroll-smooth">
+                  {paragraphTimelines[activeTimelineIndex] ? (
+                    <>
+                      {/* Current Spoken Line Highlighted in Vivid Pink */}
+                      <p
+                        ref={activeLyricRef}
+                        className="text-xs sm:text-sm font-semibold text-pink-400 leading-relaxed drop-shadow-sm select-text whitespace-pre-wrap"
+                      >
+                        {paragraphTimelines[activeTimelineIndex].text}
+                      </p>
+
+                      {/* Next Upcoming Line Preview in Dimmed Slate */}
+                      {paragraphTimelines[activeTimelineIndex + 1] && (
+                        <p className="text-xs text-slate-400/90 leading-relaxed font-normal select-text">
+                          {paragraphTimelines[activeTimelineIndex + 1].text}
+                        </p>
+                      )}
+
+                      {/* Following Line Preview */}
+                      {paragraphTimelines[activeTimelineIndex + 2] && (
+                        <p className="text-xs text-slate-500/80 leading-relaxed font-normal select-text">
+                          {paragraphTimelines[activeTimelineIndex + 2].text}
+                        </p>
+                      )}
+                    </>
                   ) : (
-                    <Play className="w-5 h-5 fill-current ml-0.5" />
+                    <p className="text-xs text-slate-400 italic text-center py-2">
+                      (Chưa có nội dung script)
+                    </p>
                   )}
-                </button>
-
-                {/* Next Paragraph */}
-                <button
-                  type="button"
-                  onClick={handleNextParagraph}
-                  className="p-2 text-slate-300 hover:text-white hover:bg-slate-800 transition-colors rounded-none"
-                  title="Đoạn tiếp theo"
-                >
-                  <SkipForward className="w-4 h-4" />
-                </button>
-
-                {/* +5s Skip */}
-                <button
-                  type="button"
-                  onClick={() => handleSkipTime(5)}
-                  className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 transition-colors flex items-center justify-center flex-col text-[8px] rounded-none"
-                  title="Tua tới 5 giây"
-                >
-                  <FastForward className="w-4 h-4" />
-                  <span className="font-mono mt-0.5">+5s</span>
-                </button>
-              </div>
-
-              {/* Secondary Utility Controls: Speed, Volume, Download */}
-              <div className="flex items-center justify-between pt-1 border-t border-slate-800/60 px-1 text-[11px]">
-                {/* Speed Toggle */}
-                <button
-                  type="button"
-                  onClick={handleCycleSpeed}
-                  className="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-amber-300 font-mono text-[10px] font-bold border border-slate-700 transition-all rounded-none"
-                  title="Thay đổi tốc độ phát"
-                >
-                  {playbackSpeed.toFixed(2)}x
-                </button>
-
-                {/* Volume slider & mute */}
-                <div className="flex items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={handleToggleMute}
-                    className="p-1 text-slate-400 hover:text-white transition-colors"
-                    title={playerMuted ? "Bật âm" : "Tắt âm"}
-                  >
-                    {playerMuted ? (
-                      <VolumeX className="w-3.5 h-3.5 text-rose-400" />
-                    ) : (
-                      <Volume2 className="w-3.5 h-3.5 text-slate-300" />
-                    )}
-                  </button>
-                  <input
-                    type="range"
-                    min="0"
-                    max="1"
-                    step="0.05"
-                    value={playerMuted ? 0 : playerVolume}
-                    onChange={(e) => handleVolumeChange(parseFloat(e.target.value))}
-                    className="w-16 accent-amber-500 cursor-pointer h-1 bg-slate-800 rounded-none"
-                    title="Âm lượng"
-                  />
                 </div>
-
-                {/* Download Master MP3 */}
-                <a
-                  href={`/api/stories/${activeStory.id}/master-audio?format=mp3&download=1`}
-                  download={`story-${activeStory.id}.mp3`}
-                  className="p-1 text-slate-400 hover:text-amber-400 transition-colors"
-                  title="Tải tệp MP3"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                </a>
               </div>
             </div>
           </div>
