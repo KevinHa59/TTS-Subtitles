@@ -2447,239 +2447,98 @@ function parseRawStoryContent(raw: string): ParsedStoryBlock[] {
       {/* (Requirement: khi play master, có thể tạo 1 overflow       */}
       {/* panel mobile size 9x16, tạo 1 media player trong đó)     */}
       {/* ========================================================= */}
+      {/* ========================================================= */}
+      {/* 5. OVERFLOW PANEL MOBILE SIZE 9:16 WITH MEDIA PLAYER     */}
+      {/* (Requirement: các góc không bo tròn, bỏ status bar,       */}
+      {/*  bỏ title bar, để tên truyện phía trên đĩa, script overflow)*/}
+      {/* ========================================================= */}
       {showMobilePlayer && activeStory && activeStory.masterAudio && (
         <div
           role="dialog"
           aria-modal="true"
-          aria-label="Trình Phát Di Động 9:16"
+          aria-label="Trình Phát Media 9:16"
           className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/85 backdrop-blur-md animate-fadeIn"
           onClick={() => setShowMobilePlayer(false)}
         >
-          {/* Mobile Phone Container (Strict 9:16 Aspect Ratio) */}
+          {/* Mobile Panel 9:16 (Không bo góc - rounded-none, viền sắc nét) */}
           <div
-            className="relative w-full max-w-[360px] sm:max-w-[390px] aspect-[9/16] max-h-[92vh] bg-slate-950 rounded-[48px] border-[8px] border-slate-800 shadow-[0_25px_70px_rgba(0,0,0,0.95)] ring-1 ring-slate-700/60 overflow-hidden flex flex-col text-slate-100 select-none animate-in fade-in zoom-in-95 duration-200"
+            className="relative w-full max-w-[360px] sm:max-w-[390px] aspect-[9/16] max-h-[92vh] bg-slate-950 rounded-none border-2 border-slate-700 shadow-[0_25px_70px_rgba(0,0,0,0.95)] overflow-hidden flex flex-col text-slate-100 select-none animate-in fade-in zoom-in-95 duration-200"
             onClick={(e) => e.stopPropagation()}
           >
-            {/* Top Phone Simulated Status Bar */}
-            <div className="flex items-center justify-between px-6 pt-3 pb-1 text-[11px] font-semibold text-slate-300 shrink-0">
-              <span className="font-mono text-slate-200 tracking-tight">
-                {new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-              </span>
+            {/* Minimalist Close Button (Góc trên bên phải) */}
+            <button
+              type="button"
+              onClick={() => setShowMobilePlayer(false)}
+              className="absolute top-2.5 right-2.5 z-30 p-1.5 text-slate-400 hover:text-white bg-slate-900/90 hover:bg-slate-800 border border-slate-700 transition-colors cursor-pointer rounded-none"
+              title="Đóng trình phát"
+            >
+              <X className="w-4 h-4" />
+            </button>
 
-              {/* Dynamic Island Notch */}
-              <div className="w-28 h-5 bg-black rounded-full flex items-center justify-between px-2.5 shadow-inner border border-slate-800/80">
-                <span className="w-2 h-2 rounded-full bg-slate-900 border border-slate-700/60" />
-                {isPlayingMaster && (
-                  <div className="flex items-center gap-0.5">
-                    <span className="w-1 h-2 bg-emerald-400 rounded-full animate-pulse" />
-                    <span className="w-1 h-3 bg-amber-400 rounded-full animate-pulse" style={{ animationDelay: "150ms" }} />
-                    <span className="w-1 h-1.5 bg-orange-400 rounded-full animate-pulse" style={{ animationDelay: "300ms" }} />
-                  </div>
-                )}
-                <span className={`w-1.5 h-1.5 rounded-full ${isPlayingMaster ? "bg-emerald-500 animate-pulse" : "bg-slate-700"}`} />
-              </div>
-
-              {/* Right Phone Status Icons */}
-              <div className="flex items-center gap-1.5 text-slate-300">
-                <Wifi className="w-3 h-3 text-slate-300" />
-                <span className="text-[10px] font-mono">5G</span>
-                <div className="flex items-center gap-0.5">
-                  <span className="text-[10px] font-mono text-emerald-400">98%</span>
-                  <Battery className="w-3.5 h-3.5 text-emerald-400" />
-                </div>
-              </div>
+            {/* Tên truyện phía trên cái đĩa */}
+            <div className="w-full text-center px-9 pt-4 pb-2 shrink-0 border-b border-slate-800/80 bg-slate-900/50">
+              <h3 className="text-sm sm:text-base font-bold text-white truncate tracking-wide" title={activeStory.title}>
+                {activeStory.title}
+              </h3>
+              <p className="text-[10px] font-mono text-slate-400 mt-0.5">
+                {formatTime(masterCurrentTime)} / {formatTime(masterDuration || activeStory.masterAudio.duration || 0)}
+              </p>
             </div>
 
-            {/* In-App Header & Tab Switcher */}
-            <div className="px-4 py-2 border-b border-slate-800/80 bg-slate-900/60 flex items-center justify-between gap-2 shrink-0">
-              <div className="flex items-center gap-2 min-w-0 flex-1">
-                <div className="w-7 h-7 rounded-lg bg-amber-500/15 text-amber-400 border border-amber-500/25 flex items-center justify-center shrink-0">
-                  <BookOpen className="w-3.5 h-3.5" />
-                </div>
-                <div className="min-w-0 flex-1 leading-tight">
-                  <h3 className="text-xs font-bold text-white truncate" title={activeStory.title}>
-                    {activeStory.title}
-                  </h3>
-                  <div className="flex items-center gap-1.5 text-[10px] text-slate-400">
-                    <span className="text-emerald-400 font-semibold">Master Player</span>
-                    <span>·</span>
-                    <span className="font-mono">{formatTime(activeStory.masterAudio.duration)}</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Tab Switcher: Kịch Bản (Lyrics) vs Sóng Nhạc (Visualizer) */}
-              <div className="flex items-center bg-slate-950 p-0.5 rounded-xl border border-slate-800 shrink-0">
-                <button
-                  type="button"
-                  onClick={() => setMobilePlayerTab("lyrics")}
-                  className={`px-2 py-1 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-all ${
-                    mobilePlayerTab === "lyrics"
-                      ? "bg-amber-500 text-slate-950 shadow-sm"
-                      : "text-slate-400 hover:text-slate-200"
-                  }`}
-                  title="Xem lời thoại kịch bản đồng bộ"
-                >
-                  <ListMusic className="w-3 h-3" />
-                  <span>Kịch Bản</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setMobilePlayerTab("cover")}
-                  className={`px-2 py-1 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-all ${
-                    mobilePlayerTab === "cover"
-                      ? "bg-amber-500 text-slate-950 shadow-sm"
-                      : "text-slate-400 hover:text-slate-200"
-                  }`}
-                  title="Xem sóng nhạc và bìa đĩa"
-                >
-                  <Disc3 className="w-3 h-3" />
-                  <span>Sóng Nhạc</span>
-                </button>
-              </div>
-
-              {/* Close Button */}
-              <button
-                type="button"
-                onClick={() => setShowMobilePlayer(false)}
-                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors shrink-0"
-                title="Đóng trình phát (audio vẫn tiếp tục phát ngầm)"
+            {/* Khu vực trung tâm: Đĩa nhạc xoay & Sóng nhạc visualizer (Shrink-0) */}
+            <div className="pt-3 pb-2 flex flex-col items-center justify-center shrink-0">
+              {/* Rotating Vinyl Disc */}
+              <div
+                className={`w-32 h-32 sm:w-36 sm:h-36 rounded-full bg-gradient-to-tr from-slate-900 via-slate-800 to-black p-2 border-4 border-slate-700 shadow-xl flex items-center justify-center transition-transform duration-700 ${
+                  isPlayingMaster ? "animate-[spin_10s_linear_infinite]" : ""
+                }`}
               >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            {/* Main Phone Screen View (Flex-1) */}
-            <div className="flex-1 overflow-hidden relative flex flex-col">
-              {mobilePlayerTab === "lyrics" ? (
-                /* TAB 1: SYNCHRONIZED KARAOKE SCRIPT */
-                <div className="flex-1 flex flex-col overflow-hidden">
-                  <div className="px-4 py-1.5 bg-slate-950/70 border-b border-slate-900 flex items-center justify-between text-[11px] text-slate-400 shrink-0">
-                    <span className="font-mono text-[10px]">
-                      Đoạn <strong className="text-amber-400 font-bold">{activeTimelineIndex + 1}</strong> / {paragraphTimelines.length}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => setAutoScrollLyrics(!autoScrollLyrics)}
-                      className={`text-[10px] px-2 py-0.5 rounded-full border transition-all ${
-                        autoScrollLyrics
-                          ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30 font-semibold"
-                          : "bg-slate-800 text-slate-400 border-slate-700"
-                      }`}
-                    >
-                      {autoScrollLyrics ? "✓ Tự Cuộn: Bật" : "Tự Cuộn: Tắt"}
-                    </button>
-                  </div>
-
-                  {/* Scrollable Karaoke Paragraphs */}
-                  <div className="flex-1 overflow-y-auto px-3 py-3 space-y-2.5 scroll-smooth">
-                    {paragraphTimelines.map((pt, idx) => {
-                      const isActive = idx === activeTimelineIndex;
-                      const charColor = getColorConfig(pt.character?.color);
-
-                      return (
-                        <div
-                          key={pt.id}
-                          ref={isActive ? activeLyricRef : null}
-                          onClick={() => seekMasterAudio(pt.start)}
-                          className={`p-3 rounded-2xl border transition-all cursor-pointer relative group ${
-                            isActive
-                              ? "bg-gradient-to-r from-amber-500/20 via-orange-500/15 to-slate-900 border-amber-500/50 shadow-lg shadow-amber-500/10 scale-[1.01]"
-                              : "bg-slate-900/60 hover:bg-slate-900 border-slate-800/80 opacity-75 hover:opacity-100"
-                          }`}
-                        >
-                          <div className="flex items-center justify-between gap-1.5 mb-1.5">
-                            <div className="flex items-center gap-1.5">
-                              <span
-                                className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${charColor.bg} ${charColor.text} ${charColor.border}`}
-                              >
-                                {pt.character?.name || "Nhân vật"}
-                              </span>
-                              {pt.pauseSec > 0 && (
-                                <span className="text-[9px] font-mono text-orange-400 bg-orange-500/10 border border-orange-500/20 px-1.5 py-0.5 rounded">
-                                  +{pt.pauseSec}s
-                                </span>
-                              )}
-                            </div>
-                            <div className="flex items-center gap-1.5 text-[10px] font-mono text-slate-400">
-                              {isActive && isPlayingMaster && (
-                                <span className="flex items-center gap-0.5 text-amber-400 mr-1">
-                                  <span className="w-1 h-2 bg-amber-400 rounded-full animate-bounce" />
-                                  <span className="w-1 h-3 bg-amber-400 rounded-full animate-bounce" style={{ animationDelay: "100ms" }} />
-                                  <span className="w-1 h-1.5 bg-amber-400 rounded-full animate-bounce" style={{ animationDelay: "200ms" }} />
-                                </span>
-                              )}
-                              <span>{formatTime(pt.start)}</span>
-                            </div>
-                          </div>
-                          <p
-                            className={`text-xs leading-relaxed ${
-                              isActive ? "text-amber-200 font-semibold" : "text-slate-300"
-                            }`}
-                          >
-                            {pt.text}
-                          </p>
-                        </div>
-                      );
-                    })}
+                <div className="w-full h-full rounded-full border-2 border-dashed border-amber-500/30 flex items-center justify-center bg-gradient-to-br from-amber-600 via-orange-600 to-rose-700 shadow-inner">
+                  <div className="w-9 h-9 rounded-full bg-slate-950 border-2 border-white/20 flex items-center justify-center text-amber-300">
+                    <BookOpen className="w-4 h-4" />
                   </div>
                 </div>
-              ) : (
-                /* TAB 2: COVER ARTWORK & SPECTRUM VISUALIZER */
-                <div className="flex-1 flex flex-col items-center justify-between p-4 overflow-y-auto">
-                  {/* Rotating Vinyl Disc Artwork */}
-                  <div className="relative my-auto flex items-center justify-center">
-                    <div
-                      className={`w-36 h-36 rounded-full bg-gradient-to-tr from-slate-900 via-slate-800 to-black p-2 border-4 border-slate-700/80 shadow-2xl flex items-center justify-center transition-transform duration-700 ${
-                        isPlayingMaster ? "animate-[spin_10s_linear_infinite]" : ""
-                      }`}
-                    >
-                      <div className="w-full h-full rounded-full border-2 border-dashed border-amber-500/30 flex items-center justify-center bg-gradient-to-br from-amber-600 via-orange-600 to-rose-700 shadow-inner">
-                        <div className="w-10 h-10 rounded-full bg-slate-950 border-4 border-white/20 flex items-center justify-center text-amber-300">
-                          <BookOpen className="w-4 h-4" />
-                        </div>
-                      </div>
-                    </div>
-                  </div>
+              </div>
 
-                  {/* Character Spotlight */}
-                  {paragraphTimelines[activeTimelineIndex] && (
-                    <div className="w-full text-center space-y-1 mb-2">
-                      <span className="text-[10px] uppercase font-bold tracking-wider text-amber-400">
-                        Đang đọc thoại
-                      </span>
-                      <h4 className="text-sm font-extrabold text-white">
-                        {paragraphTimelines[activeTimelineIndex]?.character?.name || "Nhân vật"}
-                      </h4>
-                      <p className="text-[11px] text-slate-400 italic line-clamp-2 px-3">
-                        “{paragraphTimelines[activeTimelineIndex]?.text}”
-                      </p>
-                    </div>
-                  )}
-
-                  {/* 16-Bar Animated Audio Visualizer Spectrum */}
-                  <div className="flex items-end justify-center gap-1 h-12 w-full px-6 py-1">
-                    {[40, 70, 90, 50, 80, 100, 60, 45, 85, 95, 65, 75, 55, 90, 60, 40].map((height, i) => (
-                      <div
-                        key={i}
-                        className={`w-1.5 rounded-full transition-all duration-150 ${
-                          isPlayingMaster
-                            ? "bg-gradient-to-t from-amber-500 to-orange-400 animate-pulse"
-                            : "bg-slate-700 h-2"
-                        }`}
-                        style={{
-                          height: isPlayingMaster ? `${height}%` : "8px",
-                          animationDelay: `${i * 60}ms`,
-                        }}
-                      />
-                    ))}
-                  </div>
-                </div>
-              )}
+              {/* 16-Bar Animated Audio Visualizer Spectrum */}
+              <div className="flex items-end justify-center gap-1 h-6 w-full px-8 mt-2.5">
+                {[35, 65, 85, 45, 75, 95, 55, 40, 80, 90, 60, 70, 50, 85, 55, 35].map((height, i) => (
+                  <div
+                    key={i}
+                    className={`w-1 rounded-none transition-all duration-150 ${
+                      isPlayingMaster
+                        ? "bg-gradient-to-t from-amber-500 to-orange-400 animate-pulse"
+                        : "bg-slate-700 h-1.5"
+                    }`}
+                    style={{
+                      height: isPlayingMaster ? `${height}%` : "4px",
+                      animationDelay: `${i * 60}ms`,
+                    }}
+                  />
+                ))}
+              </div>
             </div>
 
-            {/* Bottom Media Deck: Scrubber, Transport & Secondary Controls */}
-            <div className="px-4 pt-2.5 pb-2 bg-slate-900/90 border-t border-slate-800/80 shrink-0 space-y-2">
+            {/* Khu vực Script đang đọc: Tự động Overflow cuộn nội dung, không ảnh hưởng component khác */}
+            <div className="flex-1 min-h-0 px-3.5 py-2 flex flex-col overflow-hidden">
+              <div className="flex-1 min-h-0 bg-slate-900/90 border border-slate-800 p-3 overflow-y-auto scroll-smooth">
+                {paragraphTimelines[activeTimelineIndex] ? (
+                  <p
+                    ref={activeLyricRef}
+                    className="text-xs sm:text-sm text-amber-200 leading-relaxed font-medium select-text whitespace-pre-wrap"
+                  >
+                    {paragraphTimelines[activeTimelineIndex].text}
+                  </p>
+                ) : (
+                  <p className="text-xs text-slate-500 italic text-center py-2">
+                    (Chưa có nội dung đang đọc)
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {/* Bottom Media Controls Deck (Không bo góc) */}
+            <div className="px-4 pt-2.5 pb-3 bg-slate-900 border-t border-slate-800 shrink-0 space-y-2">
               {/* Timeline Scrubber */}
               <div className="space-y-1">
                 <input
@@ -2689,10 +2548,13 @@ function parseRawStoryContent(raw: string): ParsedStoryBlock[] {
                   step="0.1"
                   value={masterCurrentTime}
                   onChange={handleMasterSeek}
-                  className="w-full accent-amber-500 cursor-pointer h-1.5 bg-slate-800 rounded-lg"
+                  className="w-full accent-amber-500 cursor-pointer h-1.5 bg-slate-800 rounded-none"
                 />
                 <div className="flex items-center justify-between text-[10px] font-mono text-slate-400">
                   <span className="text-amber-400 font-semibold">{formatTime(masterCurrentTime)}</span>
+                  <span className="text-slate-500 font-sans">
+                    Đoạn {activeTimelineIndex + 1}/{paragraphTimelines.length}
+                  </span>
                   <span>{formatTime(masterDuration || activeStory.masterAudio.duration || 0)}</span>
                 </div>
               </div>
@@ -2703,7 +2565,7 @@ function parseRawStoryContent(raw: string): ParsedStoryBlock[] {
                 <button
                   type="button"
                   onClick={() => handleSkipTime(-5)}
-                  className="p-1.5 rounded-full text-slate-400 hover:text-white hover:bg-slate-800 transition-colors flex items-center justify-center flex-col text-[8px]"
+                  className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 transition-colors flex items-center justify-center flex-col text-[8px] rounded-none"
                   title="Lùi lại 5 giây"
                 >
                   <RotateCcw className="w-4 h-4" />
@@ -2714,17 +2576,17 @@ function parseRawStoryContent(raw: string): ParsedStoryBlock[] {
                 <button
                   type="button"
                   onClick={handlePrevParagraph}
-                  className="p-2 rounded-full text-slate-300 hover:text-white hover:bg-slate-800 transition-colors"
+                  className="p-2 text-slate-300 hover:text-white hover:bg-slate-800 transition-colors rounded-none"
                   title="Đoạn trước"
                 >
                   <SkipBack className="w-4 h-4" />
                 </button>
 
-                {/* Big Center Play / Pause Button */}
+                {/* Center Play / Pause Button */}
                 <button
                   type="button"
                   onClick={handleToggleMasterPlay}
-                  className="w-12 h-12 rounded-full bg-gradient-to-tr from-amber-500 via-orange-500 to-rose-500 hover:from-amber-400 hover:to-rose-400 active:scale-95 text-slate-950 font-black shadow-lg shadow-amber-500/30 flex items-center justify-center transition-all cursor-pointer"
+                  className="w-12 h-12 bg-gradient-to-tr from-amber-500 via-orange-500 to-rose-500 hover:from-amber-400 hover:to-rose-400 active:scale-95 text-slate-950 font-black shadow-lg shadow-amber-500/30 flex items-center justify-center transition-all cursor-pointer rounded-none"
                   title={isPlayingMaster ? "Tạm dừng" : "Phát tiếp"}
                 >
                   {isPlayingMaster ? (
@@ -2738,7 +2600,7 @@ function parseRawStoryContent(raw: string): ParsedStoryBlock[] {
                 <button
                   type="button"
                   onClick={handleNextParagraph}
-                  className="p-2 rounded-full text-slate-300 hover:text-white hover:bg-slate-800 transition-colors"
+                  className="p-2 text-slate-300 hover:text-white hover:bg-slate-800 transition-colors rounded-none"
                   title="Đoạn tiếp theo"
                 >
                   <SkipForward className="w-4 h-4" />
@@ -2748,7 +2610,7 @@ function parseRawStoryContent(raw: string): ParsedStoryBlock[] {
                 <button
                   type="button"
                   onClick={() => handleSkipTime(5)}
-                  className="p-1.5 rounded-full text-slate-400 hover:text-white hover:bg-slate-800 transition-colors flex items-center justify-center flex-col text-[8px]"
+                  className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 transition-colors flex items-center justify-center flex-col text-[8px] rounded-none"
                   title="Tua tới 5 giây"
                 >
                   <FastForward className="w-4 h-4" />
@@ -2762,7 +2624,7 @@ function parseRawStoryContent(raw: string): ParsedStoryBlock[] {
                 <button
                   type="button"
                   onClick={handleCycleSpeed}
-                  className="px-2 py-0.5 rounded-full bg-slate-800 hover:bg-slate-700 text-amber-300 font-mono text-[10px] font-bold border border-slate-700 transition-all"
+                  className="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-amber-300 font-mono text-[10px] font-bold border border-slate-700 transition-all rounded-none"
                   title="Thay đổi tốc độ phát"
                 >
                   {playbackSpeed.toFixed(2)}x
@@ -2789,7 +2651,7 @@ function parseRawStoryContent(raw: string): ParsedStoryBlock[] {
                     step="0.05"
                     value={playerMuted ? 0 : playerVolume}
                     onChange={(e) => handleVolumeChange(parseFloat(e.target.value))}
-                    className="w-16 accent-amber-500 cursor-pointer h-1 bg-slate-800 rounded-lg"
+                    className="w-16 accent-amber-500 cursor-pointer h-1 bg-slate-800 rounded-none"
                     title="Âm lượng"
                   />
                 </div>
@@ -2804,9 +2666,6 @@ function parseRawStoryContent(raw: string): ParsedStoryBlock[] {
                   <Download className="w-3.5 h-3.5" />
                 </a>
               </div>
-
-              {/* Bottom Home Indicator Bar */}
-              <div className="w-24 h-1 bg-slate-700/80 rounded-full mx-auto mt-1 mb-0.5" />
             </div>
           </div>
         </div>
