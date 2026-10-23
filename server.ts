@@ -37,6 +37,12 @@ import {
   videoExportJobs,
   VIDEO_RESOLUTIONS,
 } from "./storyVideoExporter";
+import {
+  scanCustomModelsOnDisk,
+  registerCustomVoice,
+  deleteCustomVoice,
+  loadCustomVoices,
+} from "./customVoiceManager";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -207,8 +213,8 @@ function buildAtempoFilter(speed: number): string {
   return filters.join(",");
 }
 
-app.use(express.json({ limit: "60mb" }));
-app.use(express.urlencoded({ extended: true, limit: "60mb" }));
+app.use(express.json({ limit: "150mb" }));
+app.use(express.urlencoded({ extended: true, limit: "150mb" }));
 
 const MODELS_DIR = path.resolve(__dirname, "models");
 if (!fs.existsSync(MODELS_DIR)) {
@@ -3061,38 +3067,164 @@ app.get(
 
 
 
+// Download Google Colab 1-Click Voice Cloning Notebook (.ipynb)
+app.get("/api/colab/notebook", (_req: Request, res: Response) => {
+  const notebookPath = path.resolve(__dirname, "Piper_Voice_Clone_Colab.ipynb");
+  if (!fs.existsSync(notebookPath)) {
+    return res.status(404).send("File Notebook không tồn tại trên máy chủ.");
+  }
+  res.setHeader("Content-Type", "application/x-ipynb+json");
+  res.setHeader(
+    "Content-Disposition",
+    `attachment; filename="Piper_Voice_Clone_Colab.ipynb"`,
+  );
+  fs.createReadStream(notebookPath).pipe(res);
+});
+
+// List installed custom voices
+app.get("/api/models/custom", (_req: Request, res: Response) => {
+  try {
+    const list = scanCustomModelsOnDisk();
+    res.json({ success: true, customVoices: list });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Upload and register custom Piper model (.onnx and .onnx.json)
+app.post("/api/models/upload", async (req: Request, res: Response) => {
+  try {
+    const {
+      voiceId,
+      name,
+      gender = "female",
+      description = "",
+      onnxBase64,
+      jsonContent,
+    } = req.body || {};
+
+    if (!voiceId || !onnxBase64 || !jsonContent) {
+      return res.status(400).json({
+        error: "Thiếu dữ liệu: Vui lòng cung cấp voiceId, file .onnx (base64) và file .onnx.json.",
+      });
+    }
+
+    const onnxBuffer = Buffer.from(onnxBase64, "base64");
+    if (onnxBuffer.length < 100) {
+      return res.status(400).json({ error: "File .onnx không hợp lệ hoặc quá nhỏ." });
+    }
+
+    let jsonStr = "";
+    if (typeof jsonContent === "string") {
+      jsonStr = jsonContent;
+    } else {
+      jsonStr = JSON.stringify(jsonContent, null, 2);
+    }
+
+    // Verify valid JSON
+    try {
+      JSON.parse(jsonStr);
+    } catch {
+      return res.status(400).json({ error: "Nội dung file .onnx.json không đúng định dạng JSON." });
+    }
+
+    const registered = registerCustomVoice({
+      voiceId,
+      name: name || voiceId,
+      gender: gender === "male" ? "male" : "female",
+      description,
+      onnxBuffer,
+      jsonContent: jsonStr,
+    });
+
+    console.log(`[CustomVoiceManager] Đã nạp thành công giọng mới: ${registered.name} (${registered.modelId})`);
+
+    res.json({
+      success: true,
+      voice: registered,
+      message: `Đã nạp thành công giọng "${registered.name}" vào hệ thống!`,
+    });
+  } catch (err: any) {
+    console.error("[CustomVoiceManager] Lỗi nạp giọng:", err);
+    res.status(500).json({ error: err.message || "Lỗi khi nạp file mô hình." });
+  }
+});
+
+// Delete custom voice
+app.delete("/api/models/custom/:id", (req: Request, res: Response) => {
+  try {
+    const success = deleteCustomVoice(req.params.id);
+    if (!success) {
+      return res.status(404).json({ error: "Không tìm thấy giọng tùy chỉnh cần xóa." });
+    }
+    // Also clear from modelCache
+    modelCache.delete(`local:${req.params.id}`);
+    modelCache.delete(req.params.id);
+
+    res.json({ success: true, message: "Đã xóa giọng tùy chỉnh thành công." });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get("/api/voices", (req: Request, res: Response) => {
   const vnCheck = checkVieNeuModelAvailable();
+  const customList = scanCustomModelsOnDisk();
+
+  const customOptions = customList.map((cv) => {
+    const isLoaded = modelCache.has(cv.modelId) || modelCache.has(`local:${cv.id}`);
+    const localPath = path.join(MODELS_DIR, cv.onnxFile);
+    return {
+      id: cv.modelId,
+      modelId: cv.modelId,
+      name: `${cv.name} ⭐ (Custom)`,
+      tag: `${cv.gender === "female" ? "Nữ" : "Nam"} · Tùy chỉnh (Google Colab)`,
+      gender: cv.gender,
+      description: cv.description || "Giọng AI đã huấn luyện từ Colab",
+      sampleText: cv.sampleText || "Xin chào! Đây là giọng đọc tùy chỉnh của tôi.",
+      recommended: false,
+      engine: "piper" as const,
+      isCustom: true,
+      isLoaded,
+      hasLocalFile: fs.existsSync(localPath),
+      localFilePath: cv.onnxFile,
+      fileSizeBytes: cv.fileSizeBytes,
+      createdAt: cv.createdAt,
+    };
+  });
+
+  const builtinOptions = AVAILABLE_MODELS.map((v) => {
+    if (v.id.startsWith("vieneu:")) {
+      return {
+        ...v,
+        isLoaded: vnCheck.available,
+        hasLocalFile: vnCheck.available,
+        localFilePath: vnCheck.fileName
+          ? path.join("models", "vieneu", vnCheck.fileName)
+          : "models/vieneu/vieneu-v3-turbo-q8_0.gguf",
+        engine: "vieneu",
+      };
+    }
+    const cleanId = v.modelId.replace(/^(local:|hub:)/, "").trim();
+    const normalized = `local:${cleanId}`;
+    const isLoaded = modelCache.has(normalized) || modelCache.has(v.modelId);
+    const localPath = resolveLocalModelPath(v.modelId);
+    return {
+      ...v,
+      isLoaded,
+      hasLocalFile: !!(localPath && fs.existsSync(localPath)),
+      localFilePath: localPath ? path.basename(localPath) : null,
+      engine: "piper",
+    };
+  });
+
   res.json({
     defaultModel: DEFAULT_MODEL,
     espeakAvailable: checkEspeakAvailable(),
     espeakPath: resolveEspeakPath(),
     vieneuAvailable: vnCheck.available,
     vieneuModelFile: vnCheck.fileName || null,
-    voices: AVAILABLE_MODELS.map((v) => {
-      if (v.id.startsWith("vieneu:")) {
-        return {
-          ...v,
-          isLoaded: vnCheck.available,
-          hasLocalFile: vnCheck.available,
-          localFilePath: vnCheck.fileName
-            ? path.join("models", "vieneu", vnCheck.fileName)
-            : "models/vieneu/vieneu-v3-turbo-q8_0.gguf",
-          engine: "vieneu",
-        };
-      }
-      const cleanId = v.modelId.replace(/^(local:|hub:)/, "").trim();
-      const normalized = `local:${cleanId}`;
-      const isLoaded = modelCache.has(normalized) || modelCache.has(v.modelId);
-      const localPath = resolveLocalModelPath(v.modelId);
-      return {
-        ...v,
-        isLoaded,
-        hasLocalFile: !!(localPath && fs.existsSync(localPath)),
-        localFilePath: localPath ? path.basename(localPath) : null,
-        engine: "piper",
-      };
-    }),
+    voices: [...customOptions, ...builtinOptions],
   });
 });
 

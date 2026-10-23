@@ -90,6 +90,7 @@ import {
 import StorytellingTab from "./components/StorytellingTab";
 import BgmGeneratorTab from "./components/BgmGeneratorTab";
 import AudioCleanupModal from "./components/AudioCleanupModal";
+import VoiceCloneModal from "./components/VoiceCloneModal";
 
 export interface ProjectPreset {
   id: string;
@@ -153,6 +154,7 @@ export default function App() {
     "subtitles" | "single" | "story" | "bgm"
   >("subtitles");
   const [showAudioCleanupModal, setShowAudioCleanupModal] = useState<boolean>(false);
+  const [showVoiceCloneModal, setShowVoiceCloneModal] = useState<boolean>(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState<boolean>(false);
 
   // Voices
@@ -322,14 +324,14 @@ export default function App() {
   const [showApiModal, setShowApiModal] = useState<boolean>(false);
   const [copiedCode, setCopiedCode] = useState<boolean>(false);
 
-  // Load voices on mount
-  useEffect(() => {
+  // Load voices
+  const loadVoices = () => {
     fetch("/api/voices")
       .then((res) => res.json())
       .then((data) => {
         if (data.voices && Array.isArray(data.voices)) {
           setVoices(data.voices);
-          if (data.defaultModel) setSelectedVoiceId(data.defaultModel);
+          if (data.defaultModel && !selectedVoiceId) setSelectedVoiceId(data.defaultModel);
         }
         if (typeof data.espeakAvailable === "boolean") {
           setEspeakStatus({
@@ -339,6 +341,10 @@ export default function App() {
         }
       })
       .catch((e) => console.error("Failed to load voices:", e));
+  };
+
+  useEffect(() => {
+    loadVoices();
   }, []);
 
   // Parse SRT whenever raw text changes
@@ -1633,6 +1639,17 @@ export default function App() {
               </button>
             </nav>
 
+            {/* Nút Clone Giọng (Colab) trên Header */}
+            <button
+              type="button"
+              onClick={() => setShowVoiceCloneModal(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-amber-300 hover:text-amber-100 bg-amber-950/50 hover:bg-amber-900/70 rounded-xl transition-all border border-amber-600/50 shadow-sm shrink-0 whitespace-nowrap cursor-pointer"
+              title="Huấn luyện và Clone giọng nói tiếng Việt bằng Google Colab"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+              <span>Clone Giọng (Colab)</span>
+            </button>
+
             {/* Nút Dọn Dẹp Audio trên Header */}
             <button
               type="button"
@@ -1796,7 +1813,19 @@ export default function App() {
                 <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-2 px-1">
                   Công cụ tiện ích
                 </div>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowVoiceCloneModal(true);
+                      setMobileMenuOpen(false);
+                    }}
+                    className="flex items-center justify-center gap-2 px-3 py-2.5 text-xs font-semibold text-amber-300 bg-amber-950/50 hover:bg-amber-900/70 rounded-xl border border-amber-600/50 transition-colors"
+                  >
+                    <Sparkles className="w-4 h-4 text-amber-400" />
+                    <span>Clone Giọng (Colab)</span>
+                  </button>
+
                   <button
                     type="button"
                     onClick={() => {
@@ -5344,6 +5373,13 @@ const { audio, sampleRate } = await tts.synthesize("Xin chào! Đây là Piper T
             );
           }
         }}
+      />
+
+      {/* Voice Clone Modal (Google Colab 1-Click Studio) */}
+      <VoiceCloneModal
+        isOpen={showVoiceCloneModal}
+        onClose={() => setShowVoiceCloneModal(false)}
+        onVoiceInstalled={() => loadVoices()}
       />
     </div>
   );
