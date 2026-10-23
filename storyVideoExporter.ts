@@ -232,20 +232,19 @@ ${assEvents.join("\n")}
       const assPath = path.join(tempDir, "subtitles.ass");
       fs.writeFileSync(assPath, assContent, "utf8");
 
-      // 3. Handle custom background image if provided (saved to local PNG in tempDir)
-      let customBgPath: string | null = null;
-      if (customBgImage && customBgImage.startsWith("data:image")) {
-        try {
-          const match = customBgImage.match(/^data:image\/([a-zA-Z0-9]+);base64,(.+)$/);
-          if (match) {
-            const ext = match[1] === "jpeg" ? "jpg" : match[1];
-            const base64Data = match[2];
-            customBgPath = path.join(tempDir, `custom_bg.${ext}`);
-            fs.writeFileSync(customBgPath, Buffer.from(base64Data, "base64"));
-          }
-        } catch (e) {
-          console.warn("[VideoExporter] Lỗi phân tích ảnh nền tùy chỉnh:", e);
+      // 3. Normalize the custom background to an embedded PNG so SVG does not
+      // depend on platform-specific local file paths.
+      let customBgDataUri: string | null = null;
+      if (customBgImage) {
+        const match = customBgImage.match(
+          /^data:image\/[a-zA-Z0-9.+-]+;base64,([\s\S]+)$/,
+        );
+        if (!match) {
+          throw new Error("Ảnh nền tùy chỉnh không hợp lệ hoặc không được hỗ trợ.");
         }
+        const imageBuffer = Buffer.from(match[1], "base64");
+        const normalizedImage = await sharp(imageBuffer).png().toBuffer();
+        customBgDataUri = `data:image/png;base64,${normalizedImage.toString("base64")}`;
       }
 
       job.progress = 20;
@@ -279,9 +278,9 @@ ${assEvents.join("\n")}
       <stop offset="100%" stop-color="#080914"/>
     </linearGradient>
     <linearGradient id="overlayGrad" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#0b0c1c" stop-opacity="0.88"/>
-      <stop offset="50%" stop-color="#0e1026" stop-opacity="0.92"/>
-      <stop offset="100%" stop-color="#070812" stop-opacity="0.96"/>
+      <stop offset="0%" stop-color="#0b0c1c" stop-opacity="0.45"/>
+      <stop offset="50%" stop-color="#0e1026" stop-opacity="0.58"/>
+      <stop offset="100%" stop-color="#070812" stop-opacity="0.70"/>
     </linearGradient>
     <radialGradient id="sphere1" cx="35%" cy="35%" r="65%">
       <stop offset="0%" stop-color="#f43f5e" stop-opacity="0.95"/>
@@ -307,9 +306,9 @@ ${assEvents.join("\n")}
 
   <!-- 1. Background -->
   ${
-    customBgPath
+    customBgDataUri
       ? `
-    <image href="${customBgPath}" width="${W}" height="${H}" preserveAspectRatio="xMidYMid slice" />
+    <image href="${customBgDataUri}" width="${W}" height="${H}" preserveAspectRatio="xMidYMid slice" />
     <rect width="${W}" height="${H}" fill="url(#overlayGrad)" />
   `
       : `
@@ -395,8 +394,8 @@ ${assEvents.join("\n")}
 
   <g clip-path="url(#circleClip)">
     ${
-      customBgPath
-        ? `<image href="${customBgPath}" width="${discSize}" height="${discSize}" preserveAspectRatio="xMidYMid slice"/>`
+      customBgDataUri
+        ? `<image href="${customBgDataUri}" width="${discSize}" height="${discSize}" preserveAspectRatio="xMidYMid slice"/>`
         : `
       <rect width="${discSize}" height="${discSize}" fill="url(#discGrad)"/>
       <path d="M${discCenter - 30 * scale} ${discCenter - 40 * scale} L${discCenter} ${discCenter - 20 * scale} L${discCenter + 30 * scale} ${discCenter - 40 * scale} L${discCenter + 30 * scale} ${discCenter + 10 * scale} L${discCenter} ${discCenter + 30 * scale} L${discCenter - 30 * scale} ${discCenter + 10 * scale} Z" fill="#ffffff" fill-opacity="0.9"/>
