@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Piper Vietnamese Voice Clone Studio (Google Colab UI)
-Phiên bản nâng cấp sử dụng OpenAI Whisper gốc + Python Wave + Báo cáo lỗi chi tiết.
+Phiên bản hỗ trợ chỉnh sửa văn bản trực tiếp trong bảng và nghe thử từng câu (Audio Inspector).
 """
 
 import os
@@ -22,6 +22,12 @@ try:
 except ImportError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "torch", "torchaudio"])
     import torch
+
+try:
+    import pandas as pd
+except ImportError:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "pandas"])
+    import pandas as pd
 
 try:
     import gradio as gr
@@ -48,49 +54,45 @@ WHISPER_CACHE = {}
 def clean_vietnamese_text(text: str) -> str:
     if not text:
         return ""
-    text = re.sub(r'[\"\'\(\)\[\]\{\}\<\>]', ' ', text)
+    text = re.sub(r'[\"\'\(\)\[\]\{\}\<\>]', ' ', str(text))
     return re.sub(r'\s+', ' ', text).strip()
 
-def process_audio_whisper(audio_path, voice_name, whisper_model="base", min_sec=1.5, max_sec=10.0, progress=gr.Progress()):
+def process_audio(audio_path, voice_name, whisper_model='base', min_s=1.5, max_s=10.0, progress=gr.Progress()):
     try:
         if not audio_path:
-            return "❌ Vui lòng chọn hoặc tải lên file âm thanh trước.", None, []
+            return '❌ Vui lòng chọn hoặc tải lên file âm thanh trước.', None, gr.Dropdown(choices=[]), gr.Dataframe(value=[])
 
         v_id = re.sub(r'[^a-zA-Z0-9_-]', '_', voice_name or 'my_voice').lower().strip('_')
         if not v_id:
-            v_id = "my_voice"
+            v_id = 'my_voice'
 
-        progress(0.05, desc="Đang khởi tạo thư mục dữ liệu...")
+        progress(0.05, desc='Đang khởi tạo thư mục dữ liệu...')
         if WAVS_DIR.exists():
             shutil.rmtree(WAVS_DIR)
         WAVS_DIR.mkdir(parents=True, exist_ok=True)
 
-        progress(0.15, desc="Đang chuyển đổi âm thanh sang 22,050Hz Mono PCM...")
-        tmp_wav = BASE_DIR / "full_audio_22k.wav"
-        ff_cmd = [
-            "ffmpeg", "-y", "-i", str(audio_path),
-            "-ar", "22050", "-ac", "1", "-c:a", "pcm_s16le",
-            str(tmp_wav)
-        ]
+        progress(0.15, desc='Đang chuyển đổi âm thanh sang 22,050Hz Mono PCM...')
+        tmp_wav = BASE_DIR / 'full_audio_22k.wav'
+        ff_cmd = ['ffmpeg', '-y', '-i', str(audio_path), '-ar', '22050', '-ac', '1', '-c:a', 'pcm_s16le', str(tmp_wav)]
         ff_res = subprocess.run(ff_cmd, capture_output=True, text=True)
         if ff_res.returncode != 0 or not tmp_wav.exists():
-            raise RuntimeError(f"FFmpeg không thể đọc file âm thanh: {ff_res.stderr}")
+            raise RuntimeError(f'FFmpeg không thể đọc file âm thanh: {ff_res.stderr}')
 
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        progress(0.3, desc=f"Đang nạp mô hình Whisper ({whisper_model}) trên {device.upper()}...")
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        progress(0.3, desc=f'Đang nạp mô hình Whisper ({whisper_model}) trên {device.upper()}...')
         if whisper_model not in WHISPER_CACHE:
             WHISPER_CACHE[whisper_model] = whisper.load_model(whisper_model, device=device)
         model = WHISPER_CACHE[whisper_model]
 
-        progress(0.45, desc="Đang nhận diện giọng nói và mốc thời gian...")
-        fp16 = (device == "cuda")
-        res = model.transcribe(str(tmp_wav), language="vi", fp16=fp16)
-        segments = res.get("segments", [])
+        progress(0.45, desc='Đang nhận diện giọng nói và mốc thời gian...')
+        fp16 = (device == 'cuda')
+        res = model.transcribe(str(tmp_wav), language='vi', fp16=fp16)
+        segments = res.get('segments', [])
 
         if not segments:
-            raise RuntimeError("Whisper không phát hiện được giọng nói nào trong file âm thanh này.")
+            raise RuntimeError('Whisper không phát hiện được giọng nói nào trong file âm thanh này.')
 
-        progress(0.7, desc="Đang cắt lát audio và tạo metadata chuẩn Piper...")
+        progress(0.7, desc='Đang cắt lát audio và tạo metadata chuẩn Piper...')
         with wave.open(str(tmp_wav), 'rb') as wf:
             framerate = wf.getframerate()
             sampwidth = wf.getsampwidth()
@@ -99,19 +101,20 @@ def process_audio_whisper(audio_path, voice_name, whisper_model="base", min_sec=
 
         metadata_lines = []
         table_data = []
+        clip_choices = []
         clip_count = 0
         total_duration = 0.0
 
         for seg in segments:
-            start_s = float(seg["start"])
-            end_s = float(seg["end"])
+            start_s = float(seg['start'])
+            end_s = float(seg['end'])
             dur = end_s - start_s
-            text = clean_vietnamese_text(seg["text"])
-            if dur < min_sec or dur > max_sec or len(text) < 2:
+            text = clean_vietnamese_text(seg['text'])
+            if dur < min_s or dur > max_s or len(text) < 2:
                 continue
             clip_count += 1
-            clip_id = f"{v_id}_{clip_count:04d}"
-            clip_file = f"{clip_id}.wav"
+            clip_id = f'{v_id}_{clip_count:04d}'
+            clip_file = f'{clip_id}.wav'
             clip_path = WAVS_DIR / clip_file
 
             s_frame = max(0, int(start_s * framerate))
@@ -124,20 +127,21 @@ def process_audio_whisper(audio_path, voice_name, whisper_model="base", min_sec=
                 cwf.setframerate(framerate)
                 cwf.writeframes(clip_bytes)
 
-            metadata_lines.append(f"{clip_id}|{text}")
-            table_data.append([clip_id, f"{dur:.2f}s", text])
+            metadata_lines.append(f'{clip_id}|{text}')
+            table_data.append([clip_id, f'{dur:.2f}s', text])
+            clip_choices.append(clip_id)
             total_duration += dur
 
         if clip_count == 0:
-            raise RuntimeError(f"Không cắt được câu nào thỏa mãn độ dài {min_sec}s - {max_sec}s. Hãy thử giảm độ dài tối thiểu xuống 1.0s.")
+            raise RuntimeError(f'Không cắt được câu nào thỏa mãn độ dài {min_s}s - {max_s}s. Hãy thử giảm độ dài tối thiểu xuống 1.0s.')
 
-        with open(DATASET_DIR / "metadata.csv", "w", encoding="utf-8") as f:
-            f.write("\n".join(metadata_lines))
+        with open(DATASET_DIR / 'metadata.csv', 'w', encoding='utf-8') as f:
+            f.write('\n'.join(metadata_lines))
 
         if tmp_wav.exists():
             tmp_wav.unlink()
 
-        first_clip = str(WAVS_DIR / f"{v_id}_0001.wav")
+        first_clip = str(WAVS_DIR / f'{v_id}_0001.wav')
         total_min = int(total_duration // 60)
         total_sec = int(total_duration % 60)
         summary = f"""
@@ -145,17 +149,15 @@ def process_audio_whisper(audio_path, voice_name, whisper_model="base", min_sec=
 - **Mã giọng:** `{v_id}`
 - **Số câu tạo ra:** `{clip_count}` câu
 - **Tổng thời lượng:** `{total_min} phút {total_sec} giây`
-- **Mô hình Whisper:** `{whisper_model}` ({device.upper()})
-- **File cấu hình:** `dataset/metadata.csv` (Chuẩn Piper VITS)
-
-👉 **Bước tiếp theo:** Hãy chuyển sang **Tab 2 (Huấn Luyện)** để bắt đầu fine-tuning!
+- **Chỉnh sửa văn bản:** Bạn có thể **bấm đúp chuột trực tiếp vào bất kỳ ô nào ở cột 'Nội dung câu' trong bảng bên dưới để sửa**, hoặc dùng **bộ nghe thử từng câu bên dưới** để nghe và sửa chữ bị sai!
 """
-        progress(1.0, desc="Hoàn tất!")
-        return summary, first_clip, table_data
+        progress(1.0, desc='Hoàn tất!')
+        df_result = pd.DataFrame(table_data, columns=['Mã Clip', 'Thời lượng', 'Nội dung câu'])
+        return summary, first_clip, gr.Dropdown(choices=clip_choices, value=clip_choices[0] if clip_choices else None), df_result
 
     except Exception as e:
         err = traceback.format_exc()
-        print(f"[Colab Studio Error]:\n{err}")
+        print(f'[Colab Studio Error]:\n{err}')
         error_md = f"""
 ### ❌ Lỗi khi xử lý âm thanh:
 **Nguyên nhân:** `{str(e)}`
@@ -167,12 +169,86 @@ def process_audio_whisper(audio_path, voice_name, whisper_model="base", min_sec=
 {err}
 ```
 </details>
-
-*Gợi ý khắc phục:*
-1. Đảm bảo Google Colab đã bật **T4 GPU** (Menu Runtime -> Change runtime type -> T4 GPU).
-2. Thử chọn mô hình Whisper là **base** hoặc **tiny** để xử lý nhanh nhất.
 """
-        return error_md, None, []
+        return error_md, None, gr.Dropdown(choices=[]), gr.Dataframe(value=[])
+
+def save_edited_table(df):
+    try:
+        if df is None or len(df) == 0:
+            return '⚠️ Bảng dữ liệu trống, chưa có gì để lưu.'
+        if not isinstance(df, pd.DataFrame):
+            df = pd.DataFrame(df, columns=['Mã Clip', 'Thời lượng', 'Nội dung câu'])
+        lines = []
+        saved_count = 0
+        for _, row in df.iterrows():
+            cid = str(row['Mã Clip']).strip()
+            txt = clean_vietnamese_text(str(row['Nội dung câu']))
+            if cid and txt:
+                lines.append(f'{cid}|{txt}')
+                saved_count += 1
+        with open(DATASET_DIR / 'metadata.csv', 'w', encoding='utf-8') as f:
+            f.write('\n'.join(lines))
+        return f'✅ Đã lưu thành công {saved_count} câu vào file metadata.csv! Các thay đổi đã được áp dụng cho bước Huấn luyện.'
+    except Exception as e:
+        return f'❌ Lỗi lưu bảng: {str(e)}'
+
+def load_clip_detail(clip_id):
+    if not clip_id:
+        return None, ''
+    wav_file = WAVS_DIR / f'{clip_id}.wav'
+    text = ''
+    meta_path = DATASET_DIR / 'metadata.csv'
+    if meta_path.exists():
+        with open(meta_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                parts = line.strip().split('|')
+                if len(parts) >= 2 and parts[0] == clip_id:
+                    text = parts[1]
+                    break
+    return str(wav_file) if wav_file.exists() else None, text
+
+def update_single_clip(clip_id, new_text, current_df):
+    if not clip_id:
+        return '⚠️ Vui lòng chọn một câu từ danh sách.', current_df
+    txt_clean = clean_vietnamese_text(new_text)
+    meta_path = DATASET_DIR / 'metadata.csv'
+    lines = []
+    if meta_path.exists():
+        with open(meta_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                parts = line.strip().split('|')
+                if len(parts) >= 2 and parts[0] == clip_id:
+                    lines.append(f'{clip_id}|{txt_clean}')
+                else:
+                    lines.append(line.strip())
+        with open(meta_path, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(lines))
+    if isinstance(current_df, pd.DataFrame):
+        current_df.loc[current_df['Mã Clip'] == clip_id, 'Nội dung câu'] = txt_clean
+    return f'✅ Đã cập nhật câu {clip_id}: "{txt_clean}"', current_df
+
+def delete_single_clip(clip_id, current_df):
+    if not clip_id:
+        return '⚠️ Vui lòng chọn câu cần xóa.', current_df, gr.Dropdown(choices=[])
+    wav_file = WAVS_DIR / f'{clip_id}.wav'
+    if wav_file.exists():
+        wav_file.unlink()
+    meta_path = DATASET_DIR / 'metadata.csv'
+    lines = []
+    if meta_path.exists():
+        with open(meta_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                parts = line.strip().split('|')
+                if len(parts) >= 2 and parts[0] == clip_id:
+                    continue
+                lines.append(line.strip())
+        with open(meta_path, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(lines))
+    if isinstance(current_df, pd.DataFrame):
+        current_df = current_df[current_df['Mã Clip'] != clip_id]
+    all_wavs = sorted(WAVS_DIR.glob('*.wav'))
+    new_choices = [w.stem for w in all_wavs]
+    return f'🗑️ Đã xóa câu {clip_id} khỏi dataset.', current_df, gr.Dropdown(choices=new_choices, value=new_choices[0] if new_choices else None)
 
 def run_fine_tuning(voice_name, epochs=60, batch_size=8, progress=gr.Progress()):
     try:
@@ -240,7 +316,8 @@ def export_onnx_models(voice_name, display_name="Giọng Đọc Mới", gender="
             ], capture_output=True)
 
         if not out_onnx.exists():
-            with open(out_onnx, 'wb') as f: f.write(b"PIPER_VITS_ONNX_MODEL")
+            with open(out_onnx, 'wb') as f:
+                f.write(b"PIPER_VITS_ONNX_MODEL")
 
         progress(0.8, desc="Đang khởi tạo cấu hình ngữ âm onnx.json...")
         cfg = {
@@ -253,7 +330,8 @@ def export_onnx_models(voice_name, display_name="Giọng Đọc Mới", gender="
             "num_symbols": 256,
             "num_speakers": 1
         }
-        with open(out_json, 'w', encoding='utf-8') as f: json.dump(cfg, f, indent=2, ensure_ascii=False)
+        with open(out_json, 'w', encoding='utf-8') as f:
+            json.dump(cfg, f, indent=2, ensure_ascii=False)
 
         progress(0.9, desc="Đang nén thành file ZIP...")
         with zipfile.ZipFile(out_zip, 'w', zipfile.ZIP_DEFLATED) as z:
@@ -279,7 +357,7 @@ def build_interface():
     with gr.Blocks(theme=theme, title="Piper Voice Clone Studio") as demo:
         gr.Markdown("# 🎙️ Piper Vietnamese Voice Clone Studio (Google Colab)")
         with gr.Tabs():
-            with gr.TabItem("1. 📥 Tải Âm Thanh & Cắt Lát (Whisper)"):
+            with gr.TabItem("1. 📥 Tải Âm Thanh & Chỉnh Sửa Câu (Whisper)"):
                 with gr.Row():
                     with gr.Column(scale=1):
                         a_in = gr.Audio(sources=["upload"], type="filepath", label="File âm thanh thu âm mẫu (MP3, WAV, M4A)")
@@ -291,9 +369,41 @@ def build_interface():
                         btn1 = gr.Button("⚡ Bắt Đầu Cắt Câu & Phiên Âm", variant="primary")
                     with gr.Column(scale=1):
                         res1 = gr.Markdown("Chưa xử lý.")
-                        prev_aud = gr.Audio(label="Nghe thử câu đầu tiên đã cắt", interactive=False)
-                        prev_table = gr.Dataframe(headers=["Mã Clip", "Thời lượng", "Nội dung câu"], label="Danh sách câu đã cắt", interactive=False)
-                btn1.click(process_audio_whisper, [a_in, v_in, w_size, min_len, max_len], [res1, prev_aud, prev_table])
+                        prev_aud = gr.Audio(label="Nghe thử câu đầu tiên", interactive=False)
+
+                gr.Markdown("---")
+                gr.Markdown("### 📝 Bảng Dữ Liệu & Chỉnh Sửa Nội Dung Câu (Editable Table)")
+                gr.Markdown("*Mẹo:* Bạn có thể **bấm đúp chuột trực tiếp vào bất kỳ ô nào ở cột 'Nội dung câu'** để sửa lỗi chính tả nếu Whisper nhận diện nhầm, sau đó bấm nút **'Lưu Thay Đổi Bảng'** bên dưới.")
+                prev_table = gr.Dataframe(
+                    headers=["Mã Clip", "Thời lượng", "Nội dung câu"],
+                    datatype=["str", "str", "str"],
+                    col_count=(3, "fixed"),
+                    interactive=True,
+                    label="Danh sách các câu đã cắt (Bấm đúp để sửa chữ)"
+                )
+                with gr.Row():
+                    save_table_btn = gr.Button("💾 Lưu Thay Đổi Bảng Vào Dataset (metadata.csv)", variant="secondary")
+                    table_save_status = gr.Markdown("")
+                save_table_btn.click(save_edited_table, inputs=[prev_table], outputs=[table_save_status])
+
+                gr.Markdown("---")
+                gr.Markdown("### 🎧 Nghe Thử & Sửa Nhanh Từng Câu (Audio Inspector)")
+                with gr.Row():
+                    with gr.Column(scale=1):
+                        clip_picker = gr.Dropdown(choices=[], label="Chọn câu để nghe thử và sửa", interactive=True)
+                        single_audio_player = gr.Audio(label="Âm thanh của câu được chọn", interactive=False)
+                    with gr.Column(scale=1):
+                        single_text_input = gr.Textbox(label="Văn bản câu này (Sửa tại đây nếu Whisper nghe sai)", lines=3)
+                        with gr.Row():
+                            update_clip_btn = gr.Button("✅ Lưu Câu Này", variant="primary")
+                            delete_clip_btn = gr.Button("🗑️ Xóa Câu Này (Nếu bị ồn/hỏng)", variant="stop")
+                        single_status = gr.Markdown("")
+
+                clip_picker.change(load_clip_detail, inputs=[clip_picker], outputs=[single_audio_player, single_text_input])
+                update_clip_btn.click(update_single_clip, inputs=[clip_picker, single_text_input, prev_table], outputs=[single_status, prev_table])
+                delete_clip_btn.click(delete_single_clip, inputs=[clip_picker, prev_table], outputs=[single_status, prev_table, clip_picker])
+
+                btn1.click(process_audio, [a_in, v_in, w_size, min_len, max_len], [res1, prev_aud, clip_picker, prev_table])
 
             with gr.TabItem("2. 🚀 Huấn Luyện (Fine-Tuning VITS)"):
                 with gr.Row():
