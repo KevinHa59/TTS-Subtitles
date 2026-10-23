@@ -47,8 +47,10 @@ import {
   Shuffle,
   MoreVertical,
   Image as ImageIcon,
+  Film,
 } from "lucide-react";
 import { Story, StoryCharacter, StoryParagraph } from "../types/story";
+import { VideoExportModal } from "./VideoExportModal";
 
 interface VoiceOption {
   id: string;
@@ -143,6 +145,7 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
   const [isDraggingOver, setIsDraggingOver] = useState<boolean>(false);
   const [isFavorited, setIsFavorited] = useState<boolean>(false);
   const [showPlayerOptions, setShowPlayerOptions] = useState<boolean>(false);
+  const [showVideoExportModal, setShowVideoExportModal] = useState<boolean>(false);
   const bgFileInputRef = useRef<HTMLInputElement | null>(null);
   const activeLyricRef = useRef<HTMLDivElement | null>(null);
 
@@ -2316,6 +2319,17 @@ function parseRawStoryContent(raw: string): ParsedStoryBlock[] {
                       <FileText className="w-3.5 h-3.5 text-amber-400" />
                       <span>Tạo Phụ Đề SRT</span>
                     </button>
+
+                    {/* Nút Xuất Video MP4 (9:16) */}
+                    <button
+                      type="button"
+                      onClick={() => setShowVideoExportModal(true)}
+                      className="px-3.5 py-2 bg-gradient-to-r from-purple-500/20 via-pink-500/20 to-orange-500/20 hover:from-purple-500/30 hover:to-orange-500/30 text-pink-300 hover:text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm border border-pink-500/40 cursor-pointer"
+                      title="Xuất Media Player 9:16 thành video MP4 (720p, 1080p, 2K, 4K)"
+                    >
+                      <Film className="w-3.5 h-3.5 text-pink-400" />
+                      <span>Xuất Video 9:16</span>
+                    </button>
                   </>
                 )}
 
@@ -2503,6 +2517,19 @@ function parseRawStoryContent(raw: string): ParsedStoryBlock[] {
       )}
 
       {/* ========================================================= */}
+      {/* POPUP / MODAL: XUẤT VIDEO MP4 9:16 (720p, 1080p, 2K, 4K)  */}
+      {/* ========================================================= */}
+      {activeStory && (
+        <VideoExportModal
+          isOpen={showVideoExportModal}
+          onClose={() => setShowVideoExportModal(false)}
+          story={activeStory}
+          customBgImage={customBgImage}
+          masterDuration={masterDuration || activeStory.masterAudio?.duration || 0}
+        />
+      )}
+
+      {/* ========================================================= */}
       {/* 5. MODERN 9:16 MEDIA PLAYER (MATCHING REFERENCE DESIGN)   */}
       {/* (Kèm tính năng Kéo & Thả ảnh nền tùy chọn / Drag & Drop) */}
       {/* ========================================================= */}
@@ -2577,31 +2604,57 @@ function parseRawStoryContent(raw: string): ParsedStoryBlock[] {
                 Now Playing
               </span>
 
-              {/* Right More Options Button */}
-              <div className="relative" onClick={(e) => e.stopPropagation()}>
+              {/* Right Action Buttons */}
+              <div className="flex items-center gap-1.5">
+                {/* Quick Video Export Button */}
                 <button
                   type="button"
-                  onClick={() => setShowPlayerOptions(!showPlayerOptions)}
-                  className="w-10 h-10 rounded-full bg-slate-800/60 hover:bg-slate-700/80 backdrop-blur-md flex items-center justify-center text-slate-200 hover:text-white transition-all shadow-sm cursor-pointer"
-                  title="Tùy chọn trình phát"
+                  onClick={() => setShowVideoExportModal(true)}
+                  className="w-10 h-10 rounded-full bg-slate-800/60 hover:bg-slate-700/80 backdrop-blur-md flex items-center justify-center text-pink-300 hover:text-white transition-all shadow-sm cursor-pointer"
+                  title="Xuất Video MP4 9:16 (720p, 1080p, 2K, 4K)"
                 >
-                  <MoreVertical className="w-5 h-5" />
+                  <Film className="w-4 h-4" />
                 </button>
 
-                {/* Dropdown Menu */}
-                {showPlayerOptions && (
-                  <div className="absolute right-0 top-12 z-50 w-52 bg-slate-900/95 border border-slate-700 rounded-2xl shadow-2xl p-1.5 space-y-1 text-xs backdrop-blur-xl">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        bgFileInputRef.current?.click();
-                        setShowPlayerOptions(false);
-                      }}
-                      className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-left hover:bg-slate-800 text-slate-200 hover:text-white transition-colors"
-                    >
-                      <ImageIcon className="w-4 h-4 text-pink-400" />
-                      <span>Chọn ảnh nền / bìa...</span>
-                    </button>
+                {/* Right More Options Button */}
+                <div className="relative" onClick={(e) => e.stopPropagation()}>
+                  <button
+                    type="button"
+                    onClick={() => setShowPlayerOptions(!showPlayerOptions)}
+                    className="w-10 h-10 rounded-full bg-slate-800/60 hover:bg-slate-700/80 backdrop-blur-md flex items-center justify-center text-slate-200 hover:text-white transition-all shadow-sm cursor-pointer"
+                    title="Tùy chọn trình phát"
+                  >
+                    <MoreVertical className="w-5 h-5" />
+                  </button>
+
+                  {/* Dropdown Menu */}
+                  {showPlayerOptions && (
+                    <div className="absolute right-0 top-12 z-50 w-56 bg-slate-900/95 border border-slate-700 rounded-2xl shadow-2xl p-1.5 space-y-1 text-xs backdrop-blur-xl">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowVideoExportModal(true);
+                          setShowPlayerOptions(false);
+                        }}
+                        className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-left hover:bg-purple-950/60 text-pink-300 hover:text-pink-200 transition-colors font-medium"
+                      >
+                        <Film className="w-4 h-4 text-pink-400" />
+                        <div className="flex-1 flex items-center justify-between">
+                          <span>Xuất Video MP4 (9:16)...</span>
+                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-pink-500/20 text-pink-300 font-mono font-bold">4K</span>
+                        </div>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          bgFileInputRef.current?.click();
+                          setShowPlayerOptions(false);
+                        }}
+                        className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-left hover:bg-slate-800 text-slate-200 hover:text-white transition-colors"
+                      >
+                        <ImageIcon className="w-4 h-4 text-pink-400" />
+                        <span>Chọn ảnh nền / bìa...</span>
+                      </button>
                     {customBgImage && (
                       <button
                         type="button"
@@ -2628,6 +2681,7 @@ function parseRawStoryContent(raw: string): ParsedStoryBlock[] {
                     </button>
                   </div>
                 )}
+                </div>
               </div>
             </div>
 

@@ -32,6 +32,11 @@ import {
   cancelModelDownload,
   deleteModel as deleteBgmModel,
 } from "./bgmModelManager";
+import {
+  startStoryVideoExport,
+  videoExportJobs,
+  VIDEO_RESOLUTIONS,
+} from "./storyVideoExporter";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -202,8 +207,8 @@ function buildAtempoFilter(speed: number): string {
   return filters.join(",");
 }
 
-app.use(express.json({ limit: "20mb" }));
-app.use(express.urlencoded({ extended: true, limit: "20mb" }));
+app.use(express.json({ limit: "60mb" }));
+app.use(express.urlencoded({ extended: true, limit: "60mb" }));
 
 const MODELS_DIR = path.resolve(__dirname, "models");
 if (!fs.existsSync(MODELS_DIR)) {
@@ -2973,6 +2978,86 @@ app.get("/api/stories/:storyId/subtitles.srt", (req: Request, res: Response) => 
   }
   res.send(srtContent);
 });
+
+// -------------------------------------------------------------
+// STORY VIDEO EXPORT (MP4 9:16 VERTICAL MOBILE PLAYER)
+// -------------------------------------------------------------
+app.post(
+  "/api/stories/:storyId/export-video",
+  async (req: Request, res: Response) => {
+    const story = storyJobs.get(req.params.storyId);
+    if (!story) return res.status(404).json({ error: "Không tìm thấy truyện." });
+
+    if (!checkFfmpegAvailable()) {
+      return res.status(500).json({
+        error: "Máy chủ chưa cài đặt FFmpeg. Không thể xuất video MP4.",
+      });
+    }
+
+    try {
+      // Ensure master audio exists
+      const storyDir = path.join(STORIES_DIR, story.id);
+      const masterMp3 = path.join(storyDir, "master.mp3");
+      const masterWav = path.join(storyDir, "master.wav");
+      if (!fs.existsSync(masterMp3) && !fs.existsSync(masterWav)) {
+        await mergeStoryParagraphsToMaster(story);
+      }
+
+      const { resolution = "1080p", customBgImage } = req.body || {};
+      const validRes = ["720p", "1080p", "2k", "4k"].includes(resolution)
+        ? (resolution as "720p" | "1080p" | "2k" | "4k")
+        : "1080p";
+
+      const jobId = `export_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      const job = startStoryVideoExport({
+        jobId,
+        story,
+        resolution: validRes,
+        customBgImage,
+        ffmpegPath: resolveFfmpegPath(),
+        storiesDir: STORIES_DIR,
+      });
+
+      res.json({
+        success: true,
+        jobId: job.id,
+        resolution: validRes,
+        message: `Đã bắt đầu tiến trình xuất video ${validRes.toUpperCase()} (9:16).`,
+      });
+    } catch (err: any) {
+      console.error("[StoryVideoExport] Lỗi khởi tạo:", err);
+      res.status(500).json({ error: err.message || "Lỗi khi bắt đầu xuất video." });
+    }
+  },
+);
+
+// Check video export progress
+app.get(
+  "/api/stories/:storyId/export-video/progress/:jobId",
+  (req: Request, res: Response) => {
+    const job = videoExportJobs.get(req.params.jobId);
+    if (!job) {
+      return res.status(404).json({ error: "Không tìm thấy tiến trình xuất video." });
+    }
+    res.json({ success: true, job });
+  },
+);
+
+// Download exported video MP4
+app.get(
+  "/api/stories/:storyId/export-video/download/:jobId",
+  (req: Request, res: Response) => {
+    const job = videoExportJobs.get(req.params.jobId);
+    if (!job || !job.outputPath || !fs.existsSync(job.outputPath)) {
+      return res.status(404).send("Tệp video không tồn tại hoặc chưa kết xuất xong.");
+    }
+
+    const defaultFilename = `story-${req.params.storyId}-${job.resolution}.mp4`;
+    const filename = (req.query.filename as string) || defaultFilename;
+    res.download(job.outputPath, filename);
+  },
+);
+
 
 
 
