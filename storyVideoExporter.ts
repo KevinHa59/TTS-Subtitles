@@ -1,6 +1,7 @@
 import path from "path";
 import fs from "fs";
 import { spawn } from "child_process";
+import sharp from "sharp";
 
 export interface VideoResolutionConfig {
   name: "720p" | "1080p" | "2k" | "4k";
@@ -89,6 +90,33 @@ function toAssTime(sec: number): string {
   const cs = Math.floor((sec % 1) * 100);
   const pad = (n: number, z = 2) => String(n).padStart(z, "0");
   return `${h}:${pad(m)}:${pad(s)}.${pad(cs, 2)}`;
+}
+
+function resolveVideoFontPath(): string {
+  const candidates = [
+    process.env.VIDEO_FONT_PATH,
+    process.platform === "win32"
+      ? path.join(process.env.WINDIR || "C:\\Windows", "Fonts", "arial.ttf")
+      : "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/System/Library/Fonts/Supplemental/Arial.ttf",
+  ];
+  const fontPath = candidates.find(
+    (candidate) => candidate && fs.existsSync(candidate),
+  );
+  if (!fontPath) {
+    throw new Error(
+      "Không tìm thấy font cho FFmpeg drawtext. Hãy cài Arial hoặc đặt biến VIDEO_FONT_PATH.",
+    );
+  }
+  return fontPath.replace(/\\/g, "/").replace(/^([A-Za-z]):/, "$1\\:");
+}
+
+function escapeFilterPath(filePath: string): string {
+  return filePath
+    .replace(/\\/g, "/")
+    .replace(/:/g, "\\:")
+    .replace(/'/g, "\\'");
 }
 
 export function startStoryVideoExport(params: {
@@ -385,24 +413,13 @@ ${assEvents.join("\n")}
       const discSvgPath = path.join(tempDir, "disc.svg");
       fs.writeFileSync(discSvgPath, discSvg, "utf8");
 
-      // 6. Rasterize SVG to PNG using FFmpeg librsvg
+      // 6. Rasterize SVG to PNG; FFmpeg builds on Windows may not include an SVG decoder.
       const uiPngPath = path.join(tempDir, "ui_base.png");
       const discPngPath = path.join(tempDir, "disc.png");
 
-      const rasterize = (inPath: string, outPath: string) => {
-        return new Promise<void>((resolve, reject) => {
-          const proc = spawn(ffmpegPath, ["-y", "-i", inPath, "-frames:v", "1", outPath]);
-          proc.on("close", (code) => {
-            if (code === 0) resolve();
-            else reject(new Error(`Rasterize failed for ${inPath}`));
-          });
-          proc.on("error", reject);
-        });
-      };
-
       await Promise.all([
-        rasterize(uiSvgPath, uiPngPath),
-        rasterize(discSvgPath, discPngPath),
+        sharp(uiSvgPath).png().toFile(uiPngPath),
+        sharp(discSvgPath).png().toFile(discPngPath),
       ]);
 
       job.progress = 30;
@@ -415,6 +432,7 @@ ${assEvents.join("\n")}
       const scrubW = scrubberW;
       const scrubH = scrubberH;
       const timeFontSize = Math.round(26 * scale);
+      const videoFontPath = resolveVideoFontPath();
 
       // FFmpeg filter complex:
       // 1. Rotate disc continuously at 24s/rotation:
@@ -428,8 +446,8 @@ ${assEvents.join("\n")}
         `[0:v][rot]overlay=x=(W-w)/2:y=${discY}[v1]`,
         `[v1]drawbox=x=${scrubX}:y=${scrubY}:w='(${scrubW})*min(1,t/${totalDuration})':h=${scrubH}:color=0xEC4899@1:t=fill[v2]`,
         `[v2]drawbox=x='${scrubX}+(${scrubW})*min(1,t/${totalDuration})-${8 * scale}':y=${scrubY - 4 * scale}:w=${16 * scale}:h=${20 * scale}:color=0xFFFFFF@1:t=fill[v3]`,
-        `[v3]drawtext=fontfile=/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf:text='%{pts\\:gmtime\\:0\\:%M\\\\\\:%S}':fontsize=${timeFontSize}:fontcolor=0x94A3B8:x=${scrubX}:y=${scrubY + 20 * scale}[v4]`,
-        `[v4]ass=${assPath}[vout]`,
+        `[v3]drawtext=fontfile='${videoFontPath}':text='%{pts\\:gmtime\\:0\\:%M\\\\\\:%S}':fontsize=${timeFontSize}:fontcolor=0x94A3B8:x=${scrubX}:y=${scrubY + 20 * scale}[v4]`,
+        `[v4]ass='${escapeFilterPath(assPath)}'[vout]`,
       ].join(";");
 
       const ffmpegArgs = [
@@ -469,9 +487,11 @@ ${assEvents.join("\n")}
       ];
 
       const ffmpegProc = spawn(ffmpegPath, ffmpegArgs);
+      let ffmpegStderr = "";
 
       ffmpegProc.stderr.on("data", (data) => {
         const line = data.toString();
+        ffmpegStderr += line;
         // Parse time=HH:MM:SS.cs to compute progress
         const timeMatch = line.match(/time=(\d+):(\d+):(\d+\.\d+)/);
         if (timeMatch) {
@@ -506,7 +526,10 @@ ${assEvents.join("\n")}
           )}`;
         } else {
           job.status = "failed";
-          job.error = `FFmpeg kết thúc với mã lỗi: ${code}`;
+          const stderrSummary = ffmpegStderr.trim().split(/\r?\n/).slice(-8).join("\n");
+          job.error = stderrSummary
+            ? `FFmpeg kết thúc với mã lỗi: ${code}\n${stderrSummary}`
+            : `FFmpeg kết thúc với mã lỗi: ${code}`;
           job.message = "Xuất video thất bại.";
         }
       });
