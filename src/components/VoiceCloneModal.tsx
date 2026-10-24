@@ -221,15 +221,61 @@ export default function VoiceCloneModal({
     }
   };
 
-  // Handle System Whisper.cpp Initialization
-  const handleInitWhisper = async () => {
-    setIsOperatingTools(true);
-    setToolsFeedback({
-      type: "info",
-      message: "Đang bắt đầu khởi tạo Whisper.cpp...",
-    });
+  // Handle Dismiss active job banner
+  const handleDismissJob = async () => {
     try {
-      const res = await fetch("/api/system/init-whisper", { method: "POST" });
+      await fetch("/api/system/reset-job", { method: "POST" });
+    } catch {}
+    setSystemStatus((prev) =>
+      prev
+        ? {
+            ...prev,
+            activeJob: {
+              id: "idle",
+              type: "idle",
+              status: "idle",
+              progressPercent: 0,
+              message: "Hệ thống sẵn sàng",
+              logs: [],
+              startTime: Date.now(),
+            },
+          }
+        : prev
+    );
+    setToolsFeedback(null);
+  };
+
+  // Handle System Whisper.cpp Initialization
+  const handleInitWhisper = async (forceRebuild = false) => {
+    setIsOperatingTools(true);
+    setToolsFeedback(null);
+    setSystemStatus((prev) => {
+      const activeJob: SystemJob = {
+        id: `compile_${Date.now()}`,
+        type: "compile_whisper",
+        target: "whisper.cpp",
+        status: "running",
+        progressPercent: 5,
+        message: "[5%] Đang chuẩn bị biên dịch Whisper.cpp...",
+        logs: ["Khởi tạo tiến trình biên dịch..."],
+      };
+      return prev
+        ? { ...prev, activeJob }
+        : {
+            isWhisperInstalled: false,
+            whisperCliPath: null,
+            modelsDir: "",
+            models: [],
+            activeJob,
+          };
+    });
+
+    try {
+      const res = await fetch("/api/system/init-whisper", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ forceRebuild }),
+      });
       const data = await res.json();
       if (!res.ok || !data.success) {
         throw new Error(data.error || "Không thể khởi tạo Whisper.cpp.");
@@ -248,10 +294,20 @@ export default function VoiceCloneModal({
   // Handle Download Whisper Model directly in system
   const handleDownloadModel = async (modelId: string) => {
     setIsOperatingTools(true);
-    setToolsFeedback({
-      type: "info",
-      message: `Đang bắt đầu tải mô hình ${modelId}...`,
+    setToolsFeedback(null);
+    setSystemStatus((prev) => {
+      const activeJob: SystemJob = {
+        id: `download_${modelId}_${Date.now()}`,
+        type: "download_model",
+        target: modelId,
+        status: "running",
+        progressPercent: 1,
+        message: `[1%] Đang bắt đầu tải mô hình ${modelId}...`,
+        logs: [`Đang kết nối tải mô hình ${modelId}...`],
+      };
+      return prev ? { ...prev, activeJob } : prev;
     });
+
     try {
       const res = await fetch("/api/system/download-whisper-model", {
         method: "POST",
@@ -311,19 +367,19 @@ export default function VoiceCloneModal({
     }
   }, [isOpen]);
 
-  // Polling for background jobs
+  // Continuous polling while modal is open to keep status & progress fresh in real-time
   useEffect(() => {
     if (!isOpen) return;
-    const isRunning = systemStatus?.activeJob?.status === "running";
-    if (!isRunning) return;
+
+    fetchSystemToolsStatus();
+    fetchDatasetsAndModels();
 
     const interval = setInterval(() => {
       fetchSystemToolsStatus();
-      fetchDatasetsAndModels();
-    }, 1200);
+    }, 1000);
 
     return () => clearInterval(interval);
-  }, [isOpen, systemStatus?.activeJob?.status]);
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -729,6 +785,98 @@ export default function VoiceCloneModal({
 
         {/* Content Body */}
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
+          {/* Universal Active Job Progress Card (Visible in all tabs) */}
+          {systemStatus?.activeJob && systemStatus.activeJob.status !== "idle" && (
+            <div
+              className={`p-4 rounded-2xl border transition-all ${
+                systemStatus.activeJob.status === "running"
+                  ? "bg-sky-950/70 border-sky-500/50 shadow-xl shadow-sky-500/15"
+                  : systemStatus.activeJob.status === "completed"
+                  ? "bg-emerald-950/60 border-emerald-500/40 shadow-xl shadow-emerald-500/10"
+                  : "bg-red-950/60 border-red-500/40"
+              }`}
+            >
+              <div className="flex items-center justify-between gap-3 mb-2">
+                <div className="flex items-center gap-2.5">
+                  {systemStatus.activeJob.status === "running" ? (
+                    <RefreshCw className="w-5 h-5 text-sky-400 animate-spin" />
+                  ) : systemStatus.activeJob.status === "completed" ? (
+                    <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+                  ) : (
+                    <AlertTriangle className="w-5 h-5 text-red-400" />
+                  )}
+                  <div>
+                    <h4 className="text-xs font-bold text-white flex items-center gap-2">
+                      {systemStatus.activeJob.type === "compile_whisper"
+                        ? "Biên Dịch Whisper.cpp (whisper-cli)"
+                        : "Tải Mô Hình Whisper AI"}
+                      <span
+                        className={`text-[10px] font-mono px-2 py-0.5 rounded-full ${
+                          systemStatus.activeJob.status === "running"
+                            ? "bg-sky-500/20 text-sky-300 border border-sky-500/30 animate-pulse"
+                            : systemStatus.activeJob.status === "completed"
+                            ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+                            : "bg-red-500/20 text-red-300 border border-red-500/30"
+                        }`}
+                      >
+                        {systemStatus.activeJob.status === "running"
+                          ? `Tiến trình: ${systemStatus.activeJob.progressPercent}%`
+                          : systemStatus.activeJob.status === "completed"
+                          ? "Hoàn tất 100%"
+                          : "Gặp lỗi"}
+                      </span>
+                    </h4>
+                    <p className="text-[11px] text-slate-300 mt-0.5 font-medium">
+                      {systemStatus.activeJob.message}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-bold font-mono text-sky-300">
+                    {systemStatus.activeJob.progressPercent}%
+                  </span>
+                  {systemStatus.activeJob.status !== "running" && (
+                    <button
+                      type="button"
+                      onClick={handleDismissJob}
+                      className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors"
+                      title="Đóng thông báo"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Real-time Progress Bar */}
+              <div className="w-full bg-slate-900/90 rounded-full h-3 overflow-hidden border border-slate-700/80 mb-2.5">
+                <div
+                  className={`h-3 rounded-full transition-all duration-300 ${
+                    systemStatus.activeJob.status === "completed"
+                      ? "bg-gradient-to-r from-emerald-500 to-teal-400"
+                      : systemStatus.activeJob.status === "error"
+                      ? "bg-red-500"
+                      : "bg-gradient-to-r from-sky-500 via-indigo-500 to-amber-500"
+                  }`}
+                  style={{ width: `${Math.max(5, systemStatus.activeJob.progressPercent)}%` }}
+                />
+              </div>
+
+              {/* Streaming Logs */}
+              {systemStatus.activeJob.logs.length > 0 && (
+                <div className="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800 font-mono text-[11px] text-slate-400 max-h-24 overflow-y-auto space-y-1">
+                  {systemStatus.activeJob.logs.slice(-4).map((log, idx) => (
+                    <p key={idx} className="flex items-center gap-1.5 truncate">
+                      <span className="text-sky-500 font-bold">›</span>
+                      <span>{log}</span>
+                    </p>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* ============================================================== */}
           {/* TAB 1: OFFLINE DATASET PREPARATION                             */}
           {/* ============================================================== */}
@@ -761,7 +909,7 @@ export default function VoiceCloneModal({
                   </div>
                   <button
                     type="button"
-                    onClick={handleInitWhisper}
+                    onClick={() => handleInitWhisper(false)}
                     disabled={isOperatingTools || systemStatus?.activeJob?.status === "running"}
                     className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold shrink-0 transition-all shadow-md shadow-amber-500/20 flex items-center gap-1.5"
                   >
@@ -1165,43 +1313,6 @@ export default function VoiceCloneModal({
                 </div>
               </div>
 
-              {/* Active Background Job Card */}
-              {systemStatus?.activeJob && systemStatus.activeJob.status === "running" && (
-                <div className="p-5 rounded-2xl bg-sky-950/40 border border-sky-500/40 space-y-3 shadow-lg shadow-sky-500/10 animate-pulse">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2.5">
-                      <RefreshCw className="w-5 h-5 text-sky-400 animate-spin" />
-                      <h4 className="text-sm font-bold text-white">
-                        {systemStatus.activeJob.message}
-                      </h4>
-                    </div>
-                    <span className="text-xs font-mono font-bold text-sky-400">
-                      {systemStatus.activeJob.progressPercent}%
-                    </span>
-                  </div>
-
-                  {/* Progress Bar */}
-                  <div className="w-full bg-slate-800 rounded-full h-3 overflow-hidden border border-slate-700">
-                    <div
-                      className="bg-gradient-to-r from-sky-500 to-indigo-500 h-3 rounded-full transition-all duration-300"
-                      style={{ width: `${Math.max(5, systemStatus.activeJob.progressPercent)}%` }}
-                    />
-                  </div>
-
-                  {/* Log stream box */}
-                  {systemStatus.activeJob.logs.length > 0 && (
-                    <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 font-mono text-[11px] text-slate-400 max-h-24 overflow-y-auto space-y-1">
-                      {systemStatus.activeJob.logs.map((log, idx) => (
-                        <p key={idx} className="flex items-center gap-1.5">
-                          <span className="text-sky-500">›</span>
-                          <span>{log}</span>
-                        </p>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-
               {/* Tools Feedback Alert */}
               {toolsFeedback && (
                 <div
@@ -1250,7 +1361,7 @@ export default function VoiceCloneModal({
 
                   <button
                     type="button"
-                    onClick={handleInitWhisper}
+                    onClick={() => handleInitWhisper(!!systemStatus?.isWhisperInstalled)}
                     disabled={isOperatingTools || systemStatus?.activeJob?.status === "running"}
                     className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 text-white text-xs font-bold transition-all shadow-md shadow-sky-500/20 disabled:opacity-50"
                   >

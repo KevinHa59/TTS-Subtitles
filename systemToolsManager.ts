@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { spawn, execSync } from "child_process";
+import { spawn } from "child_process";
 import https from "https";
 import http from "http";
 
@@ -136,6 +136,64 @@ export function getCurrentJob(): SystemJobStatus {
   return currentJob;
 }
 
+export function resetCurrentJob() {
+  currentJob = {
+    id: "idle",
+    type: "idle",
+    status: "idle",
+    progressPercent: 0,
+    message: "Hệ thống sẵn sàng",
+    logs: [],
+    startTime: Date.now(),
+  };
+}
+
+// Non-blocking asynchronous child process executor
+function runProcessAsync(
+  cmd: string,
+  args: string[],
+  cwd: string,
+  onLine: (line: string) => void
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(cmd, args, { cwd });
+    let stdoutBuffer = "";
+    let stderrBuffer = "";
+
+    proc.stdout.on("data", (data) => {
+      stdoutBuffer += data.toString();
+      const lines = stdoutBuffer.split("\n");
+      stdoutBuffer = lines.pop() || "";
+      for (const line of lines) {
+        if (line.trim()) onLine(line.trim());
+      }
+    });
+
+    proc.stderr.on("data", (data) => {
+      stderrBuffer += data.toString();
+      const lines = stderrBuffer.split("\n");
+      stderrBuffer = lines.pop() || "";
+      for (const line of lines) {
+        if (line.trim()) onLine(line.trim());
+      }
+    });
+
+    proc.on("error", (err) => {
+      reject(err);
+    });
+
+    proc.on("close", (code) => {
+      if (stdoutBuffer.trim()) onLine(stdoutBuffer.trim());
+      if (stderrBuffer.trim()) onLine(stderrBuffer.trim());
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error(`Lệnh '${cmd} ${args.join(" ")}' kết thúc với mã ${code}`));
+      }
+    });
+  });
+}
+
 // Helper: Download a file with redirect follow and progress
 function downloadFileWithProgress(
   url: string,
@@ -151,7 +209,6 @@ function downloadFileWithProgress(
       const client = currentUrl.startsWith("https") ? https : http;
       client
         .get(currentUrl, (response) => {
-          // Handle HTTP redirects (301, 302, 303, 307, 308)
           if (
             response.statusCode &&
             response.statusCode >= 300 &&
@@ -161,7 +218,7 @@ function downloadFileWithProgress(
             const nextUrl = response.headers.location.startsWith("http")
               ? response.headers.location
               : new URL(response.headers.location, currentUrl).toString();
-            response.resume(); // consume response data to free up memory
+            response.resume();
             return makeRequest(nextUrl, redirectCount + 1);
           }
 
@@ -220,7 +277,6 @@ export async function startDownloadWhisperModel(modelId: string): Promise<boolea
 
   const destFile = path.resolve(MODELS_DIR, spec.filename);
   const tempFile = `${destFile}.downloading`;
-
   const downloadUrl = `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/${spec.filename}`;
 
   currentJob = {
@@ -228,37 +284,41 @@ export async function startDownloadWhisperModel(modelId: string): Promise<boolea
     type: "download_model",
     target: modelId,
     status: "running",
-    progressPercent: 0,
+    progressPercent: 1,
     downloadedMb: 0,
     totalMb: spec.expectedSizeMb,
-    message: `Đang tải mô hình ${spec.name} (${spec.expectedSizeMb}MB)...`,
-    logs: [`Bắt đầu tải ${spec.name} từ HuggingFace...`],
+    message: `Đang tải ${spec.name} (~${spec.expectedSizeMb}MB)...`,
+    logs: [`Bắt đầu tải mô hình ${spec.name} từ HuggingFace CDN...`],
     startTime: Date.now(),
   };
 
-  // Run in background
   (async () => {
     let lastLogTime = Date.now();
+    let startTime = Date.now();
+
     try {
       await downloadFileWithProgress(downloadUrl, tempFile, (received, total) => {
         const percent = Math.min(100, Math.round((received / total) * 100));
         const downloadedMb = Math.round((received / (1024 * 1024)) * 10) / 10;
         const totalMb = Math.round((total / (1024 * 1024)) * 10) / 10;
 
-        currentJob.progressPercent = percent;
+        const elapsedSec = (Date.now() - startTime) / 1000;
+        const speedMbS = elapsedSec > 0 ? Math.round((downloadedMb / elapsedSec) * 10) / 10 : 0;
+
+        currentJob.progressPercent = Math.max(1, percent);
         currentJob.downloadedMb = downloadedMb;
         currentJob.totalMb = totalMb;
-        currentJob.message = `Đang tải ${spec.name}: ${downloadedMb}MB / ${totalMb}MB (${percent}%)`;
+        currentJob.speedMbS = speedMbS;
+        currentJob.message = `[${percent}%] Đang tải ${spec.name}: ${downloadedMb}MB / ${totalMb}MB (${speedMbS} MB/s)`;
 
         const now = Date.now();
-        if (now - lastLogTime > 2000) {
+        if (now - lastLogTime > 1500) {
           lastLogTime = now;
-          currentJob.logs.push(`[Tải về] ${percent}% (${downloadedMb}MB / ${totalMb}MB)`);
-          if (currentJob.logs.length > 20) currentJob.logs.shift();
+          currentJob.logs.push(`[Tải về] ${percent}% - ${downloadedMb}MB / ${totalMb}MB (${speedMbS} MB/s)`);
+          if (currentJob.logs.length > 25) currentJob.logs.shift();
         }
       });
 
-      // Atomically move temp to final file
       if (fs.existsSync(tempFile)) {
         if (fs.existsSync(destFile)) {
           fs.unlinkSync(destFile);
@@ -268,8 +328,8 @@ export async function startDownloadWhisperModel(modelId: string): Promise<boolea
 
       currentJob.status = "completed";
       currentJob.progressPercent = 100;
-      currentJob.message = `Đã tải xong mô hình ${spec.name}!`;
-      currentJob.logs.push(`Hoàn tất tải về và lưu vào ${destFile}`);
+      currentJob.message = `Đã tải xong mô hình ${spec.name} (${spec.expectedSizeMb}MB)!`;
+      currentJob.logs.push(`Hoàn tất tải về và lưu vào hệ thống: ${destFile}`);
     } catch (err: any) {
       console.error("[SystemTools] Lỗi tải model:", err);
       try {
@@ -298,10 +358,41 @@ export function deleteWhisperModel(modelId: string): boolean {
   return false;
 }
 
-// Clone & Compile Whisper.cpp
-export async function startCompileWhisperCpp(): Promise<boolean> {
+// Clone & Compile Whisper.cpp with Non-blocking child process and real-time percentage
+export async function startCompileWhisperCpp(forceRebuild = false): Promise<boolean> {
   if (currentJob.status === "running") {
     throw new Error(`Hệ thống đang bận: ${currentJob.message}`);
+  }
+
+  const existingCli = getWhisperCliPath();
+
+  // If already compiled and user did not request forceRebuild, immediately verify and complete
+  if (existingCli && !forceRebuild) {
+    const status = getSystemToolsStatus();
+    const hasAnyModel = status.models.some((m) => m.isDownloaded);
+
+    currentJob = {
+      id: `compile_whisper_${Date.now()}`,
+      type: "compile_whisper",
+      target: "whisper.cpp",
+      status: "completed",
+      progressPercent: 100,
+      message: "Whisper.cpp (whisper-cli) đã được cài đặt và sẵn sàng 100%!",
+      logs: [
+        `Phát hiện file thực thi: ${existingCli}`,
+        "Bộ thực thi Whisper.cpp đã sẵn sàng hoạt động offline.",
+      ],
+      startTime: Date.now(),
+    };
+
+    if (!hasAnyModel) {
+      currentJob.logs.push("Chưa có mô hình nào, đang tự động tải mô hình Whisper Small...");
+      setTimeout(() => {
+        startDownloadWhisperModel("small").catch(console.error);
+      }, 500);
+    }
+
+    return true;
   }
 
   currentJob = {
@@ -310,75 +401,100 @@ export async function startCompileWhisperCpp(): Promise<boolean> {
     target: "whisper.cpp",
     status: "running",
     progressPercent: 5,
-    message: "Bắt đầu khởi tạo Whisper.cpp...",
-    logs: ["[Khởi tạo] Chuẩn bị thư mục mã nguồn Whisper.cpp..."],
+    message: "[5%] Bắt đầu chuẩn bị môi trường biên dịch Whisper.cpp...",
+    logs: ["[Khởi tạo] Kiểm tra thư mục mã nguồn tools/whisper.cpp..."],
     startTime: Date.now(),
   };
 
-  // Run compilation steps asynchronously
   (async () => {
     try {
-      // Step 1: Git clone if not existing
+      // Step 1: Git clone if CMakeLists.txt is not found
       if (!fs.existsSync(path.resolve(WHISPER_DIR, "CMakeLists.txt"))) {
-        currentJob.progressPercent = 15;
-        currentJob.message = "Đang tải mã nguồn Whisper.cpp từ GitHub...";
-        currentJob.logs.push("Cloning https://github.com/ggerganov/whisper.cpp...");
+        currentJob.progressPercent = 10;
+        currentJob.message = "[10%] Đang tải mã nguồn Whisper.cpp từ GitHub...";
+        currentJob.logs.push("Chạy: git clone --depth 1 https://github.com/ggerganov/whisper.cpp...");
 
-        execSync(`git clone --depth 1 https://github.com/ggerganov/whisper.cpp "${WHISPER_DIR}"`, {
-          stdio: "pipe",
-        });
+        await runProcessAsync(
+          "git",
+          ["clone", "--depth", "1", "https://github.com/ggerganov/whisper.cpp", WHISPER_DIR],
+          TOOLS_DIR,
+          (line) => {
+            currentJob.logs.push(line);
+            if (currentJob.logs.length > 25) currentJob.logs.shift();
+          }
+        );
         currentJob.logs.push("Đã tải xong mã nguồn Whisper.cpp.");
       }
 
       // Step 2: Configure CMake
-      currentJob.progressPercent = 35;
-      currentJob.message = "Đang cấu hình CMake cho Whisper.cpp...";
-      currentJob.logs.push("Chạy cmake -B build...");
+      currentJob.progressPercent = 20;
+      currentJob.message = "[20%] Đang cấu hình CMake cho Whisper.cpp...";
+      currentJob.logs.push("Chạy: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release...");
 
       const buildDir = path.resolve(WHISPER_DIR, "build");
       if (!fs.existsSync(buildDir)) {
         fs.mkdirSync(buildDir, { recursive: true });
       }
 
-      execSync(`cmake -B build -S . -DCMAKE_BUILD_TYPE=Release`, {
-        cwd: WHISPER_DIR,
-        stdio: "pipe",
-      });
+      await runProcessAsync(
+        "cmake",
+        ["-B", "build", "-S", ".", "-DCMAKE_BUILD_TYPE=Release"],
+        WHISPER_DIR,
+        (line) => {
+          currentJob.logs.push(line);
+          if (currentJob.logs.length > 25) currentJob.logs.shift();
+        }
+      );
       currentJob.logs.push("Cấu hình CMake thành công.");
 
-      // Step 3: Build Release binary
-      currentJob.progressPercent = 60;
-      currentJob.message = "Đang biên dịch Whisper.cpp (whisper-cli)...";
-      currentJob.logs.push("Chạy cmake --build build --config Release -j2...");
+      // Step 3: Compile with real-time percentage parsing
+      currentJob.progressPercent = 25;
+      currentJob.message = "[25%] Bắt đầu biên dịch các tệp C/C++ (Release)...";
+      currentJob.logs.push("Chạy: cmake --build build --config Release -j2...");
 
-      execSync(`cmake --build build --config Release -j2`, {
-        cwd: WHISPER_DIR,
-        stdio: "pipe",
-      });
+      await runProcessAsync(
+        "cmake",
+        ["--build", "build", "--config", "Release", "-j2"],
+        WHISPER_DIR,
+        (line) => {
+          // Parse CMake's [ XX%] progress indicators
+          const percentMatch = line.match(/\[\s*(\d+)%\]/);
+          if (percentMatch) {
+            const cmakePercent = parseInt(percentMatch[1], 10);
+            // Map CMake 0-100% to overall 25-92%
+            const overallPercent = 25 + Math.round((cmakePercent * 67) / 100);
+            currentJob.progressPercent = overallPercent;
+            currentJob.message = `[${overallPercent}%] Đang biên dịch Whisper.cpp: ${cmakePercent}% - ${line.slice(0, 60)}`;
+          }
+
+          currentJob.logs.push(line);
+          if (currentJob.logs.length > 25) currentJob.logs.shift();
+        }
+      );
 
       const cli = getWhisperCliPath();
       if (!cli) {
         throw new Error("Biên dịch xong nhưng không tìm thấy file thực thi whisper-cli.");
       }
 
-      // Step 4: Check if any model exists, if not auto-start base model download
-      currentJob.progressPercent = 90;
-      currentJob.message = "Đang kiểm tra mô hình ngôn ngữ...";
-      currentJob.logs.push(`Bộ thực thi whisper-cli đã sẵn sàng: ${cli}`);
+      currentJob.progressPercent = 95;
+      currentJob.message = "[95%] Kiểm tra file thực thi và mô hình...";
+      currentJob.logs.push(`File thực thi sẵn sàng: ${cli}`);
 
+      // Step 4: Check models
       const status = getSystemToolsStatus();
       const hasAnyModel = status.models.some((m) => m.isDownloaded);
 
       if (!hasAnyModel) {
-        currentJob.logs.push("Chưa có mô hình nào, đang tự động tải mô hình base (~140MB)...");
-        await startDownloadWhisperModel("base");
+        currentJob.logs.push("Chưa có mô hình nào, đang tự động tải mô hình Whisper Small (~460MB)...");
+        await startDownloadWhisperModel("small");
         return;
       }
 
       currentJob.progressPercent = 100;
       currentJob.status = "completed";
-      currentJob.message = "Khởi tạo & biên dịch Whisper.cpp thành công!";
-      currentJob.logs.push("Hệ thống Whisper offline đã sẵn sàng 100%!");
+      currentJob.message = "Khởi tạo & biên dịch Whisper.cpp thành công 100%!";
+      currentJob.logs.push("Hệ thống Whisper offline đã sẵn sàng hoạt động!");
     } catch (err: any) {
       console.error("[SystemTools] Lỗi biên dịch whisper:", err);
       currentJob.status = "error";

@@ -57,6 +57,7 @@ import {
   startCompileWhisperCpp,
   startDownloadWhisperModel,
   deleteWhisperModel,
+  resetCurrentJob,
 } from "./systemToolsManager";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -3197,12 +3198,23 @@ app.get("/api/system/tools-status", (_req: Request, res: Response) => {
 });
 
 // Start Whisper.cpp compilation/initialization
-app.post("/api/system/init-whisper", async (_req: Request, res: Response) => {
+app.post("/api/system/init-whisper", async (req: Request, res: Response) => {
   try {
-    await startCompileWhisperCpp();
+    const forceRebuild = !!req.body?.forceRebuild;
+    await startCompileWhisperCpp(forceRebuild);
     res.json({ success: true, message: "Đã bắt đầu khởi tạo Whisper.cpp." });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
+  }
+});
+
+// Reset system active job
+app.post("/api/system/reset-job", (_req: Request, res: Response) => {
+  try {
+    resetCurrentJob();
+    res.json({ success: true, message: "Đã làm mới trạng thái tiến trình." });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
   }
 });
 
