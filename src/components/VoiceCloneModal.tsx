@@ -18,7 +18,51 @@ import {
   Layers,
   ArrowRight,
   Headphones,
+  Scissors,
+  Mic,
+  FileArchive,
+  Check,
+  Edit2,
+  Volume2,
+  Plus,
+  Settings,
+  HardDrive,
+  GitBranch,
+  Terminal,
+  ShieldCheck,
 } from "lucide-react";
+
+interface SystemModelItem {
+  id: string;
+  name: string;
+  filename: string;
+  sizeMb: number;
+  expectedSizeMb: number;
+  isDownloaded: boolean;
+  description: string;
+}
+
+interface SystemJob {
+  id: string;
+  type: "download_model" | "compile_whisper" | "idle";
+  target?: string;
+  status: "running" | "completed" | "error" | "idle";
+  progressPercent: number;
+  downloadedMb?: number;
+  totalMb?: number;
+  speedMbS?: number;
+  message: string;
+  logs: string[];
+  error?: string;
+}
+
+interface SystemToolsStatus {
+  isWhisperInstalled: boolean;
+  whisperCliPath: string | null;
+  modelsDir: string;
+  models: SystemModelItem[];
+  activeJob: SystemJob;
+}
 
 interface CustomVoiceItem {
   id: string;
@@ -33,6 +77,33 @@ interface CustomVoiceItem {
   createdAt?: string;
 }
 
+interface DatasetClip {
+  id: string;
+  filename: string;
+  text: string;
+  startMs: number;
+  endMs: number;
+  durationSec: number;
+}
+
+interface DatasetInfo {
+  id: string;
+  voiceName: string;
+  createdAt: string;
+  originalAudioFilename: string;
+  whisperModelUsed: string;
+  totalClips: number;
+  totalDurationSec: number;
+  clips: DatasetClip[];
+}
+
+interface WhisperModelItem {
+  id: string;
+  name: string;
+  sizeMb: number;
+  available: boolean;
+}
+
 interface VoiceCloneModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -44,16 +115,39 @@ export default function VoiceCloneModal({
   onClose,
   onVoiceInstalled,
 }: VoiceCloneModalProps) {
-  const [activeTab, setActiveTab] = useState<"guide" | "upload" | "manage">("guide");
+  const [activeTab, setActiveTab] = useState<"dataset" | "tools" | "guide" | "upload" | "manage">("dataset");
 
-  // Manage tab state
-  const [customVoices, setCustomVoices] = useState<CustomVoiceItem[]>([]);
-  const [loadingCustom, setLoadingCustom] = useState<boolean>(false);
-  const [testingVoiceId, setTestingVoiceId] = useState<string | null>(null);
-  const [audioTesting, setAudioTesting] = useState<boolean>(false);
-  const audioTestRef = useRef<HTMLAudioElement | null>(null);
+  // === SYSTEM TOOLS & MODELS STATE ===
+  const [systemStatus, setSystemStatus] = useState<SystemToolsStatus | null>(null);
+  const [isOperatingTools, setIsOperatingTools] = useState<boolean>(false);
+  const [toolsFeedback, setToolsFeedback] = useState<{
+    type: "success" | "error" | "info";
+    message: string;
+  } | null>(null);
 
-  // Upload tab state
+  // === TAB 1: DATASET PREPARATION STATE ===
+  const [audioFile, setAudioFile] = useState<File | null>(null);
+  const [datasetVoiceName, setDatasetVoiceName] = useState<string>("giong_moi");
+  const [whisperModel, setWhisperModel] = useState<string>("small");
+  const [minDuration, setMinDuration] = useState<number>(1.0);
+  const [maxDuration, setMaxDuration] = useState<number>(12.0);
+  const [availableModels, setAvailableModels] = useState<WhisperModelItem[]>([]);
+  const [isProcessingDataset, setIsProcessingDataset] = useState<boolean>(false);
+  const [datasetFeedback, setDatasetFeedback] = useState<{
+    type: "success" | "error" | "info";
+    message: string;
+  } | null>(null);
+
+  // Active dataset inspecting/editing
+  const [currentDataset, setCurrentDataset] = useState<DatasetInfo | null>(null);
+  const [savedDatasets, setSavedDatasets] = useState<DatasetInfo[]>([]);
+  const [editingClipId, setEditingClipId] = useState<string | null>(null);
+  const [editingClipText, setEditingClipText] = useState<string>("");
+  const [playingClipId, setPlayingClipId] = useState<string | null>(null);
+  const clipAudioRef = useRef<HTMLAudioElement | null>(null);
+  const audioInputRef = useRef<HTMLInputElement | null>(null);
+
+  // === TAB 3: CUSTOM VOICES UPLOAD STATE ===
   const [onnxFile, setOnnxFile] = useState<File | null>(null);
   const [jsonFile, setJsonFile] = useState<File | null>(null);
   const [voiceIdInput, setVoiceIdInput] = useState<string>("");
@@ -65,10 +159,16 @@ export default function VoiceCloneModal({
     type: "success" | "error";
     message: string;
   } | null>(null);
+  const modelFileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  // === TAB 4: MANAGE VOICES STATE ===
+  const [customVoices, setCustomVoices] = useState<CustomVoiceItem[]>([]);
+  const [loadingCustom, setLoadingCustom] = useState<boolean>(false);
+  const [testingVoiceId, setTestingVoiceId] = useState<string | null>(null);
+  const [audioTesting, setAudioTesting] = useState<boolean>(false);
+  const audioTestRef = useRef<HTMLAudioElement | null>(null);
 
-  // Fetch custom voices when modal opens or switch to manage tab
+  // Load custom voices
   const fetchCustomVoices = async () => {
     setLoadingCustom(true);
     try {
@@ -84,67 +184,306 @@ export default function VoiceCloneModal({
     }
   };
 
+  // Load system tools status
+  const fetchSystemToolsStatus = async () => {
+    try {
+      const res = await fetch("/api/system/tools-status");
+      const data = await res.json();
+      if (data.success) {
+        setSystemStatus(data);
+      }
+    } catch (err) {
+      console.error("Error fetching system tools status:", err);
+    }
+  };
+
+  // Load datasets list and whisper models
+  const fetchDatasetsAndModels = async () => {
+    try {
+      const [dsRes, mdRes] = await Promise.all([
+        fetch("/api/dataset/list"),
+        fetch("/api/dataset/models"),
+      ]);
+      const dsData = await dsRes.json();
+      const mdData = await mdRes.json();
+
+      if (dsData.success && Array.isArray(dsData.datasets)) {
+        setSavedDatasets(dsData.datasets);
+        if (dsData.datasets.length > 0 && !currentDataset) {
+          setCurrentDataset(dsData.datasets[0]);
+        }
+      }
+      if (mdData.success && Array.isArray(mdData.models)) {
+        setAvailableModels(mdData.models);
+      }
+    } catch (err) {
+      console.error("Error fetching datasets or models:", err);
+    }
+  };
+
+  // Handle System Whisper.cpp Initialization
+  const handleInitWhisper = async () => {
+    setIsOperatingTools(true);
+    setToolsFeedback({
+      type: "info",
+      message: "Đang bắt đầu khởi tạo Whisper.cpp...",
+    });
+    try {
+      const res = await fetch("/api/system/init-whisper", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || "Không thể khởi tạo Whisper.cpp.");
+      }
+      await fetchSystemToolsStatus();
+    } catch (err: any) {
+      setToolsFeedback({
+        type: "error",
+        message: err.message || "Lỗi khởi tạo Whisper.cpp.",
+      });
+    } finally {
+      setIsOperatingTools(false);
+    }
+  };
+
+  // Handle Download Whisper Model directly in system
+  const handleDownloadModel = async (modelId: string) => {
+    setIsOperatingTools(true);
+    setToolsFeedback({
+      type: "info",
+      message: `Đang bắt đầu tải mô hình ${modelId}...`,
+    });
+    try {
+      const res = await fetch("/api/system/download-whisper-model", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ modelId }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || "Không thể tải mô hình.");
+      }
+      await fetchSystemToolsStatus();
+    } catch (err: any) {
+      setToolsFeedback({
+        type: "error",
+        message: err.message || "Lỗi khi tải mô hình.",
+      });
+    } finally {
+      setIsOperatingTools(false);
+    }
+  };
+
+  // Handle Delete Whisper Model directly to free space
+  const handleDeleteModel = async (modelId: string, modelName: string) => {
+    if (!confirm(`Bạn có chắc muốn xóa mô hình "${modelName}" khỏi hệ thống để giải phóng dung lượng ổ đĩa?`)) {
+      return;
+    }
+    try {
+      const res = await fetch(`/api/system/whisper-model/${modelId}`, { method: "DELETE" });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || "Không thể xóa mô hình.");
+      }
+      setToolsFeedback({
+        type: "success",
+        message: `Đã xóa mô hình ${modelName} thành công.`,
+      });
+      await fetchSystemToolsStatus();
+      await fetchDatasetsAndModels();
+    } catch (err: any) {
+      alert(`Lỗi khi xóa: ${err.message}`);
+    }
+  };
+
   useEffect(() => {
     if (isOpen) {
       fetchCustomVoices();
+      fetchDatasetsAndModels();
+      fetchSystemToolsStatus();
+      setDatasetFeedback(null);
       setUploadFeedback(null);
+      setToolsFeedback(null);
     } else {
-      if (audioTestRef.current) {
-        audioTestRef.current.pause();
-      }
+      if (audioTestRef.current) audioTestRef.current.pause();
+      if (clipAudioRef.current) clipAudioRef.current.pause();
       setTestingVoiceId(null);
+      setPlayingClipId(null);
     }
   }, [isOpen]);
 
+  // Polling for background jobs
+  useEffect(() => {
+    if (!isOpen) return;
+    const isRunning = systemStatus?.activeJob?.status === "running";
+    if (!isRunning) return;
+
+    const interval = setInterval(() => {
+      fetchSystemToolsStatus();
+      fetchDatasetsAndModels();
+    }, 1200);
+
+    return () => clearInterval(interval);
+  }, [isOpen, systemStatus?.activeJob?.status]);
+
   if (!isOpen) return null;
 
-  // Handle file drop / select
-  const handleFilesChosen = (files: FileList | null) => {
-    if (!files) return;
-    setUploadFeedback(null);
+  // File chosen for Dataset
+  const handleDatasetAudioChosen = (file: File) => {
+    setAudioFile(file);
+    setDatasetFeedback(null);
+    const rawName = file.name.replace(/\.[^/.]+$/, "").replace(/[^a-zA-Z0-9_-]/g, "_").toLowerCase();
+    if (!datasetVoiceName || datasetVoiceName === "giong_moi") {
+      setDatasetVoiceName(rawName);
+    }
+  };
 
-    let pickedOnnx: File | null = onnxFile;
-    let pickedJson: File | null = jsonFile;
+  // Start Offline Dataset Preparation via Whisper.cpp
+  const handleStartPrepareDataset = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!audioFile) {
+      setDatasetFeedback({
+        type: "error",
+        message: "Vui lòng chọn hoặc kéo thả file âm thanh (MP3, WAV, M4A) của bạn.",
+      });
+      return;
+    }
 
-    for (let i = 0; i < files.length; i++) {
-      const f = files[i];
-      const name = f.name.toLowerCase();
-      if (name.endsWith(".onnx")) {
-        pickedOnnx = f;
-        if (!voiceNameInput) {
-          const rawName = f.name.replace(/\.onnx$/i, "").replace(/[_-]+/g, " ");
-          setVoiceNameInput(rawName.charAt(0).toUpperCase() + rawName.slice(1));
-        }
-        if (!voiceIdInput) {
-          setVoiceIdInput(f.name.replace(/\.onnx$/i, "").toLowerCase().replace(/[^a-z0-9_-]/g, "_"));
-        }
-      } else if (name.endsWith(".json")) {
-        pickedJson = f;
+    setIsProcessingDataset(true);
+    setDatasetFeedback({
+      type: "info",
+      message: `Đang cắt lát và phiên âm bằng Whisper.cpp (${whisperModel}) hoàn toàn offline... Vui lòng đợi trong giây lát.`,
+    });
+
+    try {
+      const reader = new FileReader();
+      const base64Audio = await new Promise<string>((resolve, reject) => {
+        reader.onload = () => {
+          const res = reader.result as string;
+          resolve(res.split(",")[1] || res);
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(audioFile);
+      });
+
+      const res = await fetch("/api/dataset/prepare", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          audioBase64: base64Audio,
+          originalFilename: audioFile.name,
+          voiceName: datasetVoiceName,
+          whisperModel: whisperModel,
+          minDuration: minDuration,
+          maxDuration: maxDuration,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || "Không thể xử lý âm thanh.");
       }
+
+      setCurrentDataset(data.dataset);
+      setSavedDatasets((prev) => [data.dataset, ...prev.filter((d) => d.id !== data.dataset.id)]);
+      setDatasetFeedback({
+        type: "success",
+        message: `Hoàn tất! Đã trích xuất ${data.dataset.totalClips} câu thoại (${data.dataset.totalDurationSec}s) chuẩn định dạng Piper.`,
+      });
+    } catch (err: any) {
+      setDatasetFeedback({
+        type: "error",
+        message: err.message || "Lỗi khi chạy Whisper.cpp trên máy chủ.",
+      });
+    } finally {
+      setIsProcessingDataset(false);
+    }
+  };
+
+  // Play clip preview
+  const handlePlayClip = (clip: DatasetClip) => {
+    if (!currentDataset) return;
+
+    if (playingClipId === clip.id) {
+      if (clipAudioRef.current) clipAudioRef.current.pause();
+      setPlayingClipId(null);
+      return;
     }
 
-    setOnnxFile(pickedOnnx);
-    setJsonFile(pickedJson);
+    setPlayingClipId(clip.id);
+    const audioUrl = `/api/dataset/${currentDataset.id}/audio/${clip.filename}`;
+    if (!clipAudioRef.current) {
+      clipAudioRef.current = new Audio();
+    }
+    clipAudioRef.current.src = audioUrl;
+    clipAudioRef.current.onended = () => {
+      setPlayingClipId(null);
+    };
+    clipAudioRef.current.play().catch((err) => {
+      console.error("Lỗi phát audio:", err);
+      setPlayingClipId(null);
+    });
   };
 
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    if (e.dataTransfer.files) {
-      handleFilesChosen(e.dataTransfer.files);
+  // Update text of a clip
+  const handleSaveClipText = async (clipId: string) => {
+    if (!currentDataset) return;
+    try {
+      const res = await fetch(`/api/dataset/${currentDataset.id}/clip`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clipId, text: editingClipText }),
+      });
+      const data = await res.json();
+      if (data.success && data.dataset) {
+        setCurrentDataset(data.dataset);
+        setEditingClipId(null);
+      }
+    } catch (err) {
+      alert("Lỗi khi lưu văn bản câu thoại.");
     }
   };
 
-  // Upload handler
+  // Delete clip
+  const handleDeleteClip = async (clipId: string) => {
+    if (!currentDataset) return;
+    if (!confirm("Bạn có chắc muốn xóa câu thoại này khỏi bộ dữ liệu?")) return;
+
+    try {
+      const res = await fetch(`/api/dataset/${currentDataset.id}/clip`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clipId, shouldDelete: true }),
+      });
+      const data = await res.json();
+      if (data.success && data.dataset) {
+        setCurrentDataset(data.dataset);
+      }
+    } catch (err) {
+      alert("Lỗi khi xóa câu thoại.");
+    }
+  };
+
+  // Delete dataset
+  const handleDeleteDataset = async (datasetId: string) => {
+    if (!confirm("Bạn có chắc muốn xóa toàn bộ bộ dữ liệu này?")) return;
+    try {
+      await fetch(`/api/dataset/${datasetId}`, { method: "DELETE" });
+      setSavedDatasets((prev) => prev.filter((d) => d.id !== datasetId));
+      if (currentDataset?.id === datasetId) {
+        setCurrentDataset(null);
+      }
+    } catch (err) {
+      alert("Lỗi khi xóa dataset.");
+    }
+  };
+
+  // Upload ONNX and JSON
   const handleUploadSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!onnxFile || !jsonFile) {
       setUploadFeedback({
         type: "error",
-        message: "Vui lòng chọn cả 2 file: .onnx và .onnx.json được xuất từ Google Colab.",
+        message: "Vui lòng chọn cả 2 file: .onnx và .onnx.json xuất từ Google Colab.",
       });
       return;
     }
@@ -162,16 +501,12 @@ export default function VoiceCloneModal({
     setUploadFeedback(null);
 
     try {
-      // Read JSON file content
       const jsonText = await jsonFile.text();
-
-      // Read ONNX file as base64
+      const reader = new FileReader();
       const onnxBase64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
         reader.onload = () => {
           const result = reader.result as string;
-          const base64 = result.split(",")[1] || result;
-          resolve(base64);
+          resolve(result.split(",")[1] || result);
         };
         reader.onerror = reject;
         reader.readAsDataURL(onnxFile);
@@ -200,14 +535,12 @@ export default function VoiceCloneModal({
         message: `Đã nạp thành công giọng "${data.voice.name}"! Giọng đã sẵn sàng trong tất cả các tính năng.`,
       });
 
-      // Clear files
       setOnnxFile(null);
       setJsonFile(null);
       setVoiceIdInput("");
       setVoiceNameInput("");
       setDescriptionInput("");
 
-      // Notify parent to refresh catalog
       onVoiceInstalled();
       fetchCustomVoices();
       setActiveTab("manage");
@@ -283,29 +616,24 @@ export default function VoiceCloneModal({
     }
   };
 
-  const formatBytes = (bytes?: number) => {
-    if (!bytes) return "0 MB";
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  };
-
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-slate-950/80 backdrop-blur-md animate-in fade-in duration-200">
-      <div className="relative w-full max-w-4xl bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-slate-950/40">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-6 bg-slate-950/85 backdrop-blur-md animate-in fade-in duration-200">
+      <div className="relative w-full max-w-5xl bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
+        {/* Modal Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-slate-950/60">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center text-slate-950 shadow-lg shadow-amber-500/20">
               <Sparkles className="w-5 h-5 font-bold" />
             </div>
             <div>
               <h2 className="text-lg font-bold text-white flex items-center gap-2">
-                Huấn Luyện & Clone Giọng (Google Colab)
-                <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400 border border-amber-500/30">
-                  GPU Miễn Phí
+                Huấn Luyện & Clone Giọng Nói
+                <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                  Whisper.cpp Offline + Colab GPU
                 </span>
               </h2>
               <p className="text-xs text-slate-400">
-                Tự động cắt câu bằng Whisper AI, train mạng nơ-ron VITS và xuất mô hình Piper ONNX
+                Xử lý âm thanh và chỉnh sửa văn bản offline 100% tại chỗ ➔ Huấn luyện VITS trên Colab trong vài phút ➔ Nạp file ONNX
               </p>
             </div>
           </div>
@@ -319,62 +647,756 @@ export default function VoiceCloneModal({
         </div>
 
         {/* Tab Navigation */}
-        <div className="flex items-center px-6 border-b border-slate-800 bg-slate-950/20 gap-2">
+        <div className="flex items-center px-6 border-b border-slate-800 bg-slate-950/40 gap-1 overflow-x-auto">
+          <button
+            type="button"
+            onClick={() => setActiveTab("dataset")}
+            className={`py-3 px-4 text-xs font-semibold flex items-center gap-2 border-b-2 whitespace-nowrap transition-all ${
+              activeTab === "dataset"
+                ? "border-amber-500 text-amber-400"
+                : "border-transparent text-slate-400 hover:text-slate-200"
+            }`}
+          >
+            <Scissors className="w-4 h-4 text-amber-500" />
+            <span>1. Chuẩn Bị Dữ Liệu Offline</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setActiveTab("tools");
+              fetchSystemToolsStatus();
+            }}
+            className={`py-3 px-4 text-xs font-semibold flex items-center gap-2 border-b-2 whitespace-nowrap transition-all ${
+              activeTab === "tools"
+                ? "border-amber-500 text-amber-400"
+                : "border-transparent text-slate-400 hover:text-slate-200"
+            }`}
+          >
+            <Settings className="w-4 h-4 text-sky-400" />
+            <span>Quản Lý Công Cụ & Models (Hệ Thống)</span>
+            {systemStatus?.activeJob?.status === "running" ? (
+              <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
+            ) : systemStatus && (!systemStatus.isWhisperInstalled || !systemStatus.models.some((m) => m.isDownloaded)) ? (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400 border border-amber-500/30">
+                Init
+              </span>
+            ) : null}
+          </button>
+
           <button
             type="button"
             onClick={() => setActiveTab("guide")}
-            className={`py-3 px-4 text-xs font-semibold flex items-center gap-2 border-b-2 transition-all ${
+            className={`py-3 px-4 text-xs font-semibold flex items-center gap-2 border-b-2 whitespace-nowrap transition-all ${
               activeTab === "guide"
                 ? "border-amber-500 text-amber-400"
                 : "border-transparent text-slate-400 hover:text-slate-200"
             }`}
           >
-            <Cpu className="w-4 h-4" />
-            <span>1. Hướng Dẫn & Mở Google Colab</span>
+            <Cpu className="w-4 h-4 text-orange-400" />
+            <span>2. Huấn Luyện (Google Colab 1-Click)</span>
           </button>
+
           <button
             type="button"
             onClick={() => setActiveTab("upload")}
-            className={`py-3 px-4 text-xs font-semibold flex items-center gap-2 border-b-2 transition-all ${
+            className={`py-3 px-4 text-xs font-semibold flex items-center gap-2 border-b-2 whitespace-nowrap transition-all ${
               activeTab === "upload"
                 ? "border-amber-500 text-amber-400"
                 : "border-transparent text-slate-400 hover:text-slate-200"
             }`}
           >
-            <UploadCloud className="w-4 h-4" />
-            <span>2. Nạp Giọng Vào Hệ Thống (.onnx)</span>
+            <UploadCloud className="w-4 h-4 text-sky-400" />
+            <span>3. Nạp Giọng Vào Hệ Thống (.onnx)</span>
           </button>
+
           <button
             type="button"
             onClick={() => {
               setActiveTab("manage");
               fetchCustomVoices();
             }}
-            className={`py-3 px-4 text-xs font-semibold flex items-center gap-2 border-b-2 transition-all ${
+            className={`py-3 px-4 text-xs font-semibold flex items-center gap-2 border-b-2 whitespace-nowrap transition-all ${
               activeTab === "manage"
                 ? "border-amber-500 text-amber-400"
                 : "border-transparent text-slate-400 hover:text-slate-200"
             }`}
           >
-            <Layers className="w-4 h-4" />
-            <span>3. Giọng Đã Cài ({customVoices.length})</span>
+            <Layers className="w-4 h-4 text-emerald-400" />
+            <span>4. Giọng Đã Cài ({customVoices.length})</span>
           </button>
         </div>
 
         {/* Content Body */}
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
-          {/* TAB 1: GUIDE & COLAB LAUNCH */}
+          {/* ============================================================== */}
+          {/* TAB 1: OFFLINE DATASET PREPARATION                             */}
+          {/* ============================================================== */}
+          {activeTab === "dataset" && (
+            <div className="space-y-6">
+              {/* Highlight Info Box */}
+              <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-start gap-3">
+                <Info className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+                <div className="text-xs text-slate-300 space-y-1">
+                  <div className="font-semibold text-white">
+                    Xử Lý Hoàn Toàn Offline Trên Máy Này (Không Lo Chờ Biên Dịch Trên Colab):
+                  </div>
+                  <p>
+                    Whisper.cpp được tích hợp sẵn trực tiếp trong hệ thống TTS. Bạn chỉ cần tải file thu âm (MP3, WAV, M4A) lên, máy tính sẽ tự động cắt chuẩn 22,050Hz Mono PCM và phiên âm tiếng Việt. Bạn có thể nghe thử từng câu và chỉnh sửa câu chữ ngay tại đây trước khi xuất gói <code>.zip</code> để đưa lên Colab huấn luyện.
+                  </p>
+                </div>
+              </div>
+
+              {/* System Tools Check Banner */}
+              {systemStatus && !systemStatus.isWhisperInstalled && (
+                <div className="p-4 rounded-xl bg-amber-500/15 border border-amber-500/40 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-lg shadow-amber-500/10 animate-pulse">
+                  <div className="flex items-center gap-3">
+                    <AlertTriangle className="w-6 h-6 text-amber-400 shrink-0" />
+                    <div>
+                      <h4 className="text-xs font-bold text-white">Chưa khởi tạo bộ thực thi Whisper.cpp trên hệ thống</h4>
+                      <p className="text-[11px] text-slate-300">
+                        Hệ thống cần biên dịch <code>whisper-cli</code> để xử lý âm thanh offline. Toàn bộ file này được loại trừ khỏi Git để giữ dự án siêu nhẹ.
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleInitWhisper}
+                    disabled={isOperatingTools || systemStatus?.activeJob?.status === "running"}
+                    className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold shrink-0 transition-all shadow-md shadow-amber-500/20 flex items-center gap-1.5"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isOperatingTools ? "animate-spin" : ""}`} />
+                    <span>Khởi Tạo 1-Click Ngay</span>
+                  </button>
+                </div>
+              )}
+
+              {/* Upload & Configuration Form */}
+              <form onSubmit={handleStartPrepareDataset} className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  {/* File Upload Box */}
+                  <div className="md:col-span-2">
+                    <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                      File Âm Thanh Thu Âm Giọng Nói (MP3 / WAV / M4A / FLAC):
+                    </label>
+                    <div
+                      onClick={() => audioInputRef.current?.click()}
+                      className="border-2 border-dashed border-slate-700 hover:border-amber-500/50 bg-slate-950/40 rounded-xl p-5 flex flex-col items-center justify-center text-center cursor-pointer transition-all hover:bg-slate-950/70"
+                    >
+                      <input
+                        ref={audioInputRef}
+                        type="file"
+                        accept="audio/*"
+                        className="hidden"
+                        onChange={(e) => {
+                          if (e.target.files && e.target.files[0]) {
+                            handleDatasetAudioChosen(e.target.files[0]);
+                          }
+                        }}
+                      />
+                      {audioFile ? (
+                        <div className="flex items-center gap-3 text-amber-400">
+                          <CheckCircle2 className="w-6 h-6 text-emerald-400" />
+                          <div className="text-left">
+                            <p className="text-xs font-bold text-white">{audioFile.name}</p>
+                            <p className="text-[11px] text-slate-400">
+                              {(audioFile.size / (1024 * 1024)).toFixed(2)} MB • Sẵn sàng xử lý
+                            </p>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="space-y-1">
+                          <Mic className="w-8 h-8 text-amber-400/80 mx-auto" />
+                          <p className="text-xs font-semibold text-slate-200">
+                            Bấm để chọn file hoặc kéo thả file âm thanh vào đây
+                          </p>
+                          <p className="text-[11px] text-slate-500">
+                            Khuyên dùng file dài từ 3 phút đến 15 phút âm thanh rõ ràng, ít tạp âm
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Settings Box */}
+                  <div className="space-y-3 p-4 rounded-xl bg-slate-950/40 border border-slate-800">
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-400 mb-1">
+                        Tên Giọng / Voice ID:
+                      </label>
+                      <input
+                        type="text"
+                        value={datasetVoiceName}
+                        onChange={(e) => setDatasetVoiceName(e.target.value)}
+                        placeholder="VD: hoang_nam, lan_anh"
+                        className="w-full px-3 py-2 text-xs rounded-lg bg-slate-900 border border-slate-700 text-white focus:outline-none focus:border-amber-500"
+                        required
+                      />
+                    </div>
+
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="block text-[11px] font-semibold text-slate-400">
+                          Mô hình Whisper AI:
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActiveTab("tools");
+                            fetchSystemToolsStatus();
+                          }}
+                          className="text-[10px] text-amber-400 hover:underline flex items-center gap-1"
+                        >
+                          <Settings className="w-3 h-3" />
+                          <span>Quản lý mô hình</span>
+                        </button>
+                      </div>
+                      <select
+                        value={whisperModel}
+                        onChange={(e) => setWhisperModel(e.target.value)}
+                        className="w-full px-3 py-2 text-xs rounded-lg bg-slate-900 border border-slate-700 text-white focus:outline-none focus:border-amber-500"
+                      >
+                        {systemStatus?.models ? (
+                          systemStatus.models.map((m) => (
+                            <option key={m.id} value={m.id}>
+                              {m.name} ({m.isDownloaded ? `${m.sizeMb}MB - ✓ Sẵn sàng` : `${m.expectedSizeMb}MB - ✗ Chưa tải`})
+                            </option>
+                          ))
+                        ) : (
+                          <>
+                            <option value="small">Whisper Small (460MB - Khuyên dùng Tiếng Việt)</option>
+                            <option value="base">Whisper Base (140MB - Siêu nhanh)</option>
+                            <option value="large-v3-turbo">Whisper Large-v3-turbo (1.5GB - Tối tân nhất)</option>
+                            <option value="medium">Whisper Medium (1.5GB - Chuẩn xác)</option>
+                          </>
+                        )}
+                      </select>
+                      {systemStatus && !systemStatus.models.find((m) => m.id === whisperModel)?.isDownloaded && (
+                        <div className="mt-1.5 flex items-center justify-between text-[11px] text-amber-400 bg-amber-500/10 px-2 py-1 rounded border border-amber-500/20">
+                          <span>Chưa có file mô hình này trên máy.</span>
+                          <button
+                            type="button"
+                            onClick={() => handleDownloadModel(whisperModel)}
+                            disabled={isOperatingTools || systemStatus?.activeJob?.status === "running"}
+                            className="font-bold underline hover:text-amber-300"
+                          >
+                            Tải về ngay
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-[10px] text-slate-400 mb-1">
+                          Độ dài tối thiểu:
+                        </label>
+                        <input
+                          type="number"
+                          step="0.5"
+                          min="0.5"
+                          max="5"
+                          value={minDuration}
+                          onChange={(e) => setMinDuration(parseFloat(e.target.value) || 1.0)}
+                          className="w-full px-2 py-1.5 text-xs rounded-lg bg-slate-900 border border-slate-700 text-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] text-slate-400 mb-1">
+                          Độ dài tối đa:
+                        </label>
+                        <input
+                          type="number"
+                          step="1"
+                          min="5"
+                          max="20"
+                          value={maxDuration}
+                          onChange={(e) => setMaxDuration(parseFloat(e.target.value) || 12.0)}
+                          className="w-full px-2 py-1.5 text-xs rounded-lg bg-slate-900 border border-slate-700 text-white"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Submit Action */}
+                <div className="flex items-center justify-between pt-2">
+                  <div className="text-xs text-slate-400">
+                    {savedDatasets.length > 0 && (
+                      <span>Đã lưu {savedDatasets.length} bộ dữ liệu trên máy tính này.</span>
+                    )}
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={isProcessingDataset || !audioFile}
+                    className="inline-flex items-center gap-2 px-6 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 disabled:opacity-50 text-slate-950 text-xs font-bold transition-all shadow-md shadow-amber-500/20"
+                  >
+                    {isProcessingDataset ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                        <span>Đang Cắt & Phiên Âm Bằng Whisper.cpp...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Scissors className="w-4 h-4" />
+                        <span>Bắt Đầu Cắt & Phiên Âm Offline</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
+
+              {/* Feedback Alert */}
+              {datasetFeedback && (
+                <div
+                  className={`p-3.5 rounded-xl text-xs flex items-center gap-2.5 ${
+                    datasetFeedback.type === "success"
+                      ? "bg-emerald-500/10 border border-emerald-500/30 text-emerald-300"
+                      : datasetFeedback.type === "error"
+                      ? "bg-red-500/10 border border-red-500/30 text-red-300"
+                      : "bg-amber-500/10 border border-amber-500/30 text-amber-300 animate-pulse"
+                  }`}
+                >
+                  {datasetFeedback.type === "success" && <CheckCircle2 className="w-4 h-4 shrink-0" />}
+                  {datasetFeedback.type === "error" && <AlertTriangle className="w-4 h-4 shrink-0" />}
+                  {datasetFeedback.type === "info" && <RefreshCw className="w-4 h-4 shrink-0 animate-spin" />}
+                  <span>{datasetFeedback.message}</span>
+                </div>
+              )}
+
+              {/* Dataset Inspector & Editor */}
+              {currentDataset && (
+                <div className="p-5 rounded-2xl bg-slate-950/70 border border-slate-800 space-y-4">
+                  {/* Dataset Header Bar */}
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                          <FileArchive className="w-4 h-4 text-amber-400" />
+                          Bộ Dữ Liệu: {currentDataset.voiceName}
+                        </h3>
+                        <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-300">
+                          {currentDataset.totalClips} câu
+                        </span>
+                        <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-slate-800 text-amber-300">
+                          {currentDataset.totalDurationSec}s âm thanh
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-400 mt-0.5">
+                        File gốc: {currentDataset.originalAudioFilename} • Mô hình: {currentDataset.whisperModelUsed}
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-2 w-full sm:w-auto">
+                      <a
+                        href={`/api/dataset/${currentDataset.id}/export-zip`}
+                        download={`${currentDataset.id}_dataset.zip`}
+                        className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 text-slate-950 text-xs font-bold transition-all shadow-md shadow-amber-500/20"
+                      >
+                        <Download className="w-4 h-4" />
+                        <span>Tải Gói Dataset (.zip) Lên Colab</span>
+                      </a>
+                    </div>
+                  </div>
+
+                  {/* Sliced Audio Table */}
+                  <div className="overflow-x-auto max-h-[380px] rounded-xl border border-slate-800">
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead className="bg-slate-900/90 text-slate-400 sticky top-0 z-10 backdrop-blur-md">
+                        <tr>
+                          <th className="py-2.5 px-3 w-16 text-center">Nghe</th>
+                          <th className="py-2.5 px-3 w-24">ID</th>
+                          <th className="py-2.5 px-3 w-20">Thời lượng</th>
+                          <th className="py-2.5 px-3">Văn Bản Tiếng Việt (Bấm Để Chỉnh Sửa)</th>
+                          <th className="py-2.5 px-3 w-20 text-center">Xóa</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/60 bg-slate-950/40">
+                        {currentDataset.clips.map((clip) => {
+                          const isPlaying = playingClipId === clip.id;
+                          const isEditing = editingClipId === clip.id;
+
+                          return (
+                            <tr key={clip.id} className="hover:bg-slate-900/50 transition-colors">
+                              {/* Audio Play Button */}
+                              <td className="py-2 px-3 text-center">
+                                <button
+                                  type="button"
+                                  onClick={() => handlePlayClip(clip)}
+                                  className={`w-7 h-7 rounded-lg flex items-center justify-center transition-all ${
+                                    isPlaying
+                                      ? "bg-amber-500 text-slate-950 shadow-md shadow-amber-500/30 animate-pulse"
+                                      : "bg-slate-800 hover:bg-slate-700 text-slate-200"
+                                  }`}
+                                  title="Nghe thử câu này"
+                                >
+                                  {isPlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5 ml-0.5" />}
+                                </button>
+                              </td>
+
+                              {/* Clip ID */}
+                              <td className="py-2 px-3 font-mono text-[11px] text-slate-400">
+                                {clip.id}
+                              </td>
+
+                              {/* Duration */}
+                              <td className="py-2 px-3 font-mono text-[11px] text-slate-300">
+                                {clip.durationSec}s
+                              </td>
+
+                              {/* Text Edit Cell */}
+                              <td className="py-2 px-3">
+                                {isEditing ? (
+                                  <div className="flex items-center gap-1.5">
+                                    <input
+                                      type="text"
+                                      value={editingClipText}
+                                      onChange={(e) => setEditingClipText(e.target.value)}
+                                      onKeyDown={(e) => {
+                                        if (e.key === "Enter") handleSaveClipText(clip.id);
+                                        if (e.key === "Escape") setEditingClipId(null);
+                                      }}
+                                      autoFocus
+                                      className="flex-1 px-2.5 py-1 text-xs rounded-lg bg-slate-900 border border-amber-500 text-white focus:outline-none"
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={() => handleSaveClipText(clip.id)}
+                                      className="p-1 rounded bg-amber-500 text-slate-950 hover:bg-amber-400"
+                                      title="Lưu sửa đổi"
+                                    >
+                                      <Check className="w-3.5 h-3.5" />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setEditingClipId(null)}
+                                      className="p-1 rounded bg-slate-800 text-slate-400 hover:text-white"
+                                      title="Hủy"
+                                    >
+                                      <X className="w-3.5 h-3.5" />
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <div
+                                    onClick={() => {
+                                      setEditingClipId(clip.id);
+                                      setEditingClipText(clip.text);
+                                    }}
+                                    className="group flex items-center justify-between cursor-pointer py-1 px-1.5 rounded hover:bg-slate-800/60"
+                                    title="Nhấp đúp hoặc bấm để sửa chữ nhận diện sai"
+                                  >
+                                    <span className="text-slate-200">{clip.text}</span>
+                                    <Edit2 className="w-3 h-3 text-slate-500 group-hover:text-amber-400 opacity-0 group-hover:opacity-100 transition-opacity shrink-0 ml-2" />
+                                  </div>
+                                )}
+                              </td>
+
+                              {/* Delete Button */}
+                              <td className="py-2 px-3 text-center">
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteClip(clip.id)}
+                                  className="p-1 text-slate-500 hover:text-red-400 hover:bg-red-500/10 rounded transition-colors"
+                                  title="Xóa câu này"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Switch dataset footer */}
+                  {savedDatasets.length > 1 && (
+                    <div className="flex items-center gap-2 pt-2 text-xs text-slate-400">
+                      <span>Bộ dữ liệu khác:</span>
+                      <div className="flex flex-wrap gap-1.5">
+                        {savedDatasets.map((ds) => (
+                          <button
+                            key={ds.id}
+                            type="button"
+                            onClick={() => setCurrentDataset(ds)}
+                            className={`px-2.5 py-1 rounded-lg text-[11px] font-medium border transition-all ${
+                              currentDataset.id === ds.id
+                                ? "bg-amber-500/20 text-amber-300 border-amber-500/40"
+                                : "bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200"
+                            }`}
+                          >
+                            {ds.voiceName} ({ds.totalClips} câu)
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ============================================================== */}
+          {/* TAB: TOOLS & MODELS MANAGEMENT (OFFLINE SYSTEM)               */}
+          {/* ============================================================== */}
+          {activeTab === "tools" && (
+            <div className="space-y-6">
+              {/* Header Banner */}
+              <div className="p-5 rounded-2xl bg-gradient-to-r from-sky-500/10 via-indigo-500/10 to-transparent border border-sky-500/20 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                <div className="space-y-1">
+                  <h3 className="text-base font-bold text-white flex items-center gap-2">
+                    <HardDrive className="w-5 h-5 text-sky-400" />
+                    Quản Lý Công Cụ & Mô Hình Trực Tiếp Trên Hệ Thống
+                  </h3>
+                  <p className="text-xs text-slate-300 max-w-2xl leading-relaxed">
+                    Tất cả các tệp nhị phân nặng gồm <code>tools/whisper.cpp</code>, bộ thực thi và mô hình <code>.bin</code> (&gt;1.5GB) được vận hành trực tiếp trên máy của bạn và đã được loại trừ khỏi Git trong <code>.gitignore</code>. Bạn có thể thoải mái tải mô hình hoặc xóa giải phóng dung lượng bất cứ lúc nào mà Git repository vẫn luôn nhẹ (&lt;500KB) và sync tức thì!
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={fetchSystemToolsStatus}
+                    className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition-all"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5 text-sky-400" />
+                    <span>Làm mới trạng thái</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Active Background Job Card */}
+              {systemStatus?.activeJob && systemStatus.activeJob.status === "running" && (
+                <div className="p-5 rounded-2xl bg-sky-950/40 border border-sky-500/40 space-y-3 shadow-lg shadow-sky-500/10 animate-pulse">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2.5">
+                      <RefreshCw className="w-5 h-5 text-sky-400 animate-spin" />
+                      <h4 className="text-sm font-bold text-white">
+                        {systemStatus.activeJob.message}
+                      </h4>
+                    </div>
+                    <span className="text-xs font-mono font-bold text-sky-400">
+                      {systemStatus.activeJob.progressPercent}%
+                    </span>
+                  </div>
+
+                  {/* Progress Bar */}
+                  <div className="w-full bg-slate-800 rounded-full h-3 overflow-hidden border border-slate-700">
+                    <div
+                      className="bg-gradient-to-r from-sky-500 to-indigo-500 h-3 rounded-full transition-all duration-300"
+                      style={{ width: `${Math.max(5, systemStatus.activeJob.progressPercent)}%` }}
+                    />
+                  </div>
+
+                  {/* Log stream box */}
+                  {systemStatus.activeJob.logs.length > 0 && (
+                    <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 font-mono text-[11px] text-slate-400 max-h-24 overflow-y-auto space-y-1">
+                      {systemStatus.activeJob.logs.map((log, idx) => (
+                        <p key={idx} className="flex items-center gap-1.5">
+                          <span className="text-sky-500">›</span>
+                          <span>{log}</span>
+                        </p>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Tools Feedback Alert */}
+              {toolsFeedback && (
+                <div
+                  className={`p-3.5 rounded-xl text-xs flex items-center gap-2.5 ${
+                    toolsFeedback.type === "success"
+                      ? "bg-emerald-500/10 border border-emerald-500/30 text-emerald-300"
+                      : toolsFeedback.type === "error"
+                      ? "bg-red-500/10 border border-red-500/30 text-red-300"
+                      : "bg-sky-500/10 border border-sky-500/30 text-sky-300 animate-pulse"
+                  }`}
+                >
+                  {toolsFeedback.type === "success" && <CheckCircle2 className="w-4 h-4 shrink-0" />}
+                  {toolsFeedback.type === "error" && <AlertTriangle className="w-4 h-4 shrink-0" />}
+                  {toolsFeedback.type === "info" && <RefreshCw className="w-4 h-4 shrink-0 animate-spin" />}
+                  <span>{toolsFeedback.message}</span>
+                </div>
+              )}
+
+              {/* SECTION 1: WHISPER.CPP CORE ENGINE */}
+              <div className="p-5 rounded-2xl bg-slate-950/70 border border-slate-800 space-y-4">
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-slate-900 border border-slate-700 flex items-center justify-center text-sky-400">
+                      <Cpu className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                        Bộ Thực Thi Whisper.cpp (whisper-cli)
+                        {systemStatus?.isWhisperInstalled ? (
+                          <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                            ✓ Đã Cài Đặt
+                          </span>
+                        ) : (
+                          <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400 border border-amber-500/30">
+                            Chưa Khởi Tạo
+                          </span>
+                        )}
+                      </h4>
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        {systemStatus?.isWhisperInstalled
+                          ? `Đường dẫn: ${systemStatus.whisperCliPath}`
+                          : "Chưa có file thực thi. Cần khởi tạo để cắt lát âm thanh và phiên âm offline."}
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleInitWhisper}
+                    disabled={isOperatingTools || systemStatus?.activeJob?.status === "running"}
+                    className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 text-white text-xs font-bold transition-all shadow-md shadow-sky-500/20 disabled:opacity-50"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isOperatingTools ? "animate-spin" : ""}`} />
+                    <span>
+                      {systemStatus?.isWhisperInstalled
+                        ? "Biên dịch lại Whisper.cpp"
+                        : "Khởi tạo Whisper.cpp (1-Click)"}
+                    </span>
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+                  <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-800">
+                    <span className="text-slate-400 block text-[11px]">Vị trí mã nguồn:</span>
+                    <span className="font-mono text-slate-200 mt-0.5 block truncate">
+                      tools/whisper.cpp
+                    </span>
+                  </div>
+                  <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-800">
+                    <span className="text-slate-400 block text-[11px]">Trạng thái Git Sync:</span>
+                    <span className="text-emerald-400 mt-0.5 font-semibold flex items-center gap-1">
+                      <ShieldCheck className="w-3.5 h-3.5" />
+                      Đã loại trừ khỏi Git (.gitignore)
+                    </span>
+                  </div>
+                  <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-800">
+                    <span className="text-slate-400 block text-[11px]">Mô hình đã cài:</span>
+                    <span className="text-sky-400 font-bold mt-0.5 block">
+                      {systemStatus?.models.filter((m) => m.isDownloaded).length || 0} /{" "}
+                      {systemStatus?.models.length || 4} mô hình
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* SECTION 2: WHISPER GGML MODELS CATALOG */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                      <Layers className="w-4 h-4 text-amber-400" />
+                      Kho Mô Hình Whisper AI (GGML Binary Models)
+                    </h4>
+                    <p className="text-xs text-slate-400">
+                      Tải về máy để dùng hoàn toàn offline hoặc xóa để giải phóng dung lượng ổ đĩa.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {systemStatus?.models.map((model) => (
+                    <div
+                      key={model.id}
+                      className={`p-4 rounded-2xl border transition-all space-y-3 ${
+                        model.isDownloaded
+                          ? "bg-slate-950/80 border-emerald-500/30 shadow-lg shadow-emerald-500/5"
+                          : "bg-slate-950/40 border-slate-800"
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <h5 className="text-sm font-bold text-white">{model.name}</h5>
+                            {model.isDownloaded ? (
+                              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
+                                <Check className="w-3 h-3" />
+                                Đã có ({model.sizeMb}MB)
+                              </span>
+                            ) : (
+                              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700">
+                                Chưa tải (~{model.expectedSizeMb}MB)
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-xs text-slate-400 mt-1 leading-relaxed">
+                            {model.description}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between pt-2 border-t border-slate-800/60 text-xs">
+                        <span className="text-slate-500 font-mono text-[11px]">
+                          {model.filename}
+                        </span>
+
+                        <div className="flex items-center gap-2">
+                          {model.isDownloaded ? (
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteModel(model.id, model.name)}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-slate-400 hover:text-red-400 hover:bg-red-500/10 text-xs font-semibold transition-all border border-slate-800 hover:border-red-500/30"
+                              title="Xóa mô hình để giải phóng dung lượng đĩa"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              <span>Xóa giải phóng đĩa</span>
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => handleDownloadModel(model.id)}
+                              disabled={isOperatingTools || systemStatus?.activeJob?.status === "running"}
+                              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 text-slate-950 text-xs font-bold transition-all shadow-md shadow-amber-500/20 disabled:opacity-50"
+                            >
+                              <Download className="w-3.5 h-3.5" />
+                              <span>Tải về máy ({model.expectedSizeMb}MB)</span>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* SECTION 3: GIT SYNC & CLI GUIDE */}
+              <div className="p-4 rounded-xl bg-slate-950/40 border border-slate-800 space-y-2 text-xs">
+                <div className="flex items-center gap-2 text-slate-200 font-semibold">
+                  <GitBranch className="w-4 h-4 text-emerald-400" />
+                  <span>Cách Thức Hoạt Động Cùng Git & Lệnh Khởi Tạo Terminal:</span>
+                </div>
+                <p className="text-slate-400 leading-relaxed">
+                  Khi bạn đưa dự án này lên GitHub hoặc máy tính mới, chỉ cần chạy lệnh sau trên terminal để tự động tải và biên dịch Whisper.cpp:
+                </p>
+                <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-700 font-mono text-[11px] text-amber-300 flex items-center justify-between">
+                  <code>npm run init:tools</code>
+                  <span className="text-[10px] text-slate-400">hoặc dùng trực tiếp giao diện Web này</span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ============================================================== */}
+          {/* TAB 2: GUIDE & COLAB LAUNCH                                    */}
+          {/* ============================================================== */}
           {activeTab === "guide" && (
             <div className="space-y-6">
-              {/* Top Banner Actions */}
+              {/* Banner Top */}
               <div className="p-5 rounded-2xl bg-gradient-to-r from-amber-500/10 via-orange-500/10 to-transparent border border-amber-500/20 flex flex-col sm:flex-row items-center justify-between gap-4">
                 <div>
                   <h3 className="text-base font-bold text-white flex items-center gap-2">
                     <Sparkles className="w-4 h-4 text-amber-400" />
-                    File Google Colab Notebook Sẵn Sàng
+                    Huấn Luyện 1-Click Trên Google Colab (GPU T4 Miễn Phí)
                   </h3>
                   <p className="text-xs text-slate-300 mt-1 max-w-xl">
-                    Chạy trực tiếp trên trình duyệt, miễn phí GPU T4 của Google mà không cần cài đặt Python hay PyTorch trên máy tính của bạn.
+                    Notebook đã được tinh giản tối đa: <strong>không cần biên dịch Whisper.cpp</strong> và <strong>không cần tải model 1.5GB</strong> nữa. Khởi động trong 30 giây!
                   </p>
                 </div>
                 <div className="flex items-center gap-2.5 shrink-0 w-full sm:w-auto">
@@ -398,17 +1420,17 @@ export default function VoiceCloneModal({
                 </div>
               </div>
 
-              {/* 4-Step Visual Roadmap */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* 3-Step Clear Visual Workflow */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div className="p-4 rounded-xl bg-slate-950/60 border border-slate-800 space-y-2">
                   <div className="flex items-center gap-2">
                     <span className="w-6 h-6 rounded-lg bg-amber-500/20 text-amber-400 flex items-center justify-center font-bold text-xs">
                       1
                     </span>
-                    <h4 className="text-sm font-semibold text-white">Nạp Notebook & Bật GPU</h4>
+                    <h4 className="text-sm font-semibold text-white">Nạp .ipynb & Bật GPU</h4>
                   </div>
                   <p className="text-xs text-slate-400 leading-relaxed">
-                    Mở Google Colab ➔ Chọn <strong>Upload</strong> và tải file <code>Piper_Voice_Clone_Colab.ipynb</code> lên. Trên menu chọn <strong>Runtime ➔ Change runtime type ➔ T4 GPU</strong>.
+                    Mở Google Colab ➔ Chọn tab <strong>Upload</strong> và tải file <code>Piper_Voice_Clone_Colab.ipynb</code> lên. Trên menu chọn <strong>Runtime ➔ Change runtime type ➔ T4 GPU</strong>.
                   </p>
                 </div>
 
@@ -417,10 +1439,10 @@ export default function VoiceCloneModal({
                     <span className="w-6 h-6 rounded-lg bg-amber-500/20 text-amber-400 flex items-center justify-center font-bold text-xs">
                       2
                     </span>
-                    <h4 className="text-sm font-semibold text-white">Nhấn Chạy Cell để mở Web UI</h4>
+                    <h4 className="text-sm font-semibold text-white">Bấm Play Bước 1 & Bước 2</h4>
                   </div>
                   <p className="text-xs text-slate-400 leading-relaxed">
-                    Nhấn nút <strong>Play (▶️)</strong> ở ô Code. Sau 1 phút, Colab sẽ hiển thị một đường link Giao diện Web Gradio tiếng Việt ngay trong notebook hoặc mở tab mới.
+                    Bấm nút <strong>Play (▶️)</strong> ở ô Bước 1 (khoảng 30 giây để nạp Piper) và Bước 2 để mở giao diện Web Gradio ngay trong Colab.
                   </p>
                 </div>
 
@@ -429,334 +1451,325 @@ export default function VoiceCloneModal({
                     <span className="w-6 h-6 rounded-lg bg-amber-500/20 text-amber-400 flex items-center justify-center font-bold text-xs">
                       3
                     </span>
-                    <h4 className="text-sm font-semibold text-white">Upload Audio & Whisper Cắt Tự Động</h4>
+                    <h4 className="text-sm font-semibold text-white">Nạp dataset.zip & Xuất ONNX</h4>
                   </div>
                   <p className="text-xs text-slate-400 leading-relaxed">
-                    Tải lên file thu âm (MP3/WAV/M4A). Whisper AI sẽ tự động lọc tạp âm, cắt thành 50-150 câu ngắn và phiên âm tiếng Việt. Sau đó bấm <strong>Huấn luyện (Train)</strong>.
-                  </p>
-                </div>
-
-                <div className="p-4 rounded-xl bg-slate-950/60 border border-slate-800 space-y-2">
-                  <div className="flex items-center gap-2">
-                    <span className="w-6 h-6 rounded-lg bg-amber-500/20 text-amber-400 flex items-center justify-center font-bold text-xs">
-                      4
-                    </span>
-                    <h4 className="text-sm font-semibold text-white">Xuất ONNX & Kéo Thả Vào App</h4>
-                  </div>
-                  <p className="text-xs text-slate-400 leading-relaxed">
-                    Chuyển sang <strong>Tab 3 (Xuất ONNX)</strong> trên Colab, tải về 2 file: <code>.onnx</code> và <code>.onnx.json</code>. Mang sang <strong>Tab 2 bên cạnh</strong> kéo thả vào là xong!
+                    Kéo thả file <code>dataset.zip</code> (từ Tab 1) vào Colab, bấm <strong>Bắt đầu huấn luyện</strong>. Sau vài phút, bấm <strong>Xuất ONNX</strong> và tải 2 file về!
                   </p>
                 </div>
               </div>
 
-              {/* Tips for Best Quality */}
-              <div className="p-4 rounded-xl bg-blue-950/30 border border-blue-900/50 flex items-start gap-3">
-                <Info className="w-5 h-5 text-blue-400 shrink-0 mt-0.5" />
-                <div className="text-xs text-slate-300 space-y-1">
-                  <span className="font-semibold text-blue-200">Mẹo để giọng clone tự nhiên nhất:</span>
-                  <p>
-                    • Thời lượng audio lý tưởng: Từ <strong>15 đến 30 phút</strong> thu âm rõ tiếng, ít tiếng ồn môi trường.
-                  </p>
-                  <p>
-                    • Không cần đọc quá nhanh, giữ nhịp thở và ngữ điệu đều đặn.
-                  </p>
-                  <p>
-                    • Mô hình xuất ra là <strong>Piper ONNX VITS</strong> với bảng mã phoneme Tiếng Việt espeak-ng, chạy hoàn toàn offline 100% với tốc độ siêu nhanh (nhẹ chỉ ~40MB - 60MB).
-                  </p>
-                </div>
-              </div>
-
-              {/* Call to action to go to next tab */}
-              <div className="flex justify-end">
-                <button
-                  type="button"
-                  onClick={() => setActiveTab("upload")}
-                  className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold transition-all shadow-md shadow-amber-500/20"
-                >
-                  <span>Đã có file? Chuyển sang Nạp Giọng Mới</span>
-                  <ArrowRight className="w-4 h-4" />
-                </button>
+              {/* Tips for Best Results */}
+              <div className="p-4 rounded-xl bg-slate-950/40 border border-slate-800 space-y-2">
+                <h4 className="text-xs font-bold text-amber-400 uppercase tracking-wider">
+                  Mẹo Huấn Luyện Cho Chất Lượng Tốt Nhất:
+                </h4>
+                <ul className="text-xs text-slate-400 space-y-1.5 list-disc list-inside">
+                  <li>
+                    <strong>Dữ liệu âm thanh:</strong> Nên có từ 30 đến 100 câu thoại rõ chữ, không có nhạc nền hoặc tiếng quạt.
+                  </li>
+                  <li>
+                    <strong>Số epochs:</strong> Với mô hình gốc Tiếng Việt có sẵn, chỉ cần 20 - 30 epochs (khoảng 5 - 10 phút trên GPU T4) là mô hình đã bắt chước được chất giọng và ngữ điệu rất tốt.
+                  </li>
+                  <li>
+                    <strong>Kích thước file:</strong> File <code>.onnx</code> xuất ra nặng khoảng 50MB–80MB, chạy cực nhanh và mượt mà trên mọi máy tính cục bộ.
+                  </li>
+                </ul>
               </div>
             </div>
           )}
 
-          {/* TAB 2: UPLOAD & REGISTER MODEL */}
+          {/* ============================================================== */}
+          {/* TAB 3: UPLOAD TRAINED ONNX MODEL                               */}
+          {/* ============================================================== */}
           {activeTab === "upload" && (
-            <form onSubmit={handleUploadSubmit} className="space-y-6">
-              {/* Drag and Drop Zone */}
-              <div
-                onDragOver={handleDragOver}
-                onDrop={handleDrop}
-                onClick={() => fileInputRef.current?.click()}
-                className={`p-8 border-2 border-dashed rounded-2xl text-center cursor-pointer transition-all flex flex-col items-center justify-center ${
-                  onnxFile && jsonFile
-                    ? "border-emerald-500/50 bg-emerald-950/20"
-                    : "border-slate-700 hover:border-amber-500/50 bg-slate-950/40 hover:bg-slate-950/70"
-                }`}
-              >
-                <input
-                  type="file"
-                  ref={fileInputRef}
-                  multiple
-                  accept=".onnx,.json"
-                  onChange={(e) => handleFilesChosen(e.target.files)}
-                  className="hidden"
-                />
-
-                <div className="w-14 h-14 rounded-2xl bg-amber-500/10 text-amber-400 flex items-center justify-center mb-3">
-                  <UploadCloud className="w-7 h-7" />
-                </div>
-                <h4 className="text-sm font-semibold text-white">
-                  Kéo thả cặp file <span className="text-amber-400">.onnx</span> và <span className="text-amber-400">.onnx.json</span> vào đây
-                </h4>
-                <p className="text-xs text-slate-400 mt-1">
-                  Hoặc bấm vào để chọn file từ máy tính
+            <div className="space-y-6">
+              <div className="p-4 rounded-xl bg-slate-950/40 border border-slate-800 text-xs text-slate-300">
+                <p>
+                  Sau khi huấn luyện trên Google Colab xong, bạn tải về 2 file: <code>&lt;tên_giọng&gt;.onnx</code> và <code>&lt;tên_giọng&gt;.onnx.json</code>. Kéo thả cả 2 file vào khung bên dưới để nạp vào hệ thống.
                 </p>
-
-                {/* Status of picked files */}
-                <div className="flex flex-wrap items-center justify-center gap-3 mt-4">
-                  <div
-                    className={`px-3 py-1.5 rounded-lg text-xs font-mono flex items-center gap-2 border ${
-                      onnxFile
-                        ? "bg-emerald-950/40 border-emerald-500/40 text-emerald-300"
-                        : "bg-slate-900 border-slate-800 text-slate-500"
-                    }`}
-                  >
-                    <FileCode className="w-3.5 h-3.5" />
-                    <span>{onnxFile ? `${onnxFile.name} (${formatBytes(onnxFile.size)})` : "Chưa chọn file .onnx"}</span>
-                    {onnxFile && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />}
-                  </div>
-
-                  <div
-                    className={`px-3 py-1.5 rounded-lg text-xs font-mono flex items-center gap-2 border ${
-                      jsonFile
-                        ? "bg-emerald-950/40 border-emerald-500/40 text-emerald-300"
-                        : "bg-slate-900 border-slate-800 text-slate-500"
-                    }`}
-                  >
-                    <FileJson className="w-3.5 h-3.5" />
-                    <span>{jsonFile ? `${jsonFile.name} (${formatBytes(jsonFile.size)})` : "Chưa chọn file .onnx.json"}</span>
-                    {jsonFile && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />}
-                  </div>
-                </div>
               </div>
 
-              {/* Form Metadata Fields */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <label className="text-xs font-semibold text-slate-300">
-                    Mã định danh giọng (ID) <span className="text-rose-400">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={voiceIdInput}
-                    onChange={(e) => setVoiceIdInput(e.target.value)}
-                    placeholder="vd: giong_thuy_tien"
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-xs font-mono focus:border-amber-500 focus:outline-none"
-                  />
-                  <p className="text-[10px] text-slate-500">Chữ thường, không dấu, không khoảng trắng (vd: giong_anh_tuan)</p>
-                </div>
-
-                <div className="space-y-1.5">
-                  <label className="text-xs font-semibold text-slate-300">
-                    Tên hiển thị <span className="text-rose-400">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={voiceNameInput}
-                    onChange={(e) => setVoiceNameInput(e.target.value)}
-                    placeholder="vd: Thùy Tiên (Podcast)"
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-xs focus:border-amber-500 focus:outline-none"
-                  />
-                  <p className="text-[10px] text-slate-500">Tên xuất hiện trong bảng chọn giọng của Studio</p>
-                </div>
-
-                <div className="space-y-1.5">
-                  <label className="text-xs font-semibold text-slate-300">Giới tính</label>
-                  <div className="flex gap-4 pt-1">
-                    <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
-                      <input
-                        type="radio"
-                        name="gender"
-                        checked={genderInput === "female"}
-                        onChange={() => setGenderInput("female")}
-                        className="text-amber-500 focus:ring-amber-500"
-                      />
-                      <span>Nữ</span>
-                    </label>
-                    <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
-                      <input
-                        type="radio"
-                        name="gender"
-                        checked={genderInput === "male"}
-                        onChange={() => setGenderInput("male")}
-                        className="text-amber-500 focus:ring-amber-500"
-                      />
-                      <span>Nam</span>
-                    </label>
-                  </div>
-                </div>
-
-                <div className="space-y-1.5">
-                  <label className="text-xs font-semibold text-slate-300">Mô tả giọng đọc</label>
-                  <input
-                    type="text"
-                    value={descriptionInput}
-                    onChange={(e) => setDescriptionInput(e.target.value)}
-                    placeholder="vd: Giọng nữ trầm ấm, truyền cảm, thích hợp đọc truyện đêm"
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-xs focus:border-amber-500 focus:outline-none"
-                  />
-                </div>
-              </div>
-
-              {/* Feedback Alert */}
-              {uploadFeedback && (
+              <form onSubmit={handleUploadSubmit} className="space-y-5">
+                {/* Drag and Drop Zone */}
                 <div
-                  className={`p-3.5 rounded-xl flex items-center gap-3 text-xs ${
-                    uploadFeedback.type === "success"
-                      ? "bg-emerald-950/40 border border-emerald-500/40 text-emerald-300"
-                      : "bg-rose-950/40 border border-rose-500/40 text-rose-300"
-                  }`}
-                >
-                  {uploadFeedback.type === "success" ? (
-                    <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
-                  ) : (
-                    <AlertTriangle className="w-4 h-4 shrink-0 text-rose-400" />
-                  )}
-                  <span>{uploadFeedback.message}</span>
-                </div>
-              )}
-
-              {/* Submit Button */}
-              <div className="flex justify-end gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setOnnxFile(null);
-                    setJsonFile(null);
-                    setVoiceIdInput("");
-                    setVoiceNameInput("");
+                  onClick={() => modelFileInputRef.current?.click()}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    if (e.dataTransfer.files) {
+                      const files = e.dataTransfer.files;
+                      for (let i = 0; i < files.length; i++) {
+                        const f = files[i];
+                        if (f.name.endsWith(".onnx")) setOnnxFile(f);
+                        if (f.name.endsWith(".json")) setJsonFile(f);
+                      }
+                    }
                   }}
-                  className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition-all"
+                  className="border-2 border-dashed border-slate-700 hover:border-amber-500/50 bg-slate-950/40 rounded-2xl p-6 flex flex-col items-center justify-center text-center cursor-pointer transition-all hover:bg-slate-950/70"
                 >
-                  Xóa Lại
-                </button>
-                <button
-                  type="submit"
-                  disabled={uploading || !onnxFile || !jsonFile}
-                  className="inline-flex items-center gap-2 px-6 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 text-slate-950 text-xs font-bold transition-all shadow-md shadow-amber-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {uploading ? (
-                    <>
-                      <RefreshCw className="w-4 h-4 animate-spin" />
-                      <span>Đang nạp mô hình vào Studio...</span>
-                    </>
-                  ) : (
-                    <>
-                      <CheckCircle2 className="w-4 h-4" />
-                      <span>Nạp Giọng Vào Hệ Thống</span>
-                    </>
-                  )}
-                </button>
-              </div>
-            </form>
+                  <input
+                    ref={modelFileInputRef}
+                    type="file"
+                    multiple
+                    accept=".onnx,.json"
+                    className="hidden"
+                    onChange={(e) => {
+                      if (e.target.files) {
+                        const files = e.target.files;
+                        for (let i = 0; i < files.length; i++) {
+                          const f = files[i];
+                          if (f.name.endsWith(".onnx")) {
+                            setOnnxFile(f);
+                            if (!voiceNameInput) {
+                              const raw = f.name.replace(/\.onnx$/i, "").replace(/[_-]/g, " ");
+                              setVoiceNameInput(raw.charAt(0).toUpperCase() + raw.slice(1));
+                              setVoiceIdInput(f.name.replace(/\.onnx$/i, "").toLowerCase());
+                            }
+                          }
+                          if (f.name.endsWith(".json")) setJsonFile(f);
+                        }
+                      }
+                    }}
+                  />
+
+                  <div className="flex items-center gap-6 mb-3">
+                    <div
+                      className={`p-3 rounded-xl border flex flex-col items-center gap-1.5 transition-all ${
+                        onnxFile
+                          ? "bg-emerald-500/15 border-emerald-500/40 text-emerald-400"
+                          : "bg-slate-900 border-slate-800 text-slate-400"
+                      }`}
+                    >
+                      <FileCode className="w-6 h-6" />
+                      <span className="text-[11px] font-semibold">
+                        {onnxFile ? onnxFile.name : "File .onnx"}
+                      </span>
+                    </div>
+
+                    <div
+                      className={`p-3 rounded-xl border flex flex-col items-center gap-1.5 transition-all ${
+                        jsonFile
+                          ? "bg-emerald-500/15 border-emerald-500/40 text-emerald-400"
+                          : "bg-slate-900 border-slate-800 text-slate-400"
+                      }`}
+                    >
+                      <FileJson className="w-6 h-6" />
+                      <span className="text-[11px] font-semibold">
+                        {jsonFile ? jsonFile.name : "File .onnx.json"}
+                      </span>
+                    </div>
+                  </div>
+
+                  <p className="text-xs font-semibold text-slate-200">
+                    Kéo thả cả 2 file <code>.onnx</code> và <code>.onnx.json</code> vào đây
+                  </p>
+                  <p className="text-[11px] text-slate-500 mt-1">hoặc nhấp chuột để chọn từ máy tính</p>
+                </div>
+
+                {/* Form Fields */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1">
+                      Tên Hiển Thị Của Giọng:
+                    </label>
+                    <input
+                      type="text"
+                      value={voiceNameInput}
+                      onChange={(e) => setVoiceNameInput(e.target.value)}
+                      placeholder="VD: Hoàng Nam (Clone), Lan Anh Voice"
+                      className="w-full px-3 py-2 text-xs rounded-xl bg-slate-950 border border-slate-700 text-white focus:outline-none focus:border-amber-500"
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1">
+                      Mã Định Danh (Voice ID):
+                    </label>
+                    <input
+                      type="text"
+                      value={voiceIdInput}
+                      onChange={(e) => setVoiceIdInput(e.target.value)}
+                      placeholder="VD: hoang_nam_voice"
+                      className="w-full px-3 py-2 text-xs rounded-xl bg-slate-950 border border-slate-700 text-white focus:outline-none focus:border-amber-500 font-mono"
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1">
+                      Giới Tính:
+                    </label>
+                    <select
+                      value={genderInput}
+                      onChange={(e) => setGenderInput(e.target.value as any)}
+                      className="w-full px-3 py-2 text-xs rounded-xl bg-slate-950 border border-slate-700 text-white focus:outline-none focus:border-amber-500"
+                    >
+                      <option value="female">Nữ (Female)</option>
+                      <option value="male">Nam (Male)</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1">
+                      Mô Tả / Ghi Chú:
+                    </label>
+                    <input
+                      type="text"
+                      value={descriptionInput}
+                      onChange={(e) => setDescriptionInput(e.target.value)}
+                      placeholder="VD: Giọng đọc ấm áp, truyền cảm hứng"
+                      className="w-full px-3 py-2 text-xs rounded-xl bg-slate-950 border border-slate-700 text-white focus:outline-none focus:border-amber-500"
+                    />
+                  </div>
+                </div>
+
+                {/* Upload Feedback */}
+                {uploadFeedback && (
+                  <div
+                    className={`p-3.5 rounded-xl text-xs flex items-center gap-2.5 ${
+                      uploadFeedback.type === "success"
+                        ? "bg-emerald-500/10 border border-emerald-500/30 text-emerald-300"
+                        : "bg-red-500/10 border border-red-500/30 text-red-300"
+                    }`}
+                  >
+                    {uploadFeedback.type === "success" ? (
+                      <CheckCircle2 className="w-4 h-4 shrink-0" />
+                    ) : (
+                      <AlertTriangle className="w-4 h-4 shrink-0" />
+                    )}
+                    <span>{uploadFeedback.message}</span>
+                  </div>
+                )}
+
+                {/* Submit Button */}
+                <div className="flex justify-end pt-2">
+                  <button
+                    type="submit"
+                    disabled={uploading || !onnxFile || !jsonFile}
+                    className="inline-flex items-center gap-2 px-6 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 disabled:opacity-50 text-slate-950 text-xs font-bold transition-all shadow-md shadow-amber-500/20"
+                  >
+                    {uploading ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                        <span>Đang Nạp Mô Hình Vào Hệ Thống...</span>
+                      </>
+                    ) : (
+                      <>
+                        <UploadCloud className="w-4 h-4" />
+                        <span>Nạp Giọng Vào Hệ Thống</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
+            </div>
           )}
 
-          {/* TAB 3: MANAGE INSTALLED CUSTOM VOICES */}
+          {/* ============================================================== */}
+          {/* TAB 4: MANAGE INSTALLED VOICES                                 */}
+          {/* ============================================================== */}
           {activeTab === "manage" && (
             <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h4 className="text-sm font-bold text-white">Danh Sách Giọng Đọc Tùy Chỉnh Đã Cài</h4>
-                  <p className="text-xs text-slate-400">
-                    Các giọng đọc này được lưu offline trong thư mục <code>models/</code> của máy chủ
-                  </p>
-                </div>
+              <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                <p className="text-xs text-slate-400">
+                  Danh sách giọng đọc tùy chỉnh đã được cài đặt và lưu trữ trong thư mục <code>models/</code> của máy chủ.
+                </p>
                 <button
                   type="button"
                   onClick={fetchCustomVoices}
-                  disabled={loadingCustom}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition-all"
+                  className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors"
+                  title="Làm mới danh sách"
                 >
-                  <RefreshCw className={`w-3.5 h-3.5 ${loadingCustom ? "animate-spin" : ""}`} />
-                  <span>Làm mới</span>
+                  <RefreshCw className={`w-4 h-4 ${loadingCustom ? "animate-spin" : ""}`} />
                 </button>
               </div>
 
-              {loadingCustom ? (
-                <div className="py-12 text-center text-slate-400 text-xs flex flex-col items-center gap-2">
-                  <RefreshCw className="w-5 h-5 animate-spin text-amber-400" />
-                  <span>Đang tải danh sách giọng tùy chỉnh...</span>
-                </div>
-              ) : customVoices.length === 0 ? (
-                <div className="py-12 text-center rounded-2xl bg-slate-950/40 border border-slate-800/80 p-8 space-y-3">
-                  <div className="w-12 h-12 rounded-xl bg-slate-800 text-slate-500 mx-auto flex items-center justify-center">
-                    <Headphones className="w-6 h-6" />
-                  </div>
-                  <h5 className="text-sm font-semibold text-slate-300">Chưa có giọng tùy chỉnh nào</h5>
-                  <p className="text-xs text-slate-500 max-w-md mx-auto">
-                    Bạn có thể làm theo hướng dẫn ở Tab 1 để huấn luyện trên Google Colab, sau đó nạp file vào Tab 2 để sử dụng.
+              {customVoices.length === 0 ? (
+                <div className="p-8 text-center rounded-2xl bg-slate-950/40 border border-slate-800 space-y-3">
+                  <Layers className="w-10 h-10 text-slate-600 mx-auto" />
+                  <p className="text-sm font-semibold text-slate-300">Chưa có giọng tùy chỉnh nào</p>
+                  <p className="text-xs text-slate-500 max-w-sm mx-auto">
+                    Hãy chuẩn bị dữ liệu ở Tab 1, đưa lên Google Colab huấn luyện ở Tab 2, sau đó nạp file .onnx ở Tab 3.
                   </p>
                   <button
                     type="button"
-                    onClick={() => setActiveTab("guide")}
-                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/30 hover:bg-amber-500/20 text-xs font-semibold transition-all"
+                    onClick={() => setActiveTab("dataset")}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 text-xs font-semibold transition-all border border-amber-500/30"
                   >
-                    <span>Xem Hướng Dẫn Huấn Luyện</span>
+                    <span>Chuẩn bị dữ liệu ngay</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
                   </button>
                 </div>
               ) : (
-                <div className="grid grid-cols-1 gap-3">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {customVoices.map((voice) => {
                     const isTesting = testingVoiceId === voice.id && audioTesting;
+
                     return (
                       <div
                         key={voice.id}
-                        className="p-4 rounded-xl bg-slate-950/70 border border-slate-800 hover:border-slate-700 transition-all flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4"
+                        className="p-4 rounded-xl bg-slate-950/60 border border-slate-800 hover:border-slate-700 transition-all space-y-3"
                       >
-                        <div className="space-y-1 min-w-0">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="font-bold text-sm text-white">{voice.name}</span>
-                            <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400 border border-amber-500/30">
-                              {voice.gender === "female" ? "Nữ" : "Nam"}
-                            </span>
-                            <span className="text-[10px] text-slate-400 font-mono">
-                              {voice.modelId}
-                            </span>
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <h4 className="text-sm font-bold text-white">{voice.name}</h4>
+                              <span
+                                className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+                                  voice.gender === "female"
+                                    ? "bg-rose-500/15 text-rose-400 border border-rose-500/30"
+                                    : "bg-sky-500/15 text-sky-400 border border-sky-500/30"
+                                }`}
+                              >
+                                {voice.gender === "female" ? "Nữ" : "Nam"}
+                              </span>
+                            </div>
+                            <p className="text-[11px] font-mono text-slate-400 mt-0.5">
+                              ID: {voice.modelId}
+                            </p>
                           </div>
-                          <p className="text-xs text-slate-400 truncate max-w-lg">
-                            {voice.description || "Giọng đọc AI tùy chỉnh"}
-                          </p>
-                          <div className="flex items-center gap-3 text-[11px] text-slate-500 font-mono">
-                            <span>File: {voice.onnxFile}</span>
-                            <span>•</span>
-                            <span>Dung lượng: {formatBytes(voice.fileSizeBytes)}</span>
-                          </div>
-                        </div>
-
-                        <div className="flex items-center gap-2 shrink-0 w-full sm:w-auto justify-end">
-                          <button
-                            type="button"
-                            onClick={() => handleTestVoice(voice)}
-                            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${
-                              isTesting
-                                ? "bg-amber-500 text-slate-950 font-bold"
-                                : "bg-slate-800 hover:bg-slate-700 text-slate-200"
-                            }`}
-                          >
-                            {isTesting ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5 text-amber-400" />}
-                            <span>{isTesting ? "Đang phát..." : "Nghe thử"}</span>
-                          </button>
 
                           <button
                             type="button"
                             onClick={() => handleDeleteVoice(voice.id, voice.name)}
-                            className="p-2 text-rose-400 hover:text-rose-200 hover:bg-rose-950/50 rounded-xl transition-all"
+                            className="p-1.5 text-slate-500 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors"
                             title="Xóa giọng này"
                           >
                             <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+
+                        {voice.description && (
+                          <p className="text-xs text-slate-400">{voice.description}</p>
+                        )}
+
+                        <div className="flex items-center justify-between pt-2 border-t border-slate-800/60 text-[11px]">
+                          <span className="text-slate-500 font-mono">
+                            {voice.fileSizeBytes ? `${(voice.fileSizeBytes / (1024 * 1024)).toFixed(1)} MB` : "ONNX"}
+                          </span>
+
+                          <button
+                            type="button"
+                            onClick={() => handleTestVoice(voice)}
+                            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                              isTesting
+                                ? "bg-amber-500 text-slate-950 shadow-md shadow-amber-500/30"
+                                : "bg-slate-800 hover:bg-slate-700 text-slate-200"
+                            }`}
+                          >
+                            {isTesting ? (
+                              <>
+                                <Pause className="w-3.5 h-3.5" />
+                                <span>Dừng Thử</span>
+                              </>
+                            ) : (
+                              <>
+                                <Volume2 className="w-3.5 h-3.5" />
+                                <span>Phát Âm Thử</span>
+                              </>
+                            )}
                           </button>
                         </div>
                       </div>
@@ -766,21 +1779,6 @@ export default function VoiceCloneModal({
               )}
             </div>
           )}
-        </div>
-
-        {/* Footer */}
-        <div className="px-6 py-3.5 border-t border-slate-800 bg-slate-950/60 flex items-center justify-between text-xs text-slate-400">
-          <div className="flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-            <span>Piper TTS Native VITS • 22,050 Hz Mono • 100% Offline</span>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="px-4 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium transition-all"
-          >
-            Đóng
-          </button>
         </div>
       </div>
     </div>

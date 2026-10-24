@@ -4,7 +4,7 @@
     "experimentalDecorators": true,
     "useDefineForClassFields": false,
     "module": "ESNext",
-    "types": ["vite/client"],
+    "types": ["vite/client", "node"],
     "lib": [
       "ES2022",
       "DOM",
@@ -23,5 +23,7 @@
     },
     "allowImportingTsExtensions": true,
     "noEmit": true
-  }
+  },
+  "include": ["src/**/*", "server.ts", "datasetManager.ts", "customVoiceManager.ts", "voice-catalog.ts", "bgmService.ts", "bgmModelManager.ts", "storyVideoExporter.ts"],
+  "exclude": ["node_modules", "dist", "tools/**/*", "datasets_storage/**/*", "jobs_storage/**/*", "stories_storage/**/*", "piper_workspace/**/*"]
 }

@@ -9,6 +9,7 @@
     "start": "tsx server.ts",
     "preview": "vite preview",
     "clean": "node -e \"const fs=require('fs'); fs.rmSync('dist',{recursive:true,force:true}); fs.rmSync('jobs_storage',{recursive:true,force:true});\"",
+    "init:tools": "tsx scripts/init_whisper.ts",
     "postinstall": "node scripts/patch-piper.js",
     "lint": "tsc --noEmit"
   },

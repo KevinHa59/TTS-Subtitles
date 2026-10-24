@@ -43,6 +43,21 @@ import {
   deleteCustomVoice,
   loadCustomVoices,
 } from "./customVoiceManager";
+import {
+  prepareOfflineDataset,
+  listDatasets,
+  getDataset,
+  updateDatasetClip,
+  deleteDataset,
+  createDatasetZip,
+  getAvailableWhisperModels,
+} from "./datasetManager";
+import {
+  getSystemToolsStatus,
+  startCompileWhisperCpp,
+  startDownloadWhisperModel,
+  deleteWhisperModel,
+} from "./systemToolsManager";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -3162,6 +3177,198 @@ app.delete("/api/models/custom/:id", (req: Request, res: Response) => {
     modelCache.delete(req.params.id);
 
     res.json({ success: true, message: "Đã xóa giọng tùy chỉnh thành công." });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ==========================================
+// SYSTEM OFFLINE TOOLS & MODELS INITIALIZATION
+// ==========================================
+
+// Get system tools status (Whisper.cpp compilation & GGML models downloaded)
+app.get("/api/system/tools-status", (_req: Request, res: Response) => {
+  try {
+    const status = getSystemToolsStatus();
+    res.json({ success: true, ...status });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Start Whisper.cpp compilation/initialization
+app.post("/api/system/init-whisper", async (_req: Request, res: Response) => {
+  try {
+    await startCompileWhisperCpp();
+    res.json({ success: true, message: "Đã bắt đầu khởi tạo Whisper.cpp." });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Start downloading a specific Whisper GGML model
+app.post("/api/system/download-whisper-model", async (req: Request, res: Response) => {
+  try {
+    const { modelId } = req.body || {};
+    if (!modelId) {
+      return res.status(400).json({ error: "Thiếu modelId cần tải." });
+    }
+    await startDownloadWhisperModel(modelId);
+    res.json({ success: true, message: `Bắt đầu tải mô hình ${modelId}.` });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Delete Whisper GGML model from disk
+app.delete("/api/system/whisper-model/:modelId", (req: Request, res: Response) => {
+  try {
+    const ok = deleteWhisperModel(req.params.modelId);
+    if (!ok) {
+      return res.status(404).json({ error: "Không tìm thấy file mô hình để xóa." });
+    }
+    res.json({ success: true, message: "Đã xóa mô hình khỏi hệ thống thành công." });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ==========================================
+// OFFLINE DATASET PREPARATION (WHISPER.CPP)
+// ==========================================
+
+// Get available Whisper models
+app.get("/api/dataset/models", (_req: Request, res: Response) => {
+  try {
+    const models = getAvailableWhisperModels();
+    res.json({ success: true, models });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// List all prepared datasets
+app.get("/api/dataset/list", (_req: Request, res: Response) => {
+  try {
+    const datasets = listDatasets();
+    res.json({ success: true, datasets });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Prepare offline dataset from uploaded audio
+app.post("/api/dataset/prepare", async (req: Request, res: Response) => {
+  try {
+    const {
+      audioBase64,
+      originalFilename = "audio.wav",
+      voiceName = "giong_moi",
+      whisperModel = "small",
+      minDuration = 1.0,
+      maxDuration = 12.0,
+    } = req.body || {};
+
+    if (!audioBase64) {
+      return res.status(400).json({ error: "Vui lòng chọn hoặc tải lên file âm thanh." });
+    }
+
+    const audioBuffer = Buffer.from(audioBase64, "base64");
+    if (audioBuffer.length < 1000) {
+      return res.status(400).json({ error: "File âm thanh không hợp lệ hoặc quá nhỏ." });
+    }
+
+    console.log(
+      `[OfflineDataset] Bắt đầu cắt và nhận diện bằng Whisper.cpp (${whisperModel}) cho giọng "${voiceName}"...`
+    );
+
+    const datasetInfo = await prepareOfflineDataset(
+      audioBuffer,
+      originalFilename,
+      voiceName,
+      whisperModel,
+      Number(minDuration) || 1.0,
+      Number(maxDuration) || 12.0
+    );
+
+    console.log(
+      `[OfflineDataset] Đã tạo thành công ${datasetInfo.totalClips} câu (${datasetInfo.totalDurationSec}s) cho "${datasetInfo.voiceName}"!`
+    );
+
+    res.json({ success: true, dataset: datasetInfo });
+  } catch (err: any) {
+    console.error("[OfflineDataset] Lỗi tạo dataset:", err);
+    res.status(500).json({ error: err.message || "Lỗi khi xử lý âm thanh bằng Whisper.cpp." });
+  }
+});
+
+// Get specific dataset
+app.get("/api/dataset/:datasetId", (req: Request, res: Response) => {
+  try {
+    const info = getDataset(req.params.datasetId);
+    if (!info) {
+      return res.status(404).json({ error: "Không tìm thấy dataset." });
+    }
+    res.json({ success: true, dataset: info });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Stream clip audio for web preview
+app.get("/api/dataset/:datasetId/audio/:filename", (req: Request, res: Response) => {
+  try {
+    const cleanDatasetId = req.params.datasetId.replace(/[^a-zA-Z0-9_-]/g, "");
+    const cleanFilename = req.params.filename.replace(/[^a-zA-Z0-9_.-]/g, "");
+    const clipPath = path.resolve(__dirname, "datasets_storage", cleanDatasetId, "wav", cleanFilename);
+
+    if (!fs.existsSync(clipPath)) {
+      return res.status(404).send("File audio clip không tồn tại.");
+    }
+
+    res.setHeader("Content-Type", "audio/wav");
+    fs.createReadStream(clipPath).pipe(res);
+  } catch (err: any) {
+    res.status(500).send("Lỗi đọc file clip audio.");
+  }
+});
+
+// Update clip text or delete clip
+app.post("/api/dataset/:datasetId/clip", (req: Request, res: Response) => {
+  try {
+    const { clipId, text, shouldDelete } = req.body || {};
+    if (!clipId) {
+      return res.status(400).json({ error: "Thiếu clipId." });
+    }
+
+    const updated = updateDatasetClip(req.params.datasetId, clipId, text, !!shouldDelete);
+    res.json({ success: true, dataset: updated });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Export dataset as ZIP for Google Colab
+app.get("/api/dataset/:datasetId/export-zip", (req: Request, res: Response) => {
+  try {
+    const zipPath = createDatasetZip(req.params.datasetId);
+    const filename = `${req.params.datasetId}_dataset.zip`;
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    fs.createReadStream(zipPath).pipe(res);
+  } catch (err: any) {
+    res.status(500).send(`Lỗi tạo file zip: ${err.message}`);
+  }
+});
+
+// Delete dataset
+app.delete("/api/dataset/:datasetId", (req: Request, res: Response) => {
+  try {
+    const ok = deleteDataset(req.params.datasetId);
+    if (!ok) {
+      return res.status(404).json({ error: "Không tìm thấy dataset để xóa." });
+    }
+    res.json({ success: true, message: "Đã xóa dataset thành công." });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
