@@ -1,9 +1,10 @@
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { spawn } from "child_process";
+import { spawn, execSync } from "child_process";
 import https from "https";
 import http from "http";
+import AdmZip from "adm-zip";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -84,16 +85,48 @@ let currentJob: SystemJobStatus = {
   startTime: Date.now(),
 };
 
-export function getWhisperCliPath(): string | null {
-  const candidates = [
-    path.resolve(WHISPER_DIR, "build", "bin", "whisper-cli"),
-    path.resolve(WHISPER_DIR, "build", "bin", "main"),
-    path.resolve(WHISPER_DIR, "main"),
-    "whisper-cli",
-  ];
-  for (const c of candidates) {
-    if (fs.existsSync(c)) return c;
+function commandExists(cmd: string): boolean {
+  try {
+    const isWin = process.platform === "win32";
+    const testCmd = isWin ? `where ${cmd}` : `which ${cmd}`;
+    execSync(testCmd, { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
   }
+}
+
+export function getWhisperCliPath(): string | null {
+  const isWin = process.platform === "win32";
+  const names = isWin
+    ? ["whisper-cli.exe", "main.exe", "whisper-cli", "main"]
+    : ["whisper-cli", "main", "whisper-cli.exe", "main.exe"];
+
+  const searchDirs = [
+    path.resolve(WHISPER_DIR, "build", "bin"),
+    path.resolve(WHISPER_DIR, "build", "bin", "Release"),
+    path.resolve(WHISPER_DIR, "bin"),
+    WHISPER_DIR,
+    path.resolve(TOOLS_DIR, "bin"),
+    TOOLS_DIR,
+  ];
+
+  for (const dir of searchDirs) {
+    for (const name of names) {
+      const full = path.resolve(dir, name);
+      if (fs.existsSync(full)) return full;
+    }
+  }
+
+  // Check system PATH
+  for (const name of names) {
+    try {
+      const checkCmd = isWin ? `where ${name}` : `which ${name}`;
+      const found = execSync(checkCmd, { stdio: "pipe" }).toString().trim().split("\n")[0];
+      if (found && fs.existsSync(found)) return found;
+    } catch {}
+  }
+
   return null;
 }
 
@@ -156,7 +189,8 @@ function runProcessAsync(
   onLine: (line: string) => void
 ): Promise<void> {
   return new Promise((resolve, reject) => {
-    const proc = spawn(cmd, args, { cwd });
+    const isWin = process.platform === "win32";
+    const proc = spawn(cmd, args, { cwd, shell: isWin });
     let stdoutBuffer = "";
     let stderrBuffer = "";
 
@@ -208,48 +242,56 @@ function downloadFileWithProgress(
 
       const client = currentUrl.startsWith("https") ? https : http;
       client
-        .get(currentUrl, (response) => {
-          if (
-            response.statusCode &&
-            response.statusCode >= 300 &&
-            response.statusCode < 400 &&
-            response.headers.location
-          ) {
-            const nextUrl = response.headers.location.startsWith("http")
-              ? response.headers.location
-              : new URL(response.headers.location, currentUrl).toString();
-            response.resume();
-            return makeRequest(nextUrl, redirectCount + 1);
-          }
-
-          if (response.statusCode !== 200) {
-            response.resume();
-            return reject(new Error(`Tải về thất bại, mã HTTP: ${response.statusCode}`));
-          }
-
-          const totalBytes = parseInt(response.headers["content-length"] || "0", 10);
-          let receivedBytes = 0;
-
-          const fileStream = fs.createWriteStream(destPath);
-
-          response.on("data", (chunk) => {
-            receivedBytes += chunk.length;
-            if (totalBytes > 0) {
-              onProgress(receivedBytes, totalBytes);
+        .get(
+          currentUrl,
+          {
+            headers: {
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) PiperTTSStudio/1.0",
+            },
+          },
+          (response) => {
+            if (
+              response.statusCode &&
+              response.statusCode >= 300 &&
+              response.statusCode < 400 &&
+              response.headers.location
+            ) {
+              const nextUrl = response.headers.location.startsWith("http")
+                ? response.headers.location
+                : new URL(response.headers.location, currentUrl).toString();
+              response.resume();
+              return makeRequest(nextUrl, redirectCount + 1);
             }
-          });
 
-          response.pipe(fileStream);
+            if (response.statusCode !== 200) {
+              response.resume();
+              return reject(new Error(`Tải về thất bại, mã HTTP: ${response.statusCode}`));
+            }
 
-          fileStream.on("finish", () => {
-            fileStream.close(() => resolve());
-          });
+            const totalBytes = parseInt(response.headers["content-length"] || "0", 10);
+            let receivedBytes = 0;
 
-          fileStream.on("error", (err) => {
-            fs.unlink(destPath, () => {});
-            reject(err);
-          });
-        })
+            const fileStream = fs.createWriteStream(destPath);
+
+            response.on("data", (chunk) => {
+              receivedBytes += chunk.length;
+              if (totalBytes > 0) {
+                onProgress(receivedBytes, totalBytes);
+              }
+            });
+
+            response.pipe(fileStream);
+
+            fileStream.on("finish", () => {
+              fileStream.close(() => resolve());
+            });
+
+            fileStream.on("error", (err) => {
+              fs.unlink(destPath, () => {});
+              reject(err);
+            });
+          }
+        )
         .on("error", (err) => {
           fs.unlink(destPath, () => {});
           reject(err);
@@ -358,7 +400,7 @@ export function deleteWhisperModel(modelId: string): boolean {
   return false;
 }
 
-// Clone & Compile Whisper.cpp with Non-blocking child process and real-time percentage
+// Clone & Compile or Download Precompiled Whisper.cpp binary
 export async function startCompileWhisperCpp(forceRebuild = false): Promise<boolean> {
   if (currentJob.status === "running") {
     throw new Error(`Hệ thống đang bận: ${currentJob.message}`);
@@ -395,6 +437,121 @@ export async function startCompileWhisperCpp(forceRebuild = false): Promise<bool
     return true;
   }
 
+  const isWindows = process.platform === "win32";
+  const hasCmake = commandExists("cmake");
+
+  // On Windows, or if CMake is not installed on the system, download official prebuilt binary release!
+  if (isWindows || !hasCmake) {
+    currentJob = {
+      id: `install_whisper_${Date.now()}`,
+      type: "compile_whisper",
+      target: "whisper.cpp",
+      status: "running",
+      progressPercent: 5,
+      message: isWindows
+        ? "[5%] Đang chuẩn bị tải gói nhị phân chính thức cho Windows (8.5MB, không cần CMake/C++)..."
+        : "[5%] Không tìm thấy CMake, đang tải gói nhị phân chính thức...",
+      logs: [
+        isWindows
+          ? "Hệ điều hành Windows phát hiện: Tải trực tiếp gói whisper-bin-x64 chính thức từ GitHub (không cần cài Visual Studio/CMake)."
+          : "Hệ thống chưa có CMake: Chuyển sang tải gói nhị phân đã biên dịch sẵn.",
+      ],
+      startTime: Date.now(),
+    };
+
+    (async () => {
+      try {
+        const binDir = path.resolve(WHISPER_DIR, "build", "bin");
+        if (!fs.existsSync(binDir)) {
+          fs.mkdirSync(binDir, { recursive: true });
+        }
+
+        const winZipUrl =
+          "https://github.com/ggml-org/whisper.cpp/releases/download/b5127/whisper-bin-x64.zip";
+        const tempZip = path.resolve(TOOLS_DIR, "whisper-bin-temp.zip");
+
+        currentJob.progressPercent = 15;
+        currentJob.message = "[15%] Đang tải gói Whisper.cpp chính thức (~8.5MB)...";
+        currentJob.logs.push(`Đang tải từ: ${winZipUrl}`);
+
+        await downloadFileWithProgress(winZipUrl, tempZip, (received, total) => {
+          const percent = total > 0 ? Math.min(100, Math.round((received / total) * 100)) : 50;
+          const dlMb = Math.round((received / (1024 * 1024)) * 10) / 10;
+          const totMb = Math.round((total / (1024 * 1024)) * 10) / 10;
+          const overallPercent = 15 + Math.round((percent * 70) / 100);
+
+          currentJob.progressPercent = overallPercent;
+          currentJob.message = `[${overallPercent}%] Đang tải whisper-bin: ${dlMb}MB / ${totMb}MB (${percent}%)`;
+        });
+
+        currentJob.progressPercent = 88;
+        currentJob.message = "[88%] Đang giải nén bộ thực thi và thư viện dll...";
+        currentJob.logs.push("Giải nén các tệp thực thi vào thư mục tools/whisper.cpp/build/bin/...");
+
+        const zip = new AdmZip(tempZip);
+        const tempExtractDir = path.resolve(TOOLS_DIR, "whisper_extracted");
+        if (fs.existsSync(tempExtractDir)) {
+          fs.rmSync(tempExtractDir, { recursive: true, force: true });
+        }
+        fs.mkdirSync(tempExtractDir, { recursive: true });
+        zip.extractAllTo(tempExtractDir, true);
+
+        // Copy files from Release/ or root to binDir and WHISPER_DIR
+        const releaseDir = path.resolve(tempExtractDir, "Release");
+        const srcDir = fs.existsSync(releaseDir) ? releaseDir : tempExtractDir;
+        const files = fs.readdirSync(srcDir);
+
+        for (const file of files) {
+          const srcFile = path.resolve(srcDir, file);
+          const destFile = path.resolve(binDir, file);
+          const destRootFile = path.resolve(WHISPER_DIR, file);
+          try {
+            fs.copyFileSync(srcFile, destFile);
+            fs.copyFileSync(srcFile, destRootFile);
+          } catch {}
+        }
+
+        // Clean temp files
+        try {
+          fs.unlinkSync(tempZip);
+          fs.rmSync(tempExtractDir, { recursive: true, force: true });
+        } catch {}
+
+        const cli = getWhisperCliPath();
+        if (!cli) {
+          throw new Error("Giải nén xong nhưng không tìm thấy whisper-cli.");
+        }
+
+        currentJob.progressPercent = 95;
+        currentJob.message = "[95%] Đã cài đặt xong bộ thực thi Whisper!";
+        currentJob.logs.push(`Bộ thực thi đã sẵn sàng: ${cli}`);
+
+        // Check if any model exists
+        const status = getSystemToolsStatus();
+        const hasAnyModel = status.models.some((m) => m.isDownloaded);
+        if (!hasAnyModel) {
+          currentJob.logs.push("Chưa có mô hình nào, đang tự động tải mô hình Whisper Small (~460MB)...");
+          await startDownloadWhisperModel("small");
+          return;
+        }
+
+        currentJob.progressPercent = 100;
+        currentJob.status = "completed";
+        currentJob.message = "Cài đặt Whisper.cpp thành công 100%!";
+        currentJob.logs.push("Bộ thực thi Whisper.cpp đã sẵn sàng hoạt động offline.");
+      } catch (err: any) {
+        console.error("[SystemTools] Lỗi cài đặt whisper:", err);
+        currentJob.status = "error";
+        currentJob.error = err.message || "Lỗi cài đặt";
+        currentJob.message = `Cài đặt Whisper.cpp thất bại: ${err.message}`;
+        currentJob.logs.push(`Lỗi: ${err.message}`);
+      }
+    })();
+
+    return true;
+  }
+
+  // Linux/Unix with CMake installed
   currentJob = {
     id: `compile_whisper_${Date.now()}`,
     type: "compile_whisper",
@@ -457,11 +614,9 @@ export async function startCompileWhisperCpp(forceRebuild = false): Promise<bool
         ["--build", "build", "--config", "Release", "-j2"],
         WHISPER_DIR,
         (line) => {
-          // Parse CMake's [ XX%] progress indicators
           const percentMatch = line.match(/\[\s*(\d+)%\]/);
           if (percentMatch) {
             const cmakePercent = parseInt(percentMatch[1], 10);
-            // Map CMake 0-100% to overall 25-92%
             const overallPercent = 25 + Math.round((cmakePercent * 67) / 100);
             currentJob.progressPercent = overallPercent;
             currentJob.message = `[${overallPercent}%] Đang biên dịch Whisper.cpp: ${cmakePercent}% - ${line.slice(0, 60)}`;

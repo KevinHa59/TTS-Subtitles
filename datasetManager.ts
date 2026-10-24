@@ -31,17 +31,29 @@ if (!fs.existsSync(DATASETS_ROOT)) {
   fs.mkdirSync(DATASETS_ROOT, { recursive: true });
 }
 
-// Locate whisper-cli executable
+// Locate whisper-cli executable (Cross-platform: Windows .exe and Linux/macOS)
 export function getWhisperCliPath(): string | null {
-  const candidates = [
-    path.resolve(__dirname, "tools", "whisper.cpp", "build", "bin", "whisper-cli"),
-    path.resolve(__dirname, "tools", "whisper.cpp", "build", "bin", "main"),
-    path.resolve(__dirname, "tools", "whisper.cpp", "main"),
-    "whisper-cli",
+  const isWin = process.platform === "win32";
+  const names = isWin
+    ? ["whisper-cli.exe", "main.exe", "whisper-cli", "main"]
+    : ["whisper-cli", "main", "whisper-cli.exe", "main.exe"];
+
+  const searchDirs = [
+    path.resolve(__dirname, "tools", "whisper.cpp", "build", "bin"),
+    path.resolve(__dirname, "tools", "whisper.cpp", "build", "bin", "Release"),
+    path.resolve(__dirname, "tools", "whisper.cpp", "bin"),
+    path.resolve(__dirname, "tools", "whisper.cpp"),
+    path.resolve(__dirname, "tools", "bin"),
+    path.resolve(__dirname, "tools"),
   ];
-  for (const c of candidates) {
-    if (fs.existsSync(c)) return c;
+
+  for (const dir of searchDirs) {
+    for (const name of names) {
+      const full = path.resolve(dir, name);
+      if (fs.existsSync(full)) return full;
+    }
   }
+
   return null;
 }
 
