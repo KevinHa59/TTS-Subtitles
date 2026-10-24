@@ -445,27 +445,17 @@ export default function VoiceCloneModal({
     });
 
     try {
-      const reader = new FileReader();
-      const base64Audio = await new Promise<string>((resolve, reject) => {
-        reader.onload = () => {
-          const res = reader.result as string;
-          resolve(res.split(",")[1] || res);
-        };
-        reader.onerror = reject;
-        reader.readAsDataURL(audioFile);
+      const uploadParams = new URLSearchParams({
+        originalFilename: audioFile.name,
+        voiceName: datasetVoiceName,
+        whisperModel,
+        minDuration: String(minDuration),
+        maxDuration: String(maxDuration),
       });
-
-      const res = await fetch("/api/dataset/prepare", {
+      const res = await fetch(`/api/dataset/prepare-upload?${uploadParams}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          audioBase64: base64Audio,
-          originalFilename: audioFile.name,
-          voiceName: datasetVoiceName,
-          whisperModel: whisperModel,
-          minDuration: minDuration,
-          maxDuration: maxDuration,
-        }),
+        headers: { "Content-Type": "application/octet-stream" },
+        body: audioFile,
       });
 
       const startData = await res.json();

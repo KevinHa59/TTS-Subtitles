@@ -10,6 +10,9 @@ import { createServer as createViteServer } from "vite";
 import path from "path";
 import { fileURLToPath } from "url";
 import fs from "fs";
+import os from "os";
+import { Transform } from "stream";
+import { pipeline } from "stream/promises";
 import { exec, execSync, spawnSync } from "child_process";
 import {
   AVAILABLE_MODELS,
@@ -80,6 +83,7 @@ interface DatasetPreparationJob {
 }
 
 const datasetPreparationJobs = new Map<string, DatasetPreparationJob>();
+const MAX_DATASET_UPLOAD_BYTES = 4 * 1024 * 1024 * 1024;
 
 // PID file for Windows Stop-App.bat process tracking
 const PID_FILE = path.resolve(__dirname, ".server.pid");
@@ -3287,6 +3291,74 @@ app.delete("/api/system/whisper-model/:modelId", (req: Request, res: Response) =
 // OFFLINE DATASET PREPARATION (WHISPER.CPP)
 // ==========================================
 
+function startDatasetPreparation(
+  audioSource: Buffer | string,
+  originalFilename: string,
+  voiceName: string,
+  whisperModel: string,
+  minDuration: number,
+  maxDuration: number,
+  uploadTempDir?: string
+): DatasetPreparationJob {
+  const now = Date.now();
+  for (const [id, job] of datasetPreparationJobs) {
+    if (job.status !== "processing" && now - job.updatedAt > 30 * 60 * 1000) {
+      datasetPreparationJobs.delete(id);
+    }
+  }
+
+  const job: DatasetPreparationJob = {
+    id: `dataset-${now}-${Math.random().toString(36).slice(2, 8)}`,
+    status: "processing",
+    progressPercent: 0,
+    message: "Đang xếp hàng xử lý âm thanh...",
+    updatedAt: now,
+  };
+  datasetPreparationJobs.set(job.id, job);
+
+  void prepareOfflineDataset(
+    audioSource,
+    originalFilename,
+    voiceName,
+    whisperModel,
+    minDuration,
+    maxDuration,
+    (progress: DatasetPreparationProgress) => {
+      job.progressPercent = progress.progressPercent;
+      job.message = progress.message;
+      job.updatedAt = Date.now();
+    },
+    resolveFfmpegPath()
+  )
+    .then((datasetInfo) => {
+      job.status = "completed";
+      job.progressPercent = 100;
+      job.message = `Hoàn tất: đã tạo ${datasetInfo.totalClips} câu thoại.`;
+      job.dataset = datasetInfo;
+      job.updatedAt = Date.now();
+      console.log(
+        `[OfflineDataset] Đã tạo thành công ${datasetInfo.totalClips} câu (${datasetInfo.totalDurationSec}s) cho "${datasetInfo.voiceName}"!`
+      );
+    })
+    .catch((err: unknown) => {
+      const message = err instanceof Error ? err.message : "Lỗi không xác định khi xử lý âm thanh.";
+      job.status = "failed";
+      job.message = message;
+      job.error = message;
+      job.updatedAt = Date.now();
+      console.error("[OfflineDataset] Lỗi tạo dataset:", err);
+    })
+    .finally(() => {
+      if (uploadTempDir) {
+        fs.rm(uploadTempDir, { recursive: true, force: true }, (err) => {
+          if (err) console.error("[OfflineDataset] Không thể xóa file upload tạm:", err);
+        });
+      }
+    });
+
+  return job;
+}
+
 // Get available Whisper models
 app.get("/api/dataset/models", (_req: Request, res: Response) => {
   try {
@@ -3304,6 +3376,62 @@ app.get("/api/dataset/list", (_req: Request, res: Response) => {
     res.json({ success: true, datasets });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// Stream an audio upload to disk so large files don't need to fit in a JSON request.
+app.post("/api/dataset/prepare-upload", async (req: Request, res: Response) => {
+  const contentLength = Number(req.headers["content-length"]);
+  if (Number.isFinite(contentLength) && contentLength > MAX_DATASET_UPLOAD_BYTES) {
+    return res.status(413).json({ error: "File âm thanh vượt quá giới hạn tải lên 4 GB." });
+  }
+
+  const uploadTempDir = fs.mkdtempSync(path.join(os.tmpdir(), "tts-dataset-upload-"));
+  const uploadPath = path.join(uploadTempDir, "source-audio");
+  let bytesReceived = 0;
+  const sizeLimiter = new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      bytesReceived += chunk.length;
+      if (bytesReceived > MAX_DATASET_UPLOAD_BYTES) {
+        callback(new Error("UPLOAD_TOO_LARGE"));
+        return;
+      }
+      callback(null, chunk);
+    },
+  });
+
+  try {
+    await pipeline(req, sizeLimiter, fs.createWriteStream(uploadPath, { flags: "wx" }));
+    if (bytesReceived < 1000) {
+      fs.rmSync(uploadTempDir, { recursive: true, force: true });
+      return res.status(400).json({ error: "File âm thanh không hợp lệ hoặc quá nhỏ." });
+    }
+
+    const queryString = (key: string, fallback: string) =>
+      typeof req.query[key] === "string" ? req.query[key] as string : fallback;
+    const originalFilename = path.basename(queryString("originalFilename", "audio.wav"));
+    const job = startDatasetPreparation(
+      uploadPath,
+      originalFilename,
+      queryString("voiceName", "giong_moi"),
+      queryString("whisperModel", "small"),
+      Number(queryString("minDuration", "1")) || 1,
+      Number(queryString("maxDuration", "12")) || 12,
+      uploadTempDir
+    );
+
+    res.status(202).json({ success: true, jobId: job.id });
+  } catch (err) {
+    fs.rm(uploadTempDir, { recursive: true, force: true }, (cleanupError) => {
+      if (cleanupError) console.error("[OfflineDataset] Không thể xóa upload tạm:", cleanupError);
+    });
+    const errorMessage = err instanceof Error ? err.message : "Lỗi tải file âm thanh.";
+    if (res.destroyed || res.headersSent) return;
+    if (errorMessage === "UPLOAD_TOO_LARGE") {
+      return res.status(413).json({ error: "File âm thanh vượt quá giới hạn tải lên 4 GB." });
+    }
+    console.error("[OfflineDataset] Lỗi nhận file âm thanh:", err);
+    return res.status(500).json({ error: "Không thể nhận file âm thanh trên máy chủ." });
   }
 });
 
@@ -3332,53 +3460,14 @@ app.post("/api/dataset/prepare", async (req: Request, res: Response) => {
       `[OfflineDataset] Bắt đầu cắt và nhận diện bằng Whisper.cpp (${whisperModel}) cho giọng "${voiceName}"...`
     );
 
-    const now = Date.now();
-    for (const [id, job] of datasetPreparationJobs) {
-      if (job.status !== "processing" && now - job.updatedAt > 30 * 60 * 1000) {
-        datasetPreparationJobs.delete(id);
-      }
-    }
-
-    const job: DatasetPreparationJob = {
-      id: `dataset-${now}-${Math.random().toString(36).slice(2, 8)}`,
-      status: "processing",
-      progressPercent: 0,
-      message: "Đang xếp hàng xử lý âm thanh...",
-      updatedAt: now,
-    };
-    datasetPreparationJobs.set(job.id, job);
-
-    void prepareOfflineDataset(
+    const job = startDatasetPreparation(
       audioBuffer,
       originalFilename,
       voiceName,
       whisperModel,
       Number(minDuration) || 1.0,
-      Number(maxDuration) || 12.0,
-      (progress: DatasetPreparationProgress) => {
-        job.progressPercent = progress.progressPercent;
-        job.message = progress.message;
-        job.updatedAt = Date.now();
-      }
-    )
-      .then((datasetInfo) => {
-        job.status = "completed";
-        job.progressPercent = 100;
-        job.message = `Hoàn tất: đã tạo ${datasetInfo.totalClips} câu thoại.`;
-        job.dataset = datasetInfo;
-        job.updatedAt = Date.now();
-        console.log(
-          `[OfflineDataset] Đã tạo thành công ${datasetInfo.totalClips} câu (${datasetInfo.totalDurationSec}s) cho "${datasetInfo.voiceName}"!`
-        );
-      })
-      .catch((err: unknown) => {
-        const message = err instanceof Error ? err.message : "Lỗi không xác định khi xử lý âm thanh.";
-        job.status = "failed";
-        job.message = message;
-        job.error = message;
-        job.updatedAt = Date.now();
-        console.error("[OfflineDataset] Lỗi tạo dataset:", err);
-      });
+      Number(maxDuration) || 12.0
+    );
 
     res.status(202).json({ success: true, jobId: job.id });
   } catch (err: any) {
