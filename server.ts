@@ -45,9 +45,11 @@ import {
 } from "./customVoiceManager";
 import {
   prepareOfflineDataset,
+  DatasetPreparationProgress,
   listDatasets,
   getDataset,
   updateDatasetClip,
+  updateDatasetMetadata,
   deleteDataset,
   createDatasetZip,
   getAvailableWhisperModels,
@@ -66,6 +68,18 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 const isProd = process.env.NODE_ENV === "production";
+
+interface DatasetPreparationJob {
+  id: string;
+  status: "processing" | "completed" | "failed";
+  progressPercent: number;
+  message: string;
+  dataset?: Awaited<ReturnType<typeof prepareOfflineDataset>>;
+  error?: string;
+  updatedAt: number;
+}
+
+const datasetPreparationJobs = new Map<string, DatasetPreparationJob>();
 
 // PID file for Windows Stop-App.bat process tracking
 const PID_FILE = path.resolve(__dirname, ".server.pid");
@@ -357,6 +371,8 @@ async function synthesizeVieNeuVoice(
 // In-memory cache for Piper Native TTS instances
 const modelCache = new Map<string, any>();
 const loadingPromises = new Map<string, Promise<any>>();
+const modelCacheSources = new Map<string, string>();
+const loadingModelSources = new Map<string, string>();
 
 // Resolve 100% local ONNX model path from models/ directory without any internet dependency
 function resolveLocalModelPath(modelId: string): string | null {
@@ -478,18 +494,40 @@ async function getOrLoadModel(modelId: string) {
 
   const cleanId = (modelId || "").replace(/^(local:|hub:)/, "").trim();
   const normalizedModelId = `local:${cleanId}`;
+  const localOnnxPath = resolveLocalModelPath(modelId);
+  if (!localOnnxPath || !fs.existsSync(localOnnxPath)) {
+    throw new Error(
+      `Không tìm thấy file mô hình (.onnx) cho "${modelId}" trong thư mục "${MODELS_DIR}". Vui lòng đảm bảo bạn đã lưu file .onnx vào thư mục models/ để sử dụng offline 100%.`,
+    );
+  }
+  const modelStat = fs.statSync(localOnnxPath);
+  const modelSource = `${path.resolve(localOnnxPath)}:${modelStat.size}:${modelStat.mtimeMs}`;
 
   if (modelCache.has(normalizedModelId)) {
-    return modelCache.get(normalizedModelId);
+    if (modelCacheSources.get(normalizedModelId) === modelSource) {
+      return modelCache.get(normalizedModelId);
+    }
+    modelCache.delete(normalizedModelId);
+    modelCache.delete(modelId);
   }
   if (modelCache.has(modelId)) {
-    return modelCache.get(modelId);
+    if (modelCacheSources.get(normalizedModelId) === modelSource) {
+      return modelCache.get(modelId);
+    }
+    modelCache.delete(normalizedModelId);
+    modelCache.delete(modelId);
   }
 
-  if (loadingPromises.has(normalizedModelId)) {
+  if (
+    loadingPromises.has(normalizedModelId) &&
+    loadingModelSources.get(normalizedModelId) === modelSource
+  ) {
     return await loadingPromises.get(normalizedModelId);
   }
-  if (loadingPromises.has(modelId)) {
+  if (
+    loadingPromises.has(modelId) &&
+    loadingModelSources.get(normalizedModelId) === modelSource
+  ) {
     return await loadingPromises.get(modelId);
   }
 
@@ -499,31 +537,27 @@ async function getOrLoadModel(modelId: string) {
     );
     const startTime = Date.now();
     const espeakBin = resolveEspeakPath();
-    const localOnnxPath = resolveLocalModelPath(modelId);
-
-    if (localOnnxPath && fs.existsSync(localOnnxPath)) {
-      console.log(
-        `[PiperTTS] Loading local ONNX file: "${localOnnxPath}" (100% offline, zero internet calls)`,
-      );
-      const tts = await PiperNativeTTS.load({
-        modelPath: localOnnxPath,
-        espeakBinary: espeakBin,
-      });
-      console.log(
-        `[PiperTTS] Local model "${normalizedModelId}" loaded successfully in ${Date.now() - startTime}ms (espeakBinary: ${espeakBin}).`,
-      );
+    console.log(
+      `[PiperTTS] Loading local ONNX file: "${localOnnxPath}" (100% offline, zero internet calls)`,
+    );
+    const tts = await PiperNativeTTS.load({
+      modelPath: localOnnxPath,
+      espeakBinary: espeakBin,
+    });
+    console.log(
+      `[PiperTTS] Local model "${normalizedModelId}" loaded successfully in ${Date.now() - startTime}ms (espeakBinary: ${espeakBin}).`,
+    );
+    if (loadingModelSources.get(normalizedModelId) === modelSource) {
       modelCache.set(normalizedModelId, tts);
       modelCache.set(modelId, tts);
-      return tts;
+      modelCacheSources.set(normalizedModelId, modelSource);
     }
-
-    throw new Error(
-      `Không tìm thấy file mô hình (.onnx) cho "${modelId}" trong thư mục "${MODELS_DIR}". Vui lòng đảm bảo bạn đã lưu file .onnx vào thư mục models/ để sử dụng offline 100%.`,
-    );
+    return tts;
   })();
 
   loadingPromises.set(normalizedModelId, loadPromise);
   loadingPromises.set(modelId, loadPromise);
+  loadingModelSources.set(normalizedModelId, modelSource);
   return await loadPromise;
 }
 
@@ -3176,6 +3210,10 @@ app.delete("/api/models/custom/:id", (req: Request, res: Response) => {
     // Also clear from modelCache
     modelCache.delete(`local:${req.params.id}`);
     modelCache.delete(req.params.id);
+    modelCacheSources.delete(`local:${req.params.id}`);
+    loadingPromises.delete(`local:${req.params.id}`);
+    loadingPromises.delete(req.params.id);
+    loadingModelSources.delete(`local:${req.params.id}`);
 
     res.json({ success: true, message: "Đã xóa giọng tùy chỉnh thành công." });
   } catch (err: any) {
@@ -3294,24 +3332,70 @@ app.post("/api/dataset/prepare", async (req: Request, res: Response) => {
       `[OfflineDataset] Bắt đầu cắt và nhận diện bằng Whisper.cpp (${whisperModel}) cho giọng "${voiceName}"...`
     );
 
-    const datasetInfo = await prepareOfflineDataset(
+    const now = Date.now();
+    for (const [id, job] of datasetPreparationJobs) {
+      if (job.status !== "processing" && now - job.updatedAt > 30 * 60 * 1000) {
+        datasetPreparationJobs.delete(id);
+      }
+    }
+
+    const job: DatasetPreparationJob = {
+      id: `dataset-${now}-${Math.random().toString(36).slice(2, 8)}`,
+      status: "processing",
+      progressPercent: 0,
+      message: "Đang xếp hàng xử lý âm thanh...",
+      updatedAt: now,
+    };
+    datasetPreparationJobs.set(job.id, job);
+
+    void prepareOfflineDataset(
       audioBuffer,
       originalFilename,
       voiceName,
       whisperModel,
       Number(minDuration) || 1.0,
-      Number(maxDuration) || 12.0
-    );
+      Number(maxDuration) || 12.0,
+      (progress: DatasetPreparationProgress) => {
+        job.progressPercent = progress.progressPercent;
+        job.message = progress.message;
+        job.updatedAt = Date.now();
+      }
+    )
+      .then((datasetInfo) => {
+        job.status = "completed";
+        job.progressPercent = 100;
+        job.message = `Hoàn tất: đã tạo ${datasetInfo.totalClips} câu thoại.`;
+        job.dataset = datasetInfo;
+        job.updatedAt = Date.now();
+        console.log(
+          `[OfflineDataset] Đã tạo thành công ${datasetInfo.totalClips} câu (${datasetInfo.totalDurationSec}s) cho "${datasetInfo.voiceName}"!`
+        );
+      })
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : "Lỗi không xác định khi xử lý âm thanh.";
+        job.status = "failed";
+        job.message = message;
+        job.error = message;
+        job.updatedAt = Date.now();
+        console.error("[OfflineDataset] Lỗi tạo dataset:", err);
+      });
 
-    console.log(
-      `[OfflineDataset] Đã tạo thành công ${datasetInfo.totalClips} câu (${datasetInfo.totalDurationSec}s) cho "${datasetInfo.voiceName}"!`
-    );
-
-    res.json({ success: true, dataset: datasetInfo });
+    res.status(202).json({ success: true, jobId: job.id });
   } catch (err: any) {
     console.error("[OfflineDataset] Lỗi tạo dataset:", err);
     res.status(500).json({ error: err.message || "Lỗi khi xử lý âm thanh bằng Whisper.cpp." });
   }
+});
+
+// Get offline dataset preparation progress
+app.get("/api/dataset/prepare/:jobId", (req: Request, res: Response) => {
+  const job = datasetPreparationJobs.get(req.params.jobId);
+  if (!job) {
+    return res.status(404).json({ error: "Không tìm thấy tác vụ xử lý dataset." });
+  }
+
+  const { updatedAt: _updatedAt, ...publicJob } = job;
+  res.json({ success: true, job: publicJob });
 });
 
 // Get specific dataset
@@ -3360,16 +3444,38 @@ app.post("/api/dataset/:datasetId/clip", (req: Request, res: Response) => {
   }
 });
 
+app.put("/api/dataset/:datasetId/metadata", (req: Request, res: Response) => {
+  try {
+    const { metadata } = req.body || {};
+    const updated = updateDatasetMetadata(req.params.datasetId, metadata);
+    res.json({ success: true, dataset: updated });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Lỗi không xác định khi lưu metadata.";
+    const status = message.startsWith("Dataset ") && message.endsWith(" không tồn tại.") ? 404 : 400;
+    res.status(status).json({ error: message });
+  }
+});
+
 // Export dataset as ZIP for Google Colab
 app.get("/api/dataset/:datasetId/export-zip", (req: Request, res: Response) => {
   try {
     const zipPath = createDatasetZip(req.params.datasetId);
     const filename = `${req.params.datasetId}_dataset.zip`;
     res.setHeader("Content-Type", "application/zip");
-    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-    fs.createReadStream(zipPath).pipe(res);
-  } catch (err: any) {
-    res.status(500).send(`Lỗi tạo file zip: ${err.message}`);
+    res.download(zipPath, filename, (err) => {
+      if (err) {
+        console.error("[OfflineDataset] Lỗi tải file ZIP:", err);
+        if (!res.headersSent) {
+          res.status(500).send(`Lỗi tải file zip: ${err.message}`);
+        } else {
+          res.destroy(err);
+        }
+      }
+    });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Lỗi không xác định khi tạo file zip.";
+    console.error("[OfflineDataset] Lỗi tạo file ZIP:", err);
+    res.status(500).send(`Lỗi tạo file zip: ${message}`);
   }
 });
 
@@ -3388,7 +3494,10 @@ app.delete("/api/dataset/:datasetId", (req: Request, res: Response) => {
 
 app.get("/api/voices", (req: Request, res: Response) => {
   const vnCheck = checkVieNeuModelAvailable();
-  const customList = scanCustomModelsOnDisk();
+  const catalogModelIds = new Set(AVAILABLE_MODELS.map((voice) => voice.modelId));
+  const customList = scanCustomModelsOnDisk().filter(
+    (voice) => !catalogModelIds.has(voice.modelId),
+  );
 
   const customOptions = customList.map((cv) => {
     const isLoaded = modelCache.has(cv.modelId) || modelCache.has(`local:${cv.id}`);

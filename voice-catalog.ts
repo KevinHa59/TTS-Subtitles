@@ -55,6 +55,8 @@ export const LOCAL_MODEL_FILES: Record<string, string | string[]> = {
     "ngochuyen.onnx",
     "ngochuyen-vietnamese-vi-medium.onnx",
   ],
+  "local:ngo_khong_voice_1792842474657": "ngo_khong_voice_1792842474657.onnx",
+  "local:uslt_ngo_khong_1792855293763": "uslt_ngo_khong_1792855293763.onnx",
   [CSA_VOICE_MODEL_ID]: "vi_VN-csa-voice-piper-v3-medium.onnx",
 };
 
@@ -206,6 +208,16 @@ export const AVAILABLE_MODELS: VoiceDefinition[] = [
     description: "Âm sắc miền Bắc trong trẻo, biểu cảm ngọt ngào.",
     sampleText:
       "Xin kính chào quý vị và các bạn đã quay trở lại với chương trình ngày hôm nay.",
+    recommended: false,
+  },
+  {
+    id: "local:uslt_ngo_khong_1792855293763",
+    modelId: "local:uslt_ngo_khong_1792855293763",
+    name: "Ngộ Không",
+    tag: "Nam · Miền Nam · Giọng tùy chỉnh (Offline)",
+    gender: "male",
+    description: "Giọng nam Ngộ Không được huấn luyện riêng.",
+    sampleText: "Ta là Tề Thiên Đại Thánh, Tôn Ngộ Không.",
     recommended: false,
   },
   {

@@ -1,7 +1,8 @@
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { spawnSync, execSync } from "child_process";
+import { spawn, spawnSync, execSync } from "child_process";
+import { availableParallelism } from "node:os";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -24,6 +25,11 @@ export interface DatasetInfo {
   totalClips: number;
   totalDurationSec: number;
   clips: DatasetClip[];
+}
+
+export interface DatasetPreparationProgress {
+  progressPercent: number;
+  message: string;
 }
 
 const DATASETS_ROOT = path.resolve(__dirname, "datasets_storage");
@@ -173,12 +179,130 @@ export function updateDatasetClip(
   return info;
 }
 
+export function updateDatasetMetadata(
+  datasetId: string,
+  metadataText: string
+): DatasetInfo {
+  if (!/^[a-zA-Z0-9_-]+$/.test(datasetId)) {
+    throw new Error("Mã dataset không hợp lệ.");
+  }
+  if (typeof metadataText !== "string") {
+    throw new Error("Metadata phải là văn bản.");
+  }
+
+  const datasetDir = path.join(DATASETS_ROOT, datasetId);
+  const infoPath = path.join(datasetDir, "info.json");
+  if (!fs.existsSync(infoPath)) {
+    throw new Error(`Dataset ${datasetId} không tồn tại.`);
+  }
+
+  const info = JSON.parse(fs.readFileSync(infoPath, "utf-8")) as DatasetInfo;
+  const parsedEntries = metadataText
+    .replace(/^\uFEFF/, "")
+    .split(/\r?\n/)
+    .map((line, index) => ({ line: line.trim(), lineNumber: index + 1 }))
+    .filter(({ line }) => line.length > 0)
+    .map(({ line, lineNumber }) => {
+      const separatorIndex = line.indexOf("|");
+      if (separatorIndex < 1) {
+        throw new Error(`Dòng ${lineNumber} phải có định dạng clip_id|nội dung.`);
+      }
+
+      const clipId = line.slice(0, separatorIndex).trim();
+      const text = cleanPiperText(line.slice(separatorIndex + 1));
+      if (!clipId || !text) {
+        throw new Error(`Dòng ${lineNumber} thiếu ID hoặc nội dung.`);
+      }
+      return { clipId, text, lineNumber };
+    });
+
+  if (parsedEntries.length === 0) {
+    throw new Error("Metadata không có dòng nào để lưu.");
+  }
+
+  const datasetClipIds = new Set(info.clips.map((clip) => clip.id));
+  const seenIds = new Set<string>();
+  for (const entry of parsedEntries) {
+    if (!datasetClipIds.has(entry.clipId)) {
+      throw new Error(`Dòng ${entry.lineNumber} có ID không thuộc dataset: ${entry.clipId}.`);
+    }
+    if (seenIds.has(entry.clipId)) {
+      throw new Error(`ID bị lặp ở dòng ${entry.lineNumber}: ${entry.clipId}.`);
+    }
+    seenIds.add(entry.clipId);
+  }
+
+  const missingIds = info.clips
+    .filter((clip) => !seenIds.has(clip.id))
+    .map((clip) => clip.id);
+  if (missingIds.length > 0) {
+    const preview = missingIds.slice(0, 10).join(", ");
+    const suffix = missingIds.length > 10 ? ` và ${missingIds.length - 10} ID khác` : "";
+    throw new Error(`Metadata còn thiếu ${missingIds.length} ID: ${preview}${suffix}.`);
+  }
+
+  const textById = new Map(parsedEntries.map(({ clipId, text }) => [clipId, text]));
+  info.clips = info.clips.map((clip) => {
+    const text = textById.get(clip.id);
+    if (text === undefined) {
+      throw new Error(`Không tìm thấy metadata cho ID ${clip.id}.`);
+    }
+    return { ...clip, text };
+  });
+
+  const metadataPath = path.join(datasetDir, "metadata.csv");
+  const metadataLines = info.clips.map((clip) => `${clip.id}|${clip.text}`);
+  fs.writeFileSync(metadataPath, metadataLines.join("\n"), "utf-8");
+  fs.writeFileSync(infoPath, JSON.stringify(info, null, 2), "utf-8");
+
+  return info;
+}
+
 // Delete whole dataset
 export function deleteDataset(datasetId: string): boolean {
   const datasetDir = path.join(DATASETS_ROOT, datasetId);
   if (!fs.existsSync(datasetDir)) return false;
   fs.rmSync(datasetDir, { recursive: true, force: true });
   return true;
+}
+
+function runWhisper(
+  whisperCli: string,
+  args: string[],
+  onProgress?: (progressPercent: number) => void
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const whisperProc = spawn(whisperCli, args, { stdio: ["ignore", "pipe", "pipe"] });
+    let outputTail = "";
+    let lastProgress = 0;
+
+    const collectOutput = (chunk: Buffer) => {
+      const output = chunk.toString();
+      outputTail = `${outputTail}${output}`.slice(-400);
+
+      for (const match of output.matchAll(/(\d{1,3})%/g)) {
+        const progressPercent = Number(match[1]);
+        if (progressPercent > lastProgress && progressPercent <= 100) {
+          lastProgress = progressPercent;
+          onProgress?.(progressPercent);
+        }
+      }
+    };
+
+    whisperProc.stdout.on("data", collectOutput);
+    whisperProc.stderr.on("data", collectOutput);
+    whisperProc.on("error", (error) => {
+      reject(new Error(`Không thể chạy Whisper.cpp: ${error.message}`));
+    });
+    whisperProc.on("close", (code, signal) => {
+      if (code === 0) {
+        resolve();
+      } else {
+        const reason = outputTail.trim() || `mã thoát ${code ?? signal ?? "không xác định"}`;
+        reject(new Error(`Whisper.cpp chạy thất bại: ${reason}`));
+      }
+    });
+  });
 }
 
 // Process audio and prepare complete Piper dataset offline
@@ -188,7 +312,8 @@ export async function prepareOfflineDataset(
   voiceName: string,
   whisperModelId: string = "small",
   minDurationSec: number = 1.0,
-  maxDurationSec: number = 12.0
+  maxDurationSec: number = 12.0,
+  onProgress?: (progress: DatasetPreparationProgress) => void
 ): Promise<DatasetInfo> {
   const whisperCli = getWhisperCliPath();
   if (!whisperCli) {
@@ -232,6 +357,7 @@ export async function prepareOfflineDataset(
   fs.writeFileSync(inputAudioPath, audioBuffer);
 
   // 1. Resample to 16kHz mono WAV for whisper-cli input
+  onProgress?.({ progressPercent: 2, message: "Đang chuẩn hóa âm thanh đầu vào..." });
   const whisperWavPath = path.join(tempDir, "whisper_input_16k.wav");
   const ffmpegResample = spawnSync(
     "ffmpeg",
@@ -244,6 +370,7 @@ export async function prepareOfflineDataset(
   }
 
   // 2. Also resample original to full 22050Hz mono 16-bit PCM for clean slicing
+  onProgress?.({ progressPercent: 5, message: "Đang chuẩn bị âm thanh để cắt câu..." });
   const full22kWavPath = path.join(tempDir, "full_audio_22050.wav");
   const ffmpeg22k = spawnSync(
     "ffmpeg",
@@ -256,7 +383,12 @@ export async function prepareOfflineDataset(
 
   // 3. Run whisper-cli with Vietnamese language and JSON timestamp output
   const jsonOutPrefix = path.join(tempDir, "whisper_out");
-  const whisperProc = spawnSync(
+  const whisperThreads = Math.max(1, Math.min(8, availableParallelism()));
+  onProgress?.({
+    progressPercent: 8,
+    message: `Whisper.cpp bắt đầu phiên âm bằng ${whisperThreads} luồng CPU...`,
+  });
+  await runWhisper(
     whisperCli,
     [
       "-m", modelFile,
@@ -264,16 +396,19 @@ export async function prepareOfflineDataset(
       "-l", "vi",
       "-oj",
       "-of", jsonOutPrefix,
-      "-t", "2",
+      "-t", String(whisperThreads),
+      "-pp",
       "--max-len", "0",
     ],
-    { stdio: "pipe" }
+    (percent) => onProgress?.({
+      progressPercent: 8 + Math.floor(percent * 0.8),
+      message: `Whisper.cpp đang phiên âm: ${percent}%`,
+    })
   );
 
   const jsonResultPath = `${jsonOutPrefix}.json`;
   if (!fs.existsSync(jsonResultPath)) {
-    const errMsg = whisperProc.stderr?.toString() || whisperProc.stdout?.toString() || "Whisper.cpp không tạo được kết quả phiên âm.";
-    throw new Error(`Whisper AI nhận diện thất bại: ${errMsg.slice(-400)}`);
+    throw new Error("Whisper.cpp chạy xong nhưng không tạo được kết quả phiên âm.");
   }
 
   // 4. Parse JSON segments
@@ -293,7 +428,16 @@ export async function prepareOfflineDataset(
   const clips: DatasetClip[] = [];
   let clipIndex = 1;
 
-  for (const seg of rawSegments) {
+  onProgress?.({ progressPercent: 90, message: "Đang cắt các câu thoại đã nhận diện..." });
+  for (const [segmentIndex, seg] of rawSegments.entries()) {
+    if (segmentIndex % 5 === 0 || segmentIndex === rawSegments.length - 1) {
+      const progressPercent = 90 + Math.floor(((segmentIndex + 1) / rawSegments.length) * 8);
+      onProgress?.({
+        progressPercent,
+        message: `Đang cắt câu thoại: ${segmentIndex + 1}/${rawSegments.length}...`,
+      });
+    }
+
     const rawText = seg.text || "";
     const cleanText = cleanPiperText(rawText);
 
@@ -368,6 +512,7 @@ export async function prepareOfflineDataset(
     clips,
   };
 
+  onProgress?.({ progressPercent: 99, message: "Đang lưu bộ dữ liệu..." });
   fs.writeFileSync(
     path.join(datasetDir, "info.json"),
     JSON.stringify(datasetInfo, null, 2),
@@ -404,25 +549,35 @@ export function createDatasetZip(datasetId: string): string {
   }
 
   // Use python3 zipfile to pack dataset/wav and dataset/metadata.csv
-  const pyCode = `
-import zipfile, os
-dataset_dir = r"${datasetDir.replace(/\\/g, "/")}"
-zip_path = r"${zipPath.replace(/\\/g, "/")}"
+  const pyCode = [
+    "import os, sys, zipfile",
+    "dataset_dir, zip_path = sys.argv[1:3]",
+    "metadata_path = os.path.join(dataset_dir, 'metadata.csv')",
+    "wav_dir = os.path.join(dataset_dir, 'wav')",
+    "if not os.path.isfile(metadata_path):",
+    "    raise FileNotFoundError(f'Missing dataset metadata: {metadata_path}')",
+    "if not os.path.isdir(wav_dir):",
+    "    raise FileNotFoundError(f'Missing dataset audio directory: {wav_dir}')",
+    "wav_files = sorted(name for name in os.listdir(wav_dir) if name.lower().endswith('.wav'))",
+    "if not wav_files:",
+    "    raise ValueError('Dataset does not contain any WAV audio clips')",
+    "with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as archive:",
+    "    archive.write(metadata_path, 'metadata.csv')",
+    "    for name in wav_files:",
+    "        archive.write(os.path.join(wav_dir, name), os.path.join('wav', name))",
+  ].join("\n");
+  const pythonCommand = process.platform === "win32" ? "python" : "python3";
+  const zipProcess = spawnSync(pythonCommand, ["-c", pyCode, datasetDir, zipPath], {
+    encoding: "utf-8",
+    windowsHide: true,
+  });
 
-with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as z:
-    meta_path = os.path.join(dataset_dir, 'metadata.csv')
-    if os.path.exists(meta_path):
-        z.write(meta_path, 'metadata.csv')
-    wav_dir = os.path.join(dataset_dir, 'wav')
-    if os.path.exists(wav_dir):
-        for f in sorted(os.listdir(wav_dir)):
-            if f.endswith('.wav'):
-                z.write(os.path.join(wav_dir, f), os.path.join('wav', f))
-`;
+  if (zipProcess.error || zipProcess.status !== 0) {
+    const details = zipProcess.error?.message || zipProcess.stderr?.trim() || `mã thoát ${zipProcess.status}`;
+    throw new Error(`Không thể nén dataset bằng Python: ${details}`);
+  }
 
-  execSync(`python3 -c '${pyCode.replace(/'/g, "'\\''")}'`);
-
-  if (!fs.existsSync(zipPath)) {
+  if (!fs.existsSync(zipPath) || fs.statSync(zipPath).size === 0) {
     throw new Error("Không thể nén file ZIP dữ liệu huấn luyện.");
   }
 

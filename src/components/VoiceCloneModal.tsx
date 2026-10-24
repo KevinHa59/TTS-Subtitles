@@ -4,6 +4,7 @@ import {
   Sparkles,
   ExternalLink,
   Download,
+  Copy,
   UploadCloud,
   CheckCircle2,
   AlertTriangle,
@@ -23,6 +24,7 @@ import {
   FileArchive,
   Check,
   Edit2,
+  Save,
   Volume2,
   Plus,
   Settings,
@@ -97,6 +99,15 @@ interface DatasetInfo {
   clips: DatasetClip[];
 }
 
+interface DatasetPreparationJob {
+  id: string;
+  status: "processing" | "completed" | "failed";
+  progressPercent: number;
+  message: string;
+  dataset?: DatasetInfo;
+  error?: string;
+}
+
 interface WhisperModelItem {
   id: string;
   name: string;
@@ -141,6 +152,12 @@ export default function VoiceCloneModal({
   // Active dataset inspecting/editing
   const [currentDataset, setCurrentDataset] = useState<DatasetInfo | null>(null);
   const [savedDatasets, setSavedDatasets] = useState<DatasetInfo[]>([]);
+  const [metadataDraft, setMetadataDraft] = useState<string>("");
+  const [metadataSaving, setMetadataSaving] = useState<boolean>(false);
+  const [metadataFeedback, setMetadataFeedback] = useState<{
+    type: "success" | "error" | "info";
+    message: string;
+  } | null>(null);
   const [editingClipId, setEditingClipId] = useState<string | null>(null);
   const [editingClipText, setEditingClipText] = useState<string>("");
   const [playingClipId, setPlayingClipId] = useState<string | null>(null);
@@ -167,6 +184,11 @@ export default function VoiceCloneModal({
   const [testingVoiceId, setTestingVoiceId] = useState<string | null>(null);
   const [audioTesting, setAudioTesting] = useState<boolean>(false);
   const audioTestRef = useRef<HTMLAudioElement | null>(null);
+
+  const savedMetadata = currentDataset
+    ? currentDataset.clips.map((clip) => `${clip.id}|${clip.text}`).join("\n")
+    : "";
+  const hasUnsavedMetadata = metadataDraft !== savedMetadata;
 
   // Load custom voices
   const fetchCustomVoices = async () => {
@@ -367,6 +389,18 @@ export default function VoiceCloneModal({
     }
   }, [isOpen]);
 
+  useEffect(() => {
+    if (!currentDataset) {
+      setMetadataDraft("");
+      setMetadataFeedback(null);
+      return;
+    }
+    setMetadataDraft(
+      currentDataset.clips.map((clip) => `${clip.id}|${clip.text}`).join("\n")
+    );
+    setMetadataFeedback(null);
+  }, [currentDataset?.id, currentDataset?.clips]);
+
   // Continuous polling while modal is open to keep status & progress fresh in real-time
   useEffect(() => {
     if (!isOpen) return;
@@ -434,16 +468,42 @@ export default function VoiceCloneModal({
         }),
       });
 
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        throw new Error(data.error || "Không thể xử lý âm thanh.");
+      const startData = await res.json();
+      if (!res.ok || !startData.success || !startData.jobId) {
+        throw new Error(startData.error || "Không thể bắt đầu xử lý âm thanh.");
       }
 
-      setCurrentDataset(data.dataset);
-      setSavedDatasets((prev) => [data.dataset, ...prev.filter((d) => d.id !== data.dataset.id)]);
+      let job: DatasetPreparationJob;
+      do {
+        await new Promise((resolve) => window.setTimeout(resolve, 1000));
+        const statusRes = await fetch(
+          `/api/dataset/prepare/${encodeURIComponent(startData.jobId)}`
+        );
+        const statusData = await statusRes.json();
+        if (!statusRes.ok || !statusData.success) {
+          throw new Error(statusData.error || "Không thể đọc tiến độ xử lý âm thanh.");
+        }
+
+        job = statusData.job as DatasetPreparationJob;
+        setDatasetFeedback({
+          type: job.status === "failed" ? "error" : "info",
+          message: `${job.message} (${job.progressPercent}%).`,
+        });
+      } while (job.status === "processing");
+
+      if (job.status === "failed") {
+        throw new Error(job.error || job.message);
+      }
+      const dataset = job.dataset;
+      if (!dataset) {
+        throw new Error("Tác vụ hoàn tất nhưng không trả về bộ dữ liệu.");
+      }
+
+      setCurrentDataset(dataset);
+      setSavedDatasets((prev) => [dataset, ...prev.filter((d) => d.id !== dataset.id)]);
       setDatasetFeedback({
         type: "success",
-        message: `Hoàn tất! Đã trích xuất ${data.dataset.totalClips} câu thoại (${data.dataset.totalDurationSec}s) chuẩn định dạng Piper.`,
+        message: `Hoàn tất! Đã trích xuất ${dataset.totalClips} câu thoại (${dataset.totalDurationSec}s) chuẩn định dạng Piper.`,
       });
     } catch (err: any) {
       setDatasetFeedback({
@@ -496,6 +556,63 @@ export default function VoiceCloneModal({
       }
     } catch (err) {
       alert("Lỗi khi lưu văn bản câu thoại.");
+    }
+  };
+
+  const handleReloadMetadata = () => {
+    setMetadataDraft(savedMetadata);
+    setMetadataFeedback({ type: "info", message: "Đã nạp lại metadata đang lưu." });
+  };
+
+  const handleCopyMetadata = async () => {
+    try {
+      await navigator.clipboard.writeText(savedMetadata);
+      setMetadataFeedback({
+        type: "success",
+        message: "Đã sao chép metadata hiện tại. Bạn có thể gửi nội dung này cho AI để chỉnh sửa.",
+      });
+    } catch (err) {
+      setMetadataFeedback({
+        type: "error",
+        message: err instanceof Error
+          ? `Không thể sao chép metadata: ${err.message}`
+          : "Không thể sao chép metadata. Hãy chọn và copy nội dung trong ô bên dưới.",
+      });
+    }
+  };
+
+  const handleSaveMetadata = async () => {
+    if (!currentDataset || metadataSaving) return;
+
+    setMetadataSaving(true);
+    setMetadataFeedback(null);
+    try {
+      const res = await fetch(`/api/dataset/${encodeURIComponent(currentDataset.id)}/metadata`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ metadata: metadataDraft }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success || !data.dataset) {
+        throw new Error(data.error || "Không thể lưu metadata.");
+      }
+
+      setCurrentDataset(data.dataset);
+      setSavedDatasets((prev) =>
+        prev.map((dataset) => dataset.id === data.dataset.id ? data.dataset : dataset)
+      );
+      setMetadataDraft(data.dataset.clips.map((clip: DatasetClip) => `${clip.id}|${clip.text}`).join("\n"));
+      setMetadataFeedback({
+        type: "success",
+        message: `Đã lưu metadata cho ${data.dataset.totalClips} câu. ID và các file audio được giữ nguyên.`,
+      });
+    } catch (err) {
+      setMetadataFeedback({
+        type: "error",
+        message: err instanceof Error ? err.message : "Lỗi không xác định khi lưu metadata.",
+      });
+    } finally {
+      setMetadataSaving(false);
     }
   };
 
@@ -1145,6 +1262,71 @@ export default function VoiceCloneModal({
                         <span>Tải Gói Dataset (.zip) Lên Colab</span>
                       </a>
                     </div>
+                  </div>
+
+                  <div className="space-y-3 rounded-xl border border-slate-800 bg-slate-950/50 p-4">
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                      <div>
+                        <h4 className="text-xs font-bold text-white">Metadata phụ đề (LJSpeech)</h4>
+                        <p className="mt-1 text-[11px] text-slate-400">
+                          Mỗi dòng theo dạng <code>clip_0001|nội dung câu thoại</code>. Bạn có thể copy gửi AI, dán bản đã sửa vào đây rồi lưu.
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={handleCopyMetadata}
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-[11px] font-semibold text-slate-200 hover:bg-slate-700"
+                        >
+                          <Copy className="h-3.5 w-3.5" />
+                          Sao chép metadata
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleReloadMetadata}
+                          disabled={!hasUnsavedMetadata}
+                          className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-[11px] font-semibold text-slate-200 hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          Nạp lại bản đã lưu
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleSaveMetadata}
+                          disabled={!hasUnsavedMetadata || metadataSaving}
+                          className="inline-flex items-center gap-1.5 rounded-lg bg-amber-500 px-3 py-2 text-[11px] font-bold text-slate-950 hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          <Save className="h-3.5 w-3.5" />
+                          {metadataSaving ? "Đang lưu..." : "Lưu metadata"}
+                        </button>
+                      </div>
+                    </div>
+                    <textarea
+                      value={metadataDraft}
+                      onChange={(e) => {
+                        setMetadataDraft(e.target.value);
+                        setMetadataFeedback(null);
+                      }}
+                      aria-label="Metadata phụ đề theo định dạng ID|nội dung"
+                      spellCheck={false}
+                      rows={Math.min(24, Math.max(8, currentDataset.clips.length))}
+                      className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-xs leading-5 text-slate-200 focus:border-amber-500 focus:outline-none"
+                    />
+                    {metadataFeedback && (
+                      <p className={`text-[11px] ${
+                        metadataFeedback.type === "error"
+                          ? "text-red-300"
+                          : metadataFeedback.type === "success"
+                            ? "text-emerald-300"
+                            : "text-sky-300"
+                      }`}>
+                        {metadataFeedback.message}
+                      </p>
+                    )}
+                    {hasUnsavedMetadata && (
+                      <p className="text-[11px] text-amber-300">
+                        Có thay đổi chưa lưu. Khi lưu, metadata phải giữ đủ và không trùng ID clip hiện có.
+                      </p>
+                    )}
                   </div>
 
                   {/* Sliced Audio Table */}
