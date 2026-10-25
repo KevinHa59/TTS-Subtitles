@@ -381,16 +381,17 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
     });
 
     try {
-      const formData = new FormData();
-      formData.append("audio", audioFile);
-      formData.append("voiceName", datasetVoiceName.trim());
-      formData.append("whisperModel", whisperModel);
-      formData.append("minDuration", minDuration.toString());
-      formData.append("maxDuration", maxDuration.toString());
+      const uploadParams = new URLSearchParams({
+        originalFilename: audioFile.name,
+        voiceName: datasetVoiceName.trim(),
+        whisperModel,
+        minDuration: minDuration.toString(),
+        maxDuration: maxDuration.toString(),
+      });
 
-      const res = await fetch("/api/dataset/prepare", {
+      const res = await fetch(`/api/dataset/prepare-upload?${uploadParams}`, {
         method: "POST",
-        body: formData,
+        body: audioFile,
       });
 
       const data = await res.json();
@@ -407,7 +408,7 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
       // Poll progress until finished
       const pollTimer = setInterval(async () => {
         try {
-          const pollRes = await fetch(`/api/dataset/status/${jobId}`);
+          const pollRes = await fetch(`/api/dataset/prepare/${jobId}`);
           const pollData = await pollRes.json();
           if (pollData.success && pollData.job) {
             setDatasetFeedback({
