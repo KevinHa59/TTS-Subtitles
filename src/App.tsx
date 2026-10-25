@@ -62,6 +62,7 @@ import {
   Plus,
   Menu,
   Zap,
+  Scissors,
 } from "lucide-react";
 
 import {
@@ -103,6 +104,8 @@ export interface ProjectPreset {
   minSpeed: number;
   speedPriority: "balanced" | "strict" | "natural";
   padSilence: boolean;
+  trimStartMs?: number;
+  trimEndMs?: number;
   outputFormat: "mp3" | "wav";
   normalizeNumbers?: boolean;
   soundOnComplete?: boolean;
@@ -122,6 +125,8 @@ const DEFAULT_PRESETS: ProjectPreset[] = [
     minSpeed: 0.8,
     speedPriority: "balanced",
     padSilence: true,
+    trimStartMs: 0,
+    trimEndMs: 0,
     outputFormat: "mp3",
     normalizeNumbers: true,
     soundOnComplete: true,
@@ -237,6 +242,8 @@ export default function App() {
     "balanced" | "strict" | "natural"
   >("balanced");
   const [padSilence, setPadSilence] = useState<boolean>(true);
+  const [trimStartMs, setTrimStartMs] = useState<number>(0);
+  const [trimEndMs, setTrimEndMs] = useState<number>(0);
   const [videoDurationStr, setVideoDurationStr] = useState<string>("");
   const [outputFormat, setOutputFormat] = useState<"mp3" | "wav">("mp3");
   const [showSettingsDrawer, setShowSettingsDrawer] = useState<boolean>(true);
@@ -601,6 +608,8 @@ export default function App() {
             minSpeed,
             speedPriority,
             padSilence,
+            trimStartMs,
+            trimEndMs,
             videoDuration: videoDur,
             outputFormat,
             normalizeNumbers,
@@ -1027,6 +1036,8 @@ export default function App() {
     setMinSpeed(preset.minSpeed);
     setSpeedPriority(preset.speedPriority);
     setPadSilence(preset.padSilence);
+    setTrimStartMs(preset.trimStartMs ?? 0);
+    setTrimEndMs(preset.trimEndMs ?? 0);
     setOutputFormat(preset.outputFormat);
     if (preset.normalizeNumbers !== undefined) {
       setNormalizeNumbers(preset.normalizeNumbers);
@@ -1063,6 +1074,8 @@ export default function App() {
       minSpeed,
       speedPriority,
       padSilence,
+      trimStartMs,
+      trimEndMs,
       outputFormat,
       normalizeNumbers,
       soundOnComplete: soundNotificationEnabled,
@@ -1098,6 +1111,8 @@ export default function App() {
             minSpeed,
             speedPriority,
             padSilence,
+            trimStartMs,
+            trimEndMs,
             outputFormat,
             normalizeNumbers,
             soundOnComplete: soundNotificationEnabled,
@@ -1258,6 +1273,8 @@ export default function App() {
             speedPriority: item.speedPriority || "balanced",
             padSilence:
               typeof item.padSilence === "boolean" ? item.padSilence : true,
+            trimStartMs: typeof item.trimStartMs === "number" ? item.trimStartMs : 0,
+            trimEndMs: typeof item.trimEndMs === "number" ? item.trimEndMs : 0,
             outputFormat: item.outputFormat === "wav" ? "wav" : "mp3",
             normalizeNumbers:
               typeof item.normalizeNumbers === "boolean"
@@ -2507,6 +2524,112 @@ export default function App() {
                         />
                         <span className="text-[10px] text-slate-400 block">
                           Giới hạn giảm tốc khi câu ngắn (0.6x - 1.5x)
+                        </span>
+                      </div>
+
+                      {/* Trim Silence (Cắt khoảng trắng đầu / đuôi câu) */}
+                      <div className="p-3 bg-slate-950/80 rounded-xl border border-slate-800 space-y-2.5">
+                        <div className="flex items-center justify-between">
+                          <span className="text-slate-200 font-semibold flex items-center gap-1.5 text-xs">
+                            <Scissors className="w-3.5 h-3.5 text-amber-400" />
+                            <span>Cắt khoảng trắng (Trim Audio):</span>
+                          </span>
+                          {(trimStartMs > 0 || trimEndMs > 0) && (
+                            <span className="text-[10px] text-amber-300 font-mono font-bold px-1.5 py-0.5 rounded bg-amber-500/15 border border-amber-500/30">
+                              -{trimStartMs}ms / -{trimEndMs}ms
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2 text-xs">
+                          {/* Trim Start */}
+                          <div className="space-y-1">
+                            <label className="text-[11px] text-slate-300 flex items-center justify-between">
+                              <span>Đầu câu (ms):</span>
+                              <span className="text-amber-400 font-mono font-semibold">{trimStartMs}ms</span>
+                            </label>
+                            <input
+                              type="number"
+                              min="0"
+                              max="2000"
+                              step="10"
+                              value={trimStartMs}
+                              onChange={(e) => setTrimStartMs(Math.max(0, parseInt(e.target.value) || 0))}
+                              className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1 text-slate-100 font-mono text-xs focus:ring-1 focus:ring-amber-500"
+                              placeholder="0"
+                            />
+                          </div>
+
+                          {/* Trim End */}
+                          <div className="space-y-1">
+                            <label className="text-[11px] text-slate-300 flex items-center justify-between">
+                              <span>Cuối câu (ms):</span>
+                              <span className="text-amber-400 font-mono font-semibold">{trimEndMs}ms</span>
+                            </label>
+                            <input
+                              type="number"
+                              min="0"
+                              max="2000"
+                              step="10"
+                              value={trimEndMs}
+                              onChange={(e) => setTrimEndMs(Math.max(0, parseInt(e.target.value) || 0))}
+                              className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1 text-slate-100 font-mono text-xs focus:ring-1 focus:ring-amber-500"
+                              placeholder="0"
+                            />
+                          </div>
+                        </div>
+
+                        {/* Quick preset buttons for common trim values */}
+                        <div className="flex items-center gap-1 pt-0.5 flex-wrap">
+                          <span className="text-[10px] text-slate-500">Mẫu:</span>
+                          <button
+                            type="button"
+                            onClick={() => { setTrimStartMs(0); setTrimEndMs(0); }}
+                            className={`px-1.5 py-0.5 rounded text-[10px] transition-colors cursor-pointer ${
+                              trimStartMs === 0 && trimEndMs === 0
+                                ? "bg-amber-500 text-slate-950 font-bold"
+                                : "bg-slate-900 text-slate-400 hover:text-white"
+                            }`}
+                          >
+                            0ms
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => { setTrimStartMs(50); setTrimEndMs(80); }}
+                            className={`px-1.5 py-0.5 rounded text-[10px] transition-colors cursor-pointer ${
+                              trimStartMs === 50 && trimEndMs === 80
+                                ? "bg-amber-500 text-slate-950 font-bold"
+                                : "bg-slate-900 text-slate-400 hover:text-white"
+                            }`}
+                          >
+                            50/80ms
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => { setTrimStartMs(100); setTrimEndMs(150); }}
+                            className={`px-1.5 py-0.5 rounded text-[10px] transition-colors cursor-pointer ${
+                              trimStartMs === 100 && trimEndMs === 150
+                                ? "bg-amber-500 text-slate-950 font-bold"
+                                : "bg-slate-900 text-slate-400 hover:text-white"
+                            }`}
+                          >
+                            100/150ms
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => { setTrimStartMs(150); setTrimEndMs(200); }}
+                            className={`px-1.5 py-0.5 rounded text-[10px] transition-colors cursor-pointer ${
+                              trimStartMs === 150 && trimEndMs === 200
+                                ? "bg-amber-500 text-slate-950 font-bold"
+                                : "bg-slate-900 text-slate-400 hover:text-white"
+                            }`}
+                          >
+                            150/200ms
+                          </button>
+                        </div>
+
+                        <span className="text-[10px] text-slate-400 block leading-tight">
+                          Thứ tự xử lý: <strong>1. TTS ➔ 2. Trim ➔ 3. Co giãn tốc độ</strong>. Cắt bỏ khoảng lặng thừa ở đầu và đuôi trước khi đo thời lượng để âm thanh dứt khoát và đúng nhịp phụ đề hơn.
                         </span>
                       </div>
 

@@ -37,6 +37,8 @@ export interface TimelineJobOptions {
   minSpeed: number; // e.g. 0.8
   speedPriority: 'balanced' | 'strict' | 'natural';
   padSilence: boolean;
+  trimStartMs?: number;
+  trimEndMs?: number;
   videoDuration?: number; // in seconds
   outputFormat: 'mp3' | 'wav';
 }

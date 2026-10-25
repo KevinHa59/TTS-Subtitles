@@ -768,6 +768,69 @@ function getAudioDuration(filePath: string): number {
   return 0;
 }
 
+// Trims silence or specified milliseconds from beginning and end of audio
+function trimAudioFile(
+  inputPath: string,
+  outputPath: string,
+  trimStartMs: number,
+  trimEndMs: number,
+): { success: boolean; trimmedDuration: number } {
+  const rawDur = getAudioDuration(inputPath);
+  if (!rawDur || rawDur <= 0.05) {
+    if (inputPath !== outputPath) {
+      try { fs.copyFileSync(inputPath, outputPath); } catch {}
+    }
+    return { success: true, trimmedDuration: rawDur || 0 };
+  }
+
+  let startSec = Math.max(0, (trimStartMs || 0) / 1000);
+  let endTrimSec = Math.max(0, (trimEndMs || 0) / 1000);
+
+  if (startSec <= 0 && endTrimSec <= 0) {
+    if (inputPath !== outputPath) {
+      try { fs.copyFileSync(inputPath, outputPath); } catch {}
+    }
+    return { success: true, trimmedDuration: rawDur };
+  }
+
+  // Ensure we don't trim more than total duration (leave at least 50ms)
+  const minKeep = 0.05;
+  if (startSec + endTrimSec >= rawDur - minKeep) {
+    const available = Math.max(0.01, rawDur - minKeep);
+    const ratio = available / (startSec + endTrimSec);
+    startSec = Number((startSec * ratio).toFixed(4));
+    endTrimSec = Number((endTrimSec * ratio).toFixed(4));
+  }
+
+  const durationSec = Math.max(0.05, rawDur - startSec - endTrimSec);
+
+  try {
+    const ffmpegBin = resolveFfmpegPath();
+    // atrim filter with asetpts resets timestamps cleanly
+    const filterStr = `atrim=start=${startSec.toFixed(3)}:duration=${durationSec.toFixed(3)},asetpts=PTS-STARTPTS`;
+    const res = spawnSync(ffmpegBin, [
+      "-y",
+      "-i",
+      inputPath,
+      "-filter:a",
+      filterStr,
+      outputPath,
+    ]);
+    if (res.status === 0 && fs.existsSync(outputPath) && fs.statSync(outputPath).size > 44) {
+      const trimmedDur = getAudioDuration(outputPath);
+      return { success: true, trimmedDuration: trimmedDur || durationSec };
+    }
+  } catch (err) {
+    console.error("[Trim Error]", err);
+  }
+
+  // Fallback
+  if (inputPath !== outputPath) {
+    try { fs.copyFileSync(inputPath, outputPath); } catch {}
+  }
+  return { success: false, trimmedDuration: rawDur };
+}
+
 // -------------------------------------------------------------
 // SUBTITLE TIMELINE JOB MANAGER WITH REAL-TIME SSE
 // -------------------------------------------------------------
@@ -815,6 +878,8 @@ interface TimelineJobOptions {
   minSpeed: number;
   speedPriority: "balanced" | "strict" | "natural";
   padSilence: boolean;
+  trimStartMs?: number;
+  trimEndMs?: number;
   videoDuration?: number;
   outputFormat: "mp3" | "wav";
   normalizeNumbers?: boolean;
@@ -1716,13 +1781,30 @@ async function runJobProcessor(job: TimelineJob) {
               outputFormat: "wav",
               speakerId: job.speakerId,
             });
+
+            // 1. Lưu audio gốc TTS
+            const rawWavPath = path.join(
+              jobDir,
+              `item_${item.index}_raw.wav`,
+            );
+            fs.writeFileSync(rawWavPath, synthRes.audio);
+
+            // 2. Cắt khoảng trắng (Trim đầu & đuôi theo cấu hình)
             const origWavPath = path.join(
               jobDir,
               `item_${item.index}_orig.wav`,
             );
-            fs.writeFileSync(origWavPath, synthRes.audio);
+            const trimStartMs = Math.max(0, Number(job.options.trimStartMs) || 0);
+            const trimEndMs = Math.max(0, Number(job.options.trimEndMs) || 0);
+            const trimResult = trimAudioFile(
+              rawWavPath,
+              origWavPath,
+              trimStartMs,
+              trimEndMs,
+            );
 
-            const origDur = getAudioDuration(origWavPath);
+            // 3. Đo thời lượng thực tế sau trim và co giãn tốc độ (Adjust Speed)
+            const origDur = trimResult.trimmedDuration || getAudioDuration(origWavPath);
             item.originalDuration = Number(origDur.toFixed(3));
             const targetDur = item.targetDuration;
 
@@ -1922,6 +2004,8 @@ app.post("/api/subtitles/job/create", (req: Request, res: Response) => {
       minSpeed,
       speedPriority: options.speedPriority || "balanced",
       padSilence: options.padSilence !== false,
+      trimStartMs: Math.max(0, Math.min(2000, Number(options.trimStartMs) || 0)),
+      trimEndMs: Math.max(0, Math.min(2000, Number(options.trimEndMs) || 0)),
       videoDuration: options.videoDuration
         ? Number(options.videoDuration)
         : undefined,
@@ -1939,6 +2023,13 @@ app.post("/api/subtitles/job/create", (req: Request, res: Response) => {
     "INFO",
     `Khởi tạo dự án phụ đề: ${job.items.length} câu (${totalBatches} batch, ${batchSize} câu/batch).`,
   );
+  if (job.options.trimStartMs || job.options.trimEndMs) {
+    addJobLog(
+      job,
+      "INFO",
+      `Cắt khoảng trắng (Trim): Đầu câu ${job.options.trimStartMs || 0}ms, Cuối câu ${job.options.trimEndMs || 0}ms.`,
+    );
+  }
 
   res.json({ success: true, jobId, job });
 });
@@ -2097,10 +2188,23 @@ app.post(
         outputFormat: "wav",
         speakerId: job.speakerId,
       });
-      const origWavPath = path.join(jobDir, `item_${item.index}_orig.wav`);
-      fs.writeFileSync(origWavPath, synthRes.audio);
+      // 1. Lưu audio gốc TTS
+      const rawWavPath = path.join(jobDir, `item_${item.index}_raw.wav`);
+      fs.writeFileSync(rawWavPath, synthRes.audio);
 
-      const origDur = getAudioDuration(origWavPath);
+      // 2. Cắt khoảng trắng (Trim)
+      const origWavPath = path.join(jobDir, `item_${item.index}_orig.wav`);
+      const trimStartMs = Math.max(0, Number(job.options.trimStartMs) || 0);
+      const trimEndMs = Math.max(0, Number(job.options.trimEndMs) || 0);
+      const trimResult = trimAudioFile(
+        rawWavPath,
+        origWavPath,
+        trimStartMs,
+        trimEndMs,
+      );
+
+      // 3. Đo thời lượng thực tế sau trim và co giãn tốc độ
+      const origDur = trimResult.trimmedDuration || getAudioDuration(origWavPath);
       item.originalDuration = Number(origDur.toFixed(3));
       const targetDur = item.targetDuration;
 
