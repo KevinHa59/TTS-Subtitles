@@ -90,7 +90,7 @@ import {
 import StorytellingTab from "./components/StorytellingTab";
 import BgmGeneratorTab from "./components/BgmGeneratorTab";
 import AudioCleanupModal from "./components/AudioCleanupModal";
-import VoiceCloneModal from "./components/VoiceCloneModal";
+import VoiceClonePage from "./components/VoiceClonePage";
 
 export interface ProjectPreset {
   id: string;
@@ -149,13 +149,55 @@ interface VoiceOption {
 }
 
 export default function App() {
-  // Navigation: 'subtitles' (Phụ đề Timeline) | 'single' (Đọc văn bản đơn) | 'story' (Kể Truyện) | 'bgm' (Tạo Nhạc Nền)
+  // Navigation: 'subtitles' (Phụ đề Timeline) | 'single' (Đọc văn bản đơn) | 'story' (Kể Truyện) | 'bgm' (Tạo Nhạc Nền) | 'voice-clone' (Clone Giọng)
+  const getInitialTab = (): "subtitles" | "single" | "story" | "bgm" | "voice-clone" => {
+    if (typeof window !== "undefined") {
+      const path = window.location.pathname;
+      if (path === "/voice-clone") return "voice-clone";
+      if (path === "/story") return "story";
+      if (path === "/bgm") return "bgm";
+      if (path === "/single") return "single";
+    }
+    return "subtitles";
+  };
+
   const [activeTab, setActiveTab] = useState<
-    "subtitles" | "single" | "story" | "bgm"
-  >("subtitles");
+    "subtitles" | "single" | "story" | "bgm" | "voice-clone"
+  >(getInitialTab);
   const [showAudioCleanupModal, setShowAudioCleanupModal] = useState<boolean>(false);
-  const [showVoiceCloneModal, setShowVoiceCloneModal] = useState<boolean>(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState<boolean>(false);
+
+  const handleNavigateTab = (tab: "subtitles" | "single" | "story" | "bgm" | "voice-clone") => {
+    setActiveTab(tab);
+    if (typeof window !== "undefined") {
+      const path =
+        tab === "voice-clone"
+          ? "/voice-clone"
+          : tab === "story"
+          ? "/story"
+          : tab === "bgm"
+          ? "/bgm"
+          : tab === "single"
+          ? "/single"
+          : "/";
+      if (window.location.pathname !== path) {
+        window.history.pushState({}, "", path);
+      }
+    }
+  };
+
+  useEffect(() => {
+    const handlePopState = () => {
+      const path = window.location.pathname;
+      if (path === "/voice-clone") setActiveTab("voice-clone");
+      else if (path === "/story") setActiveTab("story");
+      else if (path === "/bgm") setActiveTab("bgm");
+      else if (path === "/single") setActiveTab("single");
+      else setActiveTab("subtitles");
+    };
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
 
   // Voices
   const [voices, setVoices] = useState<VoiceOption[]>([]);
@@ -1579,6 +1621,7 @@ export default function App() {
                   {activeTab === "single" && "Đọc Đoạn Văn"}
                   {activeTab === "story" && "Kể Truyện"}
                   {activeTab === "bgm" && "Tạo Nhạc Nền"}
+                  {activeTab === "voice-clone" && "Clone Giọng"}
                 </span>
               </div>
               <p className="text-xs text-slate-400 hidden xl:block">
@@ -1593,8 +1636,8 @@ export default function App() {
             <nav className="flex items-center p-1 bg-slate-950/80 rounded-xl border border-slate-800 text-xs shrink-0 flex-nowrap">
               <button
                 type="button"
-                onClick={() => setActiveTab("subtitles")}
-                className={`px-3 py-1.5 rounded-lg font-medium transition-all whitespace-nowrap ${
+                onClick={() => handleNavigateTab("subtitles")}
+                className={`px-3 py-1.5 rounded-lg font-medium transition-all whitespace-nowrap cursor-pointer ${
                   activeTab === "subtitles"
                     ? "bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/20"
                     : "text-slate-400 hover:text-white"
@@ -1604,8 +1647,8 @@ export default function App() {
               </button>
               <button
                 type="button"
-                onClick={() => setActiveTab("single")}
-                className={`px-3 py-1.5 rounded-lg font-medium transition-all whitespace-nowrap ${
+                onClick={() => handleNavigateTab("single")}
+                className={`px-3 py-1.5 rounded-lg font-medium transition-all whitespace-nowrap cursor-pointer ${
                   activeTab === "single"
                     ? "bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/20"
                     : "text-slate-400 hover:text-white"
@@ -1615,8 +1658,8 @@ export default function App() {
               </button>
               <button
                 type="button"
-                onClick={() => setActiveTab("story")}
-                className={`px-3 py-1.5 rounded-lg font-medium transition-all flex items-center gap-1.5 whitespace-nowrap ${
+                onClick={() => handleNavigateTab("story")}
+                className={`px-3 py-1.5 rounded-lg font-medium transition-all flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
                   activeTab === "story"
                     ? "bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/20"
                     : "text-slate-400 hover:text-white"
@@ -1627,8 +1670,8 @@ export default function App() {
               </button>
               <button
                 type="button"
-                onClick={() => setActiveTab("bgm")}
-                className={`px-3 py-1.5 rounded-lg font-medium transition-all flex items-center gap-1.5 whitespace-nowrap ${
+                onClick={() => handleNavigateTab("bgm")}
+                className={`px-3 py-1.5 rounded-lg font-medium transition-all flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
                   activeTab === "bgm"
                     ? "bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/20"
                     : "text-slate-400 hover:text-white"
@@ -1637,18 +1680,20 @@ export default function App() {
                 <Music className="w-3.5 h-3.5" />
                 <span>Tạo Nhạc Nền</span>
               </button>
+              <button
+                type="button"
+                onClick={() => handleNavigateTab("voice-clone")}
+                className={`px-3 py-1.5 rounded-lg font-semibold transition-all flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
+                  activeTab === "voice-clone"
+                    ? "bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/20"
+                    : "text-amber-400 hover:text-amber-200 hover:bg-amber-500/10"
+                }`}
+                title="Trang huấn luyện và Clone giọng nói tiếng Việt bằng Google Colab (/voice-clone)"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>Clone Giọng (Colab)</span>
+              </button>
             </nav>
-
-            {/* Nút Clone Giọng (Colab) trên Header */}
-            <button
-              type="button"
-              onClick={() => setShowVoiceCloneModal(true)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-amber-300 hover:text-amber-100 bg-amber-950/50 hover:bg-amber-900/70 rounded-xl transition-all border border-amber-600/50 shadow-sm shrink-0 whitespace-nowrap cursor-pointer"
-              title="Huấn luyện và Clone giọng nói tiếng Việt bằng Google Colab"
-            >
-              <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-              <span>Clone Giọng (Colab)</span>
-            </button>
 
             {/* Nút Dọn Dẹp Audio trên Header */}
             <button
@@ -1718,7 +1763,7 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => {
-                      setActiveTab("subtitles");
+                      handleNavigateTab("subtitles");
                       setMobileMenuOpen(false);
                     }}
                     className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl font-medium text-sm transition-all ${
@@ -1741,7 +1786,7 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => {
-                      setActiveTab("single");
+                      handleNavigateTab("single");
                       setMobileMenuOpen(false);
                     }}
                     className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl font-medium text-sm transition-all ${
@@ -1764,7 +1809,7 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => {
-                      setActiveTab("story");
+                      handleNavigateTab("story");
                       setMobileMenuOpen(false);
                     }}
                     className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl font-medium text-sm transition-all ${
@@ -1787,7 +1832,7 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => {
-                      setActiveTab("bgm");
+                      handleNavigateTab("bgm");
                       setMobileMenuOpen(false);
                     }}
                     className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl font-medium text-sm transition-all ${
@@ -1806,6 +1851,29 @@ export default function App() {
                       </span>
                     )}
                   </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      handleNavigateTab("voice-clone");
+                      setMobileMenuOpen(false);
+                    }}
+                    className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl font-medium text-sm transition-all ${
+                      activeTab === "voice-clone"
+                        ? "bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/20"
+                        : "bg-slate-950/60 text-amber-300 hover:text-white hover:bg-slate-800/60 border border-amber-600/40"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <Sparkles className={`w-4 h-4 ${activeTab === "voice-clone" ? "text-slate-950" : "text-amber-400"}`} />
+                      <span>Clone Giọng (Colab)</span>
+                    </div>
+                    {activeTab === "voice-clone" && (
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-950/20 text-slate-950">
+                        Đang chọn
+                      </span>
+                    )}
+                  </button>
                 </div>
               </div>
 
@@ -1813,18 +1881,7 @@ export default function App() {
                 <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-2 px-1">
                   Công cụ tiện ích
                 </div>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowVoiceCloneModal(true);
-                      setMobileMenuOpen(false);
-                    }}
-                    className="flex items-center justify-center gap-2 px-3 py-2.5 text-xs font-semibold text-amber-300 bg-amber-950/50 hover:bg-amber-900/70 rounded-xl border border-amber-600/50 transition-colors"
-                  >
-                    <Sparkles className="w-4 h-4 text-amber-400" />
-                    <span>Clone Giọng (Colab)</span>
-                  </button>
+                <div className="grid grid-cols-2 gap-2">
 
                   <button
                     type="button"
@@ -3880,6 +3937,13 @@ export default function App() {
         {activeTab === "bgm" && (
           <BgmGeneratorTab voices={voices} />
         )}
+
+        {/* ========================================================= */}
+        {/* TAB 5: VOICE CLONE PAGE (HUẤN LUYỆN & CLONE GIỌNG COLAB)  */}
+        {/* ========================================================= */}
+        {activeTab === "voice-clone" && (
+          <VoiceClonePage onVoiceInstalled={() => loadVoices()} />
+        )}
       </main>
 
       {/* ========================================================= */}
@@ -5373,13 +5437,6 @@ const { audio, sampleRate } = await tts.synthesize("Xin chào! Đây là Piper T
             );
           }
         }}
-      />
-
-      {/* Voice Clone Modal (Google Colab 1-Click Studio) */}
-      <VoiceCloneModal
-        isOpen={showVoiceCloneModal}
-        onClose={() => setShowVoiceCloneModal(false)}
-        onVoiceInstalled={() => loadVoices()}
       />
     </div>
   );
