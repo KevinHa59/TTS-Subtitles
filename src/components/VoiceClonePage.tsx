@@ -30,6 +30,7 @@ import {
   GitBranch,
   ShieldCheck,
   X,
+  Plus,
 } from "lucide-react";
 
 interface SystemModelItem {
@@ -121,6 +122,7 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
 
   // === TAB 1: DATASET PREPARATION STATE ===
   const [audioFile, setAudioFile] = useState<File | null>(null);
+  const [extendDatasetId, setExtendDatasetId] = useState<string>("");
   const [datasetVoiceName, setDatasetVoiceName] = useState<string>("giong_moi");
   const [whisperModel, setWhisperModel] = useState<string>("small");
   const [minDuration, setMinDuration] = useState<number>(1.0);
@@ -214,9 +216,6 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
 
       if (dsData.success && Array.isArray(dsData.datasets)) {
         setSavedDatasets(dsData.datasets);
-        if (dsData.datasets.length > 0 && !currentDataset) {
-          setCurrentDataset(dsData.datasets[0]);
-        }
       }
       if (mdData.success && Array.isArray(mdData.models)) {
         setAvailableModels(mdData.models);
@@ -388,6 +387,9 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
         minDuration: minDuration.toString(),
         maxDuration: maxDuration.toString(),
       });
+      if (extendDatasetId) {
+        uploadParams.append("extendDatasetId", extendDatasetId);
+      }
 
       const res = await fetch(`/api/dataset/prepare-upload?${uploadParams}`, {
         method: "POST",
@@ -402,7 +404,9 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
       const jobId = data.jobId;
       setDatasetFeedback({
         type: "info",
-        message: `Đang cắt lát và phiên âm bằng Whisper.cpp (${whisperModel}) hoàn toàn offline... Vui lòng đợi trong giây lát.`,
+        message: extendDatasetId
+          ? `Đang cắt lát và bổ sung vào bộ dữ liệu bằng Whisper.cpp (${whisperModel}) hoàn toàn offline... Vui lòng đợi trong giây lát.`
+          : `Đang cắt lát và phiên âm bằng Whisper.cpp (${whisperModel}) hoàn toàn offline... Vui lòng đợi trong giây lát.`,
       });
 
       // Poll progress until finished
@@ -419,9 +423,12 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
             if (pollData.job.status === "completed") {
               clearInterval(pollTimer);
               setIsProcessingDataset(false);
+              const isExtended = Boolean(extendDatasetId);
               setDatasetFeedback({
                 type: "success",
-                message: `Cắt và phiên âm hoàn tất! Tạo được ${pollData.job.dataset.totalClips} câu (${pollData.job.dataset.totalDurationSec} giây).`,
+                message: isExtended
+                  ? `Đã bổ sung thành công vào bộ dữ liệu "${pollData.job.dataset.voiceName}"! Tổng cộng hiện có ${pollData.job.dataset.totalClips} câu (${pollData.job.dataset.totalDurationSec}s).`
+                  : `Cắt và phiên âm hoàn tất! Tạo được ${pollData.job.dataset.totalClips} câu (${pollData.job.dataset.totalDurationSec} giây).`,
               });
               setCurrentDataset(pollData.job.dataset);
               fetchDatasetsAndModels();
@@ -576,6 +583,9 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
       setSavedDatasets((prev) => prev.filter((d) => d.id !== datasetId));
       if (currentDataset?.id === datasetId) {
         setCurrentDataset(null);
+      }
+      if (extendDatasetId === datasetId) {
+        setExtendDatasetId("");
       }
     } catch {
       alert("Lỗi khi xóa dataset.");
@@ -1053,6 +1063,51 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
                     <span>Cấu Hình Tách & Phiên Âm</span>
                   </div>
 
+                  {/* Dataset Extend / Create New Dropdown */}
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-300 mb-1">
+                      Mục tiêu bộ dữ liệu:
+                    </label>
+                    <select
+                      value={extendDatasetId}
+                      onChange={(e) => {
+                        const selectedId = e.target.value;
+                        setExtendDatasetId(selectedId);
+                        if (selectedId) {
+                          const found = savedDatasets.find((d) => d.id === selectedId);
+                          if (found) {
+                            setDatasetVoiceName(found.voiceName);
+                            setCurrentDataset(found);
+                          }
+                        }
+                      }}
+                      className="w-full px-3 py-2 text-xs rounded-xl bg-slate-900 border border-slate-700 text-white focus:outline-none focus:border-amber-500"
+                    >
+                      <option value="">+ Tạo bộ dữ liệu mới (Mặc định)</option>
+                      {savedDatasets.map((ds) => (
+                        <option key={ds.id} value={ds.id}>
+                          Bổ sung vào: {ds.voiceName} ({ds.totalClips} câu hiện có)
+                        </option>
+                      ))}
+                    </select>
+                    {extendDatasetId ? (
+                      <div className="mt-1.5 flex items-center justify-between text-[10px] text-amber-300 bg-amber-500/10 px-2.5 py-1.5 rounded-lg border border-amber-500/20">
+                        <span>⚡ Các câu mới sẽ nối tiếp vào &ldquo;{datasetVoiceName}&rdquo;</span>
+                        <button
+                          type="button"
+                          onClick={() => setExtendDatasetId("")}
+                          className="text-slate-400 hover:text-white underline cursor-pointer ml-2"
+                        >
+                          Hủy chọn
+                        </button>
+                      </div>
+                    ) : (
+                      <p className="mt-1 text-[10px] text-slate-400">
+                        Mặc định sẽ tạo một bộ dữ liệu mới độc lập.
+                      </p>
+                    )}
+                  </div>
+
                   {/* Voice Name / Voice ID */}
                   <div>
                     <label className="block text-[11px] font-semibold text-slate-300 mb-1">
@@ -1062,10 +1117,20 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
                       type="text"
                       value={datasetVoiceName}
                       onChange={(e) => setDatasetVoiceName(e.target.value)}
+                      disabled={!!extendDatasetId}
                       placeholder="VD: hoang_nam, lan_anh"
-                      className="w-full px-3 py-2 text-xs rounded-xl bg-slate-900 border border-slate-700 text-white focus:outline-none focus:border-amber-500 font-mono"
+                      className={`w-full px-3 py-2 text-xs rounded-xl border font-mono ${
+                        extendDatasetId
+                          ? "bg-slate-900/50 border-slate-800 text-slate-400 cursor-not-allowed"
+                          : "bg-slate-900 border-slate-700 text-white focus:outline-none focus:border-amber-500"
+                      }`}
                       required
                     />
+                    {extendDatasetId && (
+                      <p className="mt-1 text-[10px] text-slate-400">
+                        Tên giọng tự động đồng bộ theo bộ dữ liệu đang bổ sung.
+                      </p>
+                    )}
                   </div>
 
                   {/* Whisper Model Select */}
@@ -1120,7 +1185,7 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
                     )}
                   </div>
 
-                  {/* Min / Max Durations */}
+                  {/* Min / Max Durations (both step 0.5) */}
                   <div className="grid grid-cols-2 gap-2.5">
                     <div>
                       <label className="block text-[10px] text-slate-400 mb-1">
@@ -1131,9 +1196,9 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
                           type="number"
                           step="0.5"
                           min="0.5"
-                          max="5"
+                          max="10"
                           value={minDuration}
-                          onChange={(e) => setMinDuration(parseFloat(e.target.value) || 1.0)}
+                          onChange={(e) => setMinDuration(parseFloat(e.target.value) || 0.5)}
                           className="w-full pl-2.5 pr-6 py-1.5 text-xs rounded-lg bg-slate-900 border border-slate-700 text-white font-mono"
                         />
                         <span className="absolute right-2 top-1.5 text-[10px] text-slate-500">s</span>
@@ -1146,9 +1211,9 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
                       <div className="relative">
                         <input
                           type="number"
-                          step="1"
-                          min="5"
-                          max="20"
+                          step="0.5"
+                          min="1"
+                          max="30"
                           value={maxDuration}
                           onChange={(e) => setMaxDuration(parseFloat(e.target.value) || 12.0)}
                           className="w-full pl-2.5 pr-6 py-1.5 text-xs rounded-lg bg-slate-900 border border-slate-700 text-white font-mono"
@@ -1169,12 +1234,12 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
                     {isProcessingDataset ? (
                       <>
                         <RefreshCw className="w-4 h-4 animate-spin text-slate-950" />
-                        <span>Đang Cắt & Phiên Âm Offline...</span>
+                        <span>{extendDatasetId ? "Đang Cắt & Bổ Sung Offline..." : "Đang Cắt & Phiên Âm Offline..."}</span>
                       </>
                     ) : (
                       <>
                         <Scissors className="w-4 h-4 fill-current" />
-                        <span>Bắt Đầu Cắt & Phiên Âm Offline</span>
+                        <span>{extendDatasetId ? "Bổ Sung Vào Bộ Dữ Liệu Này" : "Bắt Đầu Cắt & Phiên Âm Offline"}</span>
                       </>
                     )}
                   </button>
@@ -1224,11 +1289,29 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
                             </p>
                           </div>
                           <div className="flex items-center gap-1 shrink-0">
+                            {extendDatasetId === ds.id && (
+                              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-sky-500/20 text-sky-300 border border-sky-500/30">
+                                Bổ sung
+                              </span>
+                            )}
                             {currentDataset?.id === ds.id && (
                               <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-500 text-slate-950">
                                 Đang xem
                               </span>
                             )}
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setExtendDatasetId(ds.id);
+                                setDatasetVoiceName(ds.voiceName);
+                                setCurrentDataset(ds);
+                              }}
+                              className="p-1 text-slate-400 hover:text-amber-400 rounded transition-colors cursor-pointer"
+                              title="Chọn bộ dữ liệu này để bổ sung audio mới"
+                            >
+                              <Plus className="w-3.5 h-3.5" />
+                            </button>
                             <button
                               type="button"
                               onClick={(e) => {
@@ -1269,21 +1352,46 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
                         <span className="text-xs font-mono font-bold px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400 border border-amber-500/30">
                           {currentDataset.totalDurationSec}s âm thanh
                         </span>
+                        {extendDatasetId === currentDataset.id && (
+                          <span className="text-xs font-mono font-bold px-2 py-0.5 rounded-full bg-sky-500/15 text-sky-400 border border-sky-500/30">
+                            Đang chọn để bổ sung
+                          </span>
+                        )}
                       </div>
                       <p className="text-[11px] text-slate-400 mt-1">
                         File gốc: <span className="text-slate-300 font-medium">{currentDataset.originalAudioFilename}</span> • Mô hình: <span className="text-slate-300 font-mono">{currentDataset.whisperModelUsed}</span>
                       </p>
                     </div>
 
-                    <a
-                      href={`/api/dataset/${currentDataset.id}/export-zip`}
-                      download={`${currentDataset.id}_dataset.zip`}
-                      className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 text-slate-950 text-xs font-bold transition-all shadow-md shadow-amber-500/20 shrink-0 whitespace-nowrap cursor-pointer"
-                      title="Tải tệp .zip chứa wavs/ và metadata.csv để đưa lên Colab"
-                    >
-                      <Download className="w-4 h-4" />
-                      <span>Tải Gói Dataset (.zip) Lên Colab</span>
-                    </a>
+                    <div className="flex items-center gap-2 flex-wrap shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setExtendDatasetId(currentDataset.id);
+                          setDatasetVoiceName(currentDataset.voiceName);
+                          audioInputRef.current?.click();
+                        }}
+                        className={`inline-flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                          extendDatasetId === currentDataset.id
+                            ? "bg-sky-500/20 text-sky-300 border border-sky-500/40"
+                            : "bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700"
+                        }`}
+                        title="Chọn bộ dữ liệu này để cắt và nối thêm các câu mới từ file âm thanh khác"
+                      >
+                        <Plus className="w-4 h-4 text-amber-400" />
+                        <span>{extendDatasetId === currentDataset.id ? "Đang chọn để bổ sung" : "Bổ sung audio..."}</span>
+                      </button>
+
+                      <a
+                        href={`/api/dataset/${currentDataset.id}/export-zip`}
+                        download={`${currentDataset.id}_dataset.zip`}
+                        className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 text-slate-950 text-xs font-bold transition-all shadow-md shadow-amber-500/20 shrink-0 whitespace-nowrap cursor-pointer"
+                        title="Tải tệp .zip chứa wavs/ và metadata.csv để đưa lên Colab"
+                      >
+                        <Download className="w-4 h-4" />
+                        <span>Tải Gói Dataset (.zip) Lên Colab</span>
+                      </a>
+                    </div>
                   </div>
 
                   {/* Sliced Audio Clips Table */}

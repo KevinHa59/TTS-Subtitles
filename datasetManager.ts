@@ -305,7 +305,7 @@ function runWhisper(
   });
 }
 
-// Process audio and prepare complete Piper dataset offline
+// Process audio and prepare complete Piper dataset offline (with optional dataset extension)
 export async function prepareOfflineDataset(
   audioSource: Buffer | string,
   originalFilename: string,
@@ -314,7 +314,8 @@ export async function prepareOfflineDataset(
   minDurationSec: number = 1.0,
   maxDurationSec: number = 12.0,
   onProgress?: (progress: DatasetPreparationProgress) => void,
-  ffmpegPath: string = process.env.FFMPEG_PATH || "ffmpeg"
+  ffmpegPath: string = process.env.FFMPEG_PATH || "ffmpeg",
+  targetDatasetId?: string
 ): Promise<DatasetInfo> {
   const whisperCli = getWhisperCliPath();
   if (!whisperCli) {
@@ -343,8 +344,22 @@ export async function prepareOfflineDataset(
     .replace(/[^a-z0-9_-]/g, "_")
     .replace(/_+/g, "_");
 
-  const timestamp = Date.now();
-  const datasetId = `${cleanVoiceId}_${timestamp}`;
+  // Check if extending an existing dataset
+  let datasetId = `${cleanVoiceId}_${Date.now()}`;
+  let existingInfo: DatasetInfo | null = null;
+  if (targetDatasetId) {
+    const existingDir = path.join(DATASETS_ROOT, targetDatasetId);
+    const existingInfoPath = path.join(existingDir, "info.json");
+    if (fs.existsSync(existingInfoPath)) {
+      try {
+        existingInfo = JSON.parse(fs.readFileSync(existingInfoPath, "utf-8")) as DatasetInfo;
+        datasetId = targetDatasetId;
+      } catch (err) {
+        console.warn(`[Dataset] Không thể đọc info.json của ${targetDatasetId}, sẽ tạo dataset mới:`, err);
+      }
+    }
+  }
+
   const datasetDir = path.join(DATASETS_ROOT, datasetId);
   const wavDir = path.join(datasetDir, "wav");
   const tempDir = path.join(datasetDir, "temp");
@@ -390,8 +405,17 @@ export async function prepareOfflineDataset(
     }
 
     const whisperThreads = Math.max(1, Math.min(8, availableParallelism()));
-    const clips: DatasetClip[] = [];
+    const newClips: DatasetClip[] = [];
     let clipIndex = 1;
+    if (existingInfo && Array.isArray(existingInfo.clips)) {
+      for (const c of existingInfo.clips) {
+        const match = c.id.match(/\d+/);
+        if (match) {
+          const num = parseInt(match[0], 10);
+          if (num >= clipIndex) clipIndex = num + 1;
+        }
+      }
+    }
 
     for (const [chunkIndex, whisperWavPath] of chunkPaths.entries()) {
       const chunkStartMs = chunkIndex * 300_000;
@@ -473,7 +497,7 @@ export async function prepareOfflineDataset(
         );
 
         if (sliceProc.status === 0 && fs.existsSync(clipDestPath)) {
-          clips.push({
+          newClips.push({
             id: clipId,
             filename: clipFilename,
             text: cleanText,
@@ -493,29 +517,44 @@ export async function prepareOfflineDataset(
       });
     }
 
-    if (clips.length === 0) {
+    if (newClips.length === 0) {
       throw new Error("Whisper không phát hiện được câu thoại phù hợp với khoảng thời lượng cài đặt.");
     }
 
+    // Combine existing clips with new clips
+    const allClips: DatasetClip[] = existingInfo ? [...existingInfo.clips, ...newClips] : newClips;
+
     // 5. Generate metadata.csv (LJSpeech standard for Piper)
-    const metadataLines = clips.map((c) => `${c.id}|${c.text}`);
+    const metadataLines = allClips.map((c) => `${c.id}|${c.text}`);
     const metadataPath = path.join(datasetDir, "metadata.csv");
     fs.writeFileSync(metadataPath, metadataLines.join("\n"), "utf-8");
 
+    // Clear stale dataset zip if exists so new zip will be generated on download
+    const zipPath = path.join(datasetDir, `${datasetId}_dataset.zip`);
+    if (fs.existsSync(zipPath)) {
+      try {
+        fs.rmSync(zipPath, { force: true });
+      } catch {}
+    }
+
     // 6. Save info.json
     const totalDurationSec = Math.round(
-      clips.reduce((sum, c) => sum + c.durationSec, 0) * 10
+      allClips.reduce((sum, c) => sum + c.durationSec, 0) * 10
     ) / 10;
 
     const datasetInfo: DatasetInfo = {
       id: datasetId,
-      voiceName: voiceName.trim() || cleanVoiceId,
-      createdAt: new Date().toISOString(),
-      originalAudioFilename: originalFilename,
+      voiceName: (existingInfo?.voiceName || voiceName).trim() || cleanVoiceId,
+      createdAt: existingInfo?.createdAt || new Date().toISOString(),
+      originalAudioFilename: existingInfo
+        ? (existingInfo.originalAudioFilename.includes(originalFilename)
+            ? existingInfo.originalAudioFilename
+            : `${existingInfo.originalAudioFilename}, ${originalFilename}`)
+        : originalFilename,
       whisperModelUsed: whisperModelId,
-      totalClips: clips.length,
+      totalClips: allClips.length,
       totalDurationSec,
-      clips,
+      clips: allClips,
     };
 
     onProgress?.({ progressPercent: 99, message: "Đang lưu bộ dữ liệu..." });

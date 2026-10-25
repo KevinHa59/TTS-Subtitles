@@ -3298,7 +3298,8 @@ function startDatasetPreparation(
   whisperModel: string,
   minDuration: number,
   maxDuration: number,
-  uploadTempDir?: string
+  uploadTempDir?: string,
+  targetDatasetId?: string
 ): DatasetPreparationJob {
   const now = Date.now();
   for (const [id, job] of datasetPreparationJobs) {
@@ -3328,7 +3329,8 @@ function startDatasetPreparation(
       job.message = progress.message;
       job.updatedAt = Date.now();
     },
-    resolveFfmpegPath()
+    resolveFfmpegPath(),
+    targetDatasetId
   )
     .then((datasetInfo) => {
       job.status = "completed";
@@ -3410,6 +3412,7 @@ app.post("/api/dataset/prepare-upload", async (req: Request, res: Response) => {
     const queryString = (key: string, fallback: string) =>
       typeof req.query[key] === "string" ? req.query[key] as string : fallback;
     const originalFilename = path.basename(queryString("originalFilename", "audio.wav"));
+    const targetDatasetId = queryString("extendDatasetId", "") || queryString("targetDatasetId", "");
     const job = startDatasetPreparation(
       uploadPath,
       originalFilename,
@@ -3417,7 +3420,8 @@ app.post("/api/dataset/prepare-upload", async (req: Request, res: Response) => {
       queryString("whisperModel", "small"),
       Number(queryString("minDuration", "1")) || 1,
       Number(queryString("maxDuration", "12")) || 12,
-      uploadTempDir
+      uploadTempDir,
+      targetDatasetId || undefined
     );
 
     res.status(202).json({ success: true, jobId: job.id });
@@ -3445,6 +3449,8 @@ app.post("/api/dataset/prepare", async (req: Request, res: Response) => {
       whisperModel = "small",
       minDuration = 1.0,
       maxDuration = 12.0,
+      extendDatasetId,
+      targetDatasetId,
     } = req.body || {};
 
     if (!audioBase64) {
@@ -3466,7 +3472,9 @@ app.post("/api/dataset/prepare", async (req: Request, res: Response) => {
       voiceName,
       whisperModel,
       Number(minDuration) || 1.0,
-      Number(maxDuration) || 12.0
+      Number(maxDuration) || 12.0,
+      undefined,
+      extendDatasetId || targetDatasetId || undefined
     );
 
     res.status(202).json({ success: true, jobId: job.id });
