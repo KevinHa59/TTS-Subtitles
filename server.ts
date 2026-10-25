@@ -1738,7 +1738,7 @@ async function runJobProcessor(job: TimelineJob) {
             );
             const maxSpeed = job.options.maxSpeed || 1.5;
             const minSpeed = job.options.minSpeed || 0.8;
-            const speedFloor = Math.max(1.0, minSpeed);
+            const speedFloor = Math.max(0.5, minSpeed);
             const neededSpeed =
               origDur > 0 && targetDur > 0 ? origDur / targetDur : 1.0;
             let appliedSpeed = Math.max(
@@ -1767,7 +1767,7 @@ async function runJobProcessor(job: TimelineJob) {
               );
             }
 
-            if (appliedSpeed > 1.0) {
+            if (Math.abs(appliedSpeed - 1.0) >= 0.01) {
               try {
                 const ffmpegBin = resolveFfmpegPath();
                 const filterStr = buildAtempoFilter(appliedSpeed);
@@ -1788,7 +1788,7 @@ async function runJobProcessor(job: TimelineJob) {
                 }
               } catch (err) {
                 throw new Error(
-                  `Không thể tăng tốc câu #${item.index} lên ${appliedSpeed.toFixed(2)}x: ${err instanceof Error ? err.message : String(err)}`,
+                  `Không thể điều chỉnh tốc độ câu #${item.index} sang ${appliedSpeed.toFixed(2)}x: ${err instanceof Error ? err.message : String(err)}`,
                 );
               }
             } else {
@@ -1882,7 +1882,7 @@ app.post("/api/subtitles/job/create", (req: Request, res: Response) => {
   const batchSize = Math.max(1, Math.min(32, Number(options.batchSize) || 4));
   const maxSpeed = Math.max(1.1, Math.min(3, Number(options.maxSpeed) || 1.5));
   const minSpeed = Math.max(
-    0.6,
+    0.5,
     Math.min(maxSpeed, 1.5, Number(options.minSpeed) || 0.8),
   );
   const totalBatches = Math.ceil(items.length / batchSize);
@@ -2110,7 +2110,7 @@ app.post(
       );
       const maxSpeed = job.options.maxSpeed || 1.5;
       const minSpeed = job.options.minSpeed || 0.8;
-      const speedFloor = Math.max(1.0, minSpeed);
+      const speedFloor = Math.max(0.5, minSpeed);
       const neededSpeed =
         origDur > 0 && targetDur > 0 ? origDur / targetDur : 1.0;
       const appliedSpeed = Math.max(
@@ -2118,7 +2118,7 @@ app.post(
         Math.min(maxSpeed, neededSpeed),
       );
 
-      if (appliedSpeed > 1.0) {
+      if (Math.abs(appliedSpeed - 1.0) >= 0.01) {
         try {
           const ffmpegBin = resolveFfmpegPath();
           const filterStr = buildAtempoFilter(appliedSpeed);
@@ -2139,7 +2139,7 @@ app.post(
           }
         } catch (err) {
           throw new Error(
-            `Không thể tăng tốc câu #${item.index} lên ${appliedSpeed.toFixed(2)}x: ${err instanceof Error ? err.message : String(err)}`,
+            `Không thể điều chỉnh tốc độ câu #${item.index} sang ${appliedSpeed.toFixed(2)}x: ${err instanceof Error ? err.message : String(err)}`,
           );
         }
       } else {

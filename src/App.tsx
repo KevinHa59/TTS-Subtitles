@@ -3427,10 +3427,19 @@ export default function App() {
                             {item.appliedSpeed ? (
                               <span
                                 className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                                  item.appliedSpeed > 1.2
+                                  item.appliedSpeed > 1.05
                                     ? "bg-amber-500/20 text-amber-300 border border-amber-500/30"
+                                    : item.appliedSpeed < 0.98
+                                    ? "bg-sky-500/20 text-sky-300 border border-sky-500/30"
                                     : "bg-slate-800 text-slate-300"
                                 }`}
+                                title={
+                                  item.appliedSpeed < 0.98
+                                    ? `Giảm tốc ${item.appliedSpeed.toFixed(2)}x để khớp thời lượng phụ đề dài hơn`
+                                    : item.appliedSpeed > 1.05
+                                    ? `Tăng tốc ${item.appliedSpeed.toFixed(2)}x để kịp thời lượng phụ đề`
+                                    : "Tốc độ gốc (1.00x)"
+                                }
                               >
                                 {item.appliedSpeed.toFixed(2)}x
                               </span>
