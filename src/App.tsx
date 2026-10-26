@@ -63,6 +63,7 @@ import {
   Menu,
   Zap,
   Scissors,
+  Film,
 } from "lucide-react";
 
 import {
@@ -92,6 +93,7 @@ import StorytellingTab from "./components/StorytellingTab";
 import BgmGeneratorTab from "./components/BgmGeneratorTab";
 import AudioCleanupModal from "./components/AudioCleanupModal";
 import VoiceClonePage from "./components/VoiceClonePage";
+import VideoDubbingTab from "./components/VideoDubbingTab";
 import { copyAudioToClipboard } from "./utils/clipboardAudio";
 
 export interface ProjectPreset {
@@ -113,6 +115,14 @@ export interface ProjectPreset {
   soundOnlyUnfocused?: boolean;
   customPronunciationRules?: PronunciationRule[];
 }
+
+type AppTab =
+  | "subtitles"
+  | "single"
+  | "story"
+  | "bgm"
+  | "voice-clone"
+  | "video-dubbing";
 
 const DEFAULT_PRESETS: ProjectPreset[] = [
   {
@@ -155,10 +165,10 @@ interface VoiceOption {
 }
 
 export default function App() {
-  // Navigation: 'subtitles' (Phụ đề Timeline) | 'single' (Đọc văn bản đơn) | 'story' (Kể Truyện) | 'bgm' (Tạo Nhạc Nền) | 'voice-clone' (Clone Giọng)
-  const getInitialTab = (): "subtitles" | "single" | "story" | "bgm" | "voice-clone" => {
+  const getInitialTab = (): AppTab => {
     if (typeof window !== "undefined") {
       const path = window.location.pathname;
+      if (path === "/video-dubbing") return "video-dubbing";
       if (path === "/voice-clone") return "voice-clone";
       if (path === "/story") return "story";
       if (path === "/bgm") return "bgm";
@@ -167,17 +177,17 @@ export default function App() {
     return "subtitles";
   };
 
-  const [activeTab, setActiveTab] = useState<
-    "subtitles" | "single" | "story" | "bgm" | "voice-clone"
-  >(getInitialTab);
+  const [activeTab, setActiveTab] = useState<AppTab>(getInitialTab);
   const [showAudioCleanupModal, setShowAudioCleanupModal] = useState<boolean>(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState<boolean>(false);
 
-  const handleNavigateTab = (tab: "subtitles" | "single" | "story" | "bgm" | "voice-clone") => {
+  const handleNavigateTab = (tab: AppTab) => {
     setActiveTab(tab);
     if (typeof window !== "undefined") {
       const path =
-        tab === "voice-clone"
+        tab === "video-dubbing"
+          ? "/video-dubbing"
+          : tab === "voice-clone"
           ? "/voice-clone"
           : tab === "story"
           ? "/story"
@@ -195,7 +205,8 @@ export default function App() {
   useEffect(() => {
     const handlePopState = () => {
       const path = window.location.pathname;
-      if (path === "/voice-clone") setActiveTab("voice-clone");
+      if (path === "/video-dubbing") setActiveTab("video-dubbing");
+      else if (path === "/voice-clone") setActiveTab("voice-clone");
       else if (path === "/story") setActiveTab("story");
       else if (path === "/bgm") setActiveTab("bgm");
       else if (path === "/single") setActiveTab("single");
@@ -1680,6 +1691,7 @@ export default function App() {
                   {activeTab === "story" && "Kể Truyện"}
                   {activeTab === "bgm" && "Tạo Nhạc Nền"}
                   {activeTab === "voice-clone" && "Clone Giọng"}
+                  {activeTab === "video-dubbing" && "Video Dubbing"}
                 </span>
               </div>
               <p className="text-xs text-slate-400 hidden xl:block">
@@ -1702,6 +1714,18 @@ export default function App() {
                 }`}
               >
                 Đồng Bộ Phụ Đề (SRT)
+              </button>
+              <button
+                type="button"
+                onClick={() => handleNavigateTab("video-dubbing")}
+                className={`px-3 py-1.5 rounded-lg font-medium transition-all flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
+                  activeTab === "video-dubbing"
+                    ? "bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/20"
+                    : "text-slate-400 hover:text-white"
+                }`}
+              >
+                <Film className="w-3.5 h-3.5" />
+                <span>Video Dubbing</span>
               </button>
               <button
                 type="button"
@@ -1835,6 +1859,29 @@ export default function App() {
                       <span>Đồng Bộ Phụ Đề (SRT)</span>
                     </div>
                     {activeTab === "subtitles" && (
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-950/20 text-slate-950">
+                        Đang chọn
+                      </span>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      handleNavigateTab("video-dubbing");
+                      setMobileMenuOpen(false);
+                    }}
+                    className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl font-medium text-sm transition-all ${
+                      activeTab === "video-dubbing"
+                        ? "bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/20"
+                        : "bg-slate-950/60 text-slate-300 hover:text-white hover:bg-slate-800/60 border border-slate-800/70"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <Film className={`w-4 h-4 ${activeTab === "video-dubbing" ? "text-slate-950" : "text-amber-400"}`} />
+                      <span>Video Dubbing</span>
+                    </div>
+                    {activeTab === "video-dubbing" && (
                       <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-950/20 text-slate-950">
                         Đang chọn
                       </span>
@@ -4168,6 +4215,9 @@ export default function App() {
         {activeTab === "voice-clone" && (
           <VoiceClonePage onVoiceInstalled={() => loadVoices()} />
         )}
+        <div className={activeTab === "video-dubbing" ? "" : "hidden"}>
+          <VideoDubbingTab />
+        </div>
       </main>
 
       {/* ========================================================= */}

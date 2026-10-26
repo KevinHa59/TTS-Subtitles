@@ -91,6 +91,7 @@ for /f "tokens=5" %%a in ('netstat -aon 2^>nul ^| findstr ":3000" ^| findstr "LI
 
 set "NODE_ENV=production"
 set "PORT=3000"
+set "HOST=127.0.0.1"
 set "PIPER_ESPEAK_BRIDGE=0"
 set "OPEN_BROWSER=1"
 

@@ -65,6 +65,8 @@ import {
   deleteWhisperModel,
   resetCurrentJob,
 } from "./systemToolsManager";
+import { VideoDubbingManager } from "./videoDubbingManager";
+import { createVideoDubbingRouter } from "./videoDubbingRoutes";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -269,6 +271,13 @@ const STORIES_DIR = path.resolve(__dirname, "stories_storage");
 if (!fs.existsSync(STORIES_DIR)) {
   fs.mkdirSync(STORIES_DIR, { recursive: true });
 }
+
+const VIDEO_DUBBING_DIR = path.resolve(__dirname, "video_dubbing_storage");
+const videoDubbingManager = new VideoDubbingManager({
+  storageDirectory: VIDEO_DUBBING_DIR,
+  ffprobePath: resolveFfprobePath(),
+});
+app.use("/api/video-dubbing", createVideoDubbingRouter(videoDubbingManager));
 
 // VieNeu-TTS v3 Turbo Model Directory (48 kHz Neural TTS)
 const VIENEU_MODELS_DIR = path.resolve(MODELS_DIR, "vieneu");
@@ -4190,7 +4199,7 @@ async function startServer() {
 
   loadAllStoriesFromDisk();
 
-  const server = app.listen(PORT, () => {
+  const onListening = () => {
     console.log(
       `\n==================================================================`,
     );
@@ -4236,7 +4245,11 @@ async function startServer() {
             : `xdg-open "${url}"`;
       exec(startCmd, () => {});
     }
-  });
+  };
+  const host = process.env.HOST;
+  const server = host
+    ? app.listen(PORT, host, onListening)
+    : app.listen(PORT, onListening);
 }
 
 startServer().catch((err) => {
