@@ -13,7 +13,7 @@ import fs from "fs";
 import os from "os";
 import { Transform } from "stream";
 import { pipeline } from "stream/promises";
-import { exec, execSync, spawnSync } from "child_process";
+import { exec, execSync, spawn, spawnSync } from "child_process";
 import {
   AVAILABLE_MODELS,
   DEFAULT_MODEL,
@@ -319,8 +319,11 @@ async function synthesizeVieNeuVoice(
       : process.env.PYTHON ||
         (process.platform === "win32" ? "python" : "python3"));
 
-  return new Promise((resolve, reject) => {
-    const proc = spawnSync(
+  let stdout = "";
+  let stderr = "";
+  let exitCode: number | null;
+  try {
+    ({ stdout, stderr, exitCode } = await runChildProcess(
       python,
       [
         scriptPath,
@@ -336,7 +339,6 @@ async function synthesizeVieNeuVoice(
         path.relative(__dirname, VIENEU_MODELS_DIR),
       ],
       {
-        encoding: "utf-8",
         cwd: __dirname,
         env: {
           ...process.env,
@@ -344,36 +346,64 @@ async function synthesizeVieNeuVoice(
           PYTHONIOENCODING: "utf-8",
         },
       },
+    ));
+  } catch (error) {
+    throw new Error(
+      `Không thể khởi chạy VieNeu-TTS: ${error instanceof Error ? error.message : String(error)}`,
     );
+  }
 
-    if (
-      proc.status === 0 &&
-      fs.existsSync(outputWavPath) &&
-      fs.statSync(outputWavPath).size > 44
-    ) {
-      const dur = getAudioDuration(outputWavPath) || 0;
-      return resolve({ success: true, duration: dur });
+  if (
+    exitCode === 0 &&
+    fs.existsSync(outputWavPath) &&
+    fs.statSync(outputWavPath).size > 44
+  ) {
+    const dur = getAudioDuration(outputWavPath) || 0;
+    return { success: true, duration: dur };
+  }
+
+  let errorDetail = "";
+  if (stderr) {
+    try {
+      const parsed = JSON.parse(stderr.trim());
+      if (parsed.error) errorDetail = parsed.error;
+    } catch {
+      errorDetail = stderr.trim();
     }
+  }
 
-    let errorDetail = "";
-    if (proc.stderr) {
-      try {
-        const parsed = JSON.parse(proc.stderr.trim());
-        if (parsed.error) errorDetail = parsed.error;
-      } catch {
-        errorDetail = proc.stderr.trim();
-      }
-    }
+  if (!errorDetail && stdout) {
+    errorDetail = stdout.trim();
+  }
 
-    if (!errorDetail && proc.stdout) {
-      errorDetail = proc.stdout.trim();
-    }
+  throw new Error(
+    errorDetail ||
+      `Chưa tìm thấy mô hình VieNeu-TTS v3 Turbo hoặc chưa cài đặt thư viện 'vieneu'. Vui lòng mở file HD-VIENEU-TTS.md để xem hướng dẫn tải và vị trí đặt file mô hình tại 'models/vieneu/'.`,
+  );
+}
 
-    const friendlyError =
-      errorDetail ||
-      `Chưa tìm thấy mô hình VieNeu-TTS v3 Turbo hoặc chưa cài đặt thư viện 'vieneu'. Vui lòng mở file HD-VIENEU-TTS.md để xem hướng dẫn tải và vị trí đặt file mô hình tại 'models/vieneu/'.`;
-
-    reject(new Error(friendlyError));
+function runChildProcess(
+  command: string,
+  args: string[],
+  options: { cwd?: string; env?: NodeJS.ProcessEnv },
+): Promise<{ exitCode: number | null; stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(command, args, {
+      ...options,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    proc.stdout.setEncoding("utf8");
+    proc.stderr.setEncoding("utf8");
+    proc.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    proc.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    proc.once("error", reject);
+    proc.once("close", (exitCode) => resolve({ exitCode, stdout, stderr }));
   });
 }
 
@@ -471,12 +501,12 @@ async function getOrLoadModel(modelId: string) {
         if (options.outputFormat === "mp3") {
           const tempMp3 = tempWav.replace(/\.wav$/, ".mp3");
           const ffmpegBin = resolveFfmpegPath();
-          const proc = spawnSync(
+          const proc = await runChildProcess(
             ffmpegBin,
             ["-y", "-i", tempWav, "-codec:a", "libmp3lame", "-b:a", "192k", tempMp3],
-            { stdio: "ignore" },
+            {},
           );
-          if (proc.status === 0 && fs.existsSync(tempMp3)) {
+          if (proc.exitCode === 0 && fs.existsSync(tempMp3)) {
             const mp3Buf = fs.readFileSync(tempMp3);
             try {
               fs.unlinkSync(tempWav);
@@ -1529,7 +1559,7 @@ const DEFAULT_STAGES: ProcessingStage[] = [
   { id: 1, name: "Upload và phân tích file phụ đề", status: "completed" },
   {
     id: 2,
-    name: "Khởi tạo PiperTTS và tải mô hình giọng đọc",
+    name: "Khởi tạo mô hình giọng đọc",
     status: "pending",
   },
   { id: 3, name: "Tạo audio TTS cho từng câu", status: "pending" },
@@ -1700,11 +1730,28 @@ async function runJobProcessor(job: TimelineJob) {
 
   try {
     // Stage 2: Initialize model
-    updateJobStage(job, 2, "running", `Đang kết nối mô hình ${job.model}...`);
-    addJobLog(job, "INFO", `Khởi tạo mô hình PiperTTS: ${job.model}`);
+    const engineName = job.model.startsWith("vieneu:")
+      ? "VieNeu-TTS v3 Turbo"
+      : "PiperTTS";
+    updateJobStage(
+      job,
+      2,
+      "running",
+      `Đang kết nối mô hình ${engineName}: ${job.model}...`,
+    );
+    addJobLog(job, "INFO", `Khởi tạo mô hình ${engineName}: ${job.model}`);
     const tts = await getOrLoadModel(job.model);
-    updateJobStage(job, 2, "completed", `Mô hình ${job.model} đã sẵn sàng`);
-    addJobLog(job, "SUCCESS", `Mô hình PiperTTS (${job.model}) đã sẵn sàng.`);
+    updateJobStage(
+      job,
+      2,
+      "completed",
+      `Mô hình ${engineName} (${job.model}) đã sẵn sàng`,
+    );
+    addJobLog(
+      job,
+      "SUCCESS",
+      `Mô hình ${engineName} (${job.model}) đã sẵn sàng.`,
+    );
 
     // Stage 3 & 4 & 5 & 6: Process items
     updateJobStage(job, 3, "running");
