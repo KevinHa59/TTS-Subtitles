@@ -60,8 +60,9 @@ export const LOCAL_MODEL_FILES: Record<string, string | string[]> = {
   "local:news-flash_1792865081322": "news-flash_1792865081322.onnx",
   "local:news-flash_1792880182881": "news-flash_1792880182881.onnx",
   "local:news_flash_1792929535873": "news-flash_1792929535873.onnx",
-  "local:news_flash_tr4_1792936818380": "news-flash_1792936818380.onnx",
-  "local:news_flash_tr5_1792942810877": "news-flash_1792942810877.onnx",
+  "local:news_flash_tr4_1792936818380": "news-flash_tr4_1792936818380.onnx",
+  "local:news_flash_tr5_1792942810877": "news-flash_tr5_1792942810877.onnx",
+  "local:news_flash_tr7_1792971171424": "news_flash_tr7_1792971171424.onnx",
   [CSA_VOICE_MODEL_ID]: "vi_VN-csa-voice-piper-v3-medium.onnx",
 };
 
@@ -259,6 +260,16 @@ export const AVAILABLE_MODELS: VoiceDefinition[] = [
     id: "local:news_flash_tr5_1792942810877",
     modelId: "local:news_flash_tr5_1792942810877",
     name: "News Flash v5",
+    tag: "Nam · Miền Nam · Giọng tùy chỉnh (Offline)",
+    gender: "male",
+    description: "Giọng nam News Flash được huấn luyện riêng.",
+    sampleText: "Ta là Tề Thiên Đại Thánh, Tôn Ngộ Không.",
+    recommended: false,
+  },
+  {
+    id: "local:news_flash_tr7_1792971171424",
+    modelId: "local:news_flash_tr7_1792971171424",
+    name: "News Flash v7",
     tag: "Nam · Miền Nam · Giọng tùy chỉnh (Offline)",
     gender: "male",
     description: "Giọng nam News Flash được huấn luyện riêng.",
