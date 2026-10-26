@@ -51,6 +51,7 @@ import {
 } from "lucide-react";
 import { Story, StoryCharacter, StoryParagraph } from "../types/story";
 import { VideoExportModal } from "./VideoExportModal";
+import { copyAudioToClipboard } from "../utils/clipboardAudio";
 
 interface VoiceOption {
   id: string;
@@ -154,12 +155,40 @@ export default function StorytellingTab({ voices, onOpenCleanupModal }: Storytel
 
   // Toast / Status Message
   const [toastMessage, setToastMessage] = useState<{ text: string; type: "success" | "error" | "info" } | null>(null);
+  const [copiedMasterAudio, setCopiedMasterAudio] = useState(false);
+  const [copiedParagraphId, setCopiedParagraphId] = useState<string | null>(null);
 
   const showToast = (text: string, type: "success" | "error" | "info" = "info") => {
     setToastMessage({ text, type });
     setTimeout(() => {
       setToastMessage(null);
     }, 4000);
+  };
+
+  const handleCopyMasterAudio = async () => {
+    if (!activeStory?.id) return;
+    const url = `/api/stories/${activeStory.id}/master-audio?format=mp3`;
+    const res = await copyAudioToClipboard(url);
+    if (res.success) {
+      setCopiedMasterAudio(true);
+      setTimeout(() => setCopiedMasterAudio(false), 2500);
+      showToast("Đã sao chép Master Audio vào clipboard!", "success");
+    } else {
+      showToast(res.message, "error");
+    }
+  };
+
+  const handleCopyParagraphAudio = async (p: StoryParagraph) => {
+    if (!activeStory?.id) return;
+    const url = p.audioUrl || `/api/stories/${activeStory.id}/paragraphs/${p.index}/audio`;
+    const res = await copyAudioToClipboard(url);
+    if (res.success) {
+      setCopiedParagraphId(p.id);
+      setTimeout(() => setCopiedParagraphId(null), 2500);
+      showToast(`Đã sao chép audio đoạn #${p.index} vào clipboard!`, "success");
+    } else {
+      showToast(res.message, "error");
+    }
   };
 
   // Fetch all stories on mount
@@ -1817,6 +1846,22 @@ function parseRawStoryContent(raw: string): ParsedStoryBlock[] {
                                 </span>
                               </button>
 
+                              {/* Copy audio paragraph */}
+                              {(isCompleted || p.audioUrl) && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleCopyParagraphAudio(p)}
+                                  className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-amber-400 border border-slate-700 transition-colors cursor-pointer"
+                                  title={`Sao chép audio đoạn #${p.index} vào clipboard`}
+                                >
+                                  {copiedParagraphId === p.id ? (
+                                    <Check className="w-3.5 h-3.5 text-emerald-400" />
+                                  ) : (
+                                    <Copy className="w-3.5 h-3.5" />
+                                  )}
+                                </button>
+                              )}
+
                               {/* Tách toàn bộ đoạn bởi dấu câu (Requirement: Tách toàn bộ đoạn bởi dấu câu) */}
                               <button
                                 type="button"
@@ -2308,6 +2353,20 @@ function parseRawStoryContent(raw: string): ParsedStoryBlock[] {
                     >
                       <Download className="w-3.5 h-3.5 text-amber-400" />
                     </a>
+
+                    {/* Copy Master Audio */}
+                    <button
+                      type="button"
+                      onClick={handleCopyMasterAudio}
+                      className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-amber-400 rounded-xl text-xs font-medium transition-all border border-slate-700 cursor-pointer"
+                      title="Sao chép Master Audio vào clipboard"
+                    >
+                      {copiedMasterAudio ? (
+                        <Check className="w-3.5 h-3.5 text-emerald-400 stroke-[3]" />
+                      ) : (
+                        <Copy className="w-3.5 h-3.5 text-amber-400" />
+                      )}
+                    </button>
 
                     {/* Nút Tạo Phụ Đề SRT khi hoàn thành tạo audio */}
                     <button

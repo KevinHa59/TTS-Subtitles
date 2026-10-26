@@ -305,17 +305,18 @@ function runWhisper(
   });
 }
 
-// Process audio and prepare complete Piper dataset offline (with optional dataset extension)
+// Process audio and prepare complete Piper dataset offline (with parallel concurrency & multi-file support)
 export async function prepareOfflineDataset(
-  audioSource: Buffer | string,
-  originalFilename: string,
+  audioSource: Buffer | string | (Buffer | string)[],
+  originalFilename: string | string[],
   voiceName: string,
   whisperModelId: string = "small",
   minDurationSec: number = 1.0,
   maxDurationSec: number = 12.0,
   onProgress?: (progress: DatasetPreparationProgress) => void,
   ffmpegPath: string = process.env.FFMPEG_PATH || "ffmpeg",
-  targetDatasetId?: string
+  targetDatasetId?: string,
+  concurrency: number = 2
 ): Promise<DatasetInfo> {
   const whisperCli = getWhisperCliPath();
   if (!whisperCli) {
@@ -369,43 +370,190 @@ export async function prepareOfflineDataset(
   fs.mkdirSync(tempDir, { recursive: true });
 
   try {
-    const inputAudioPath = typeof audioSource === "string"
-      ? audioSource
-      : path.join(
-          tempDir,
-          `input_${path.basename(originalFilename).replace(/[^a-zA-Z0-9_.-]/g, "_")}`
-        );
-    if (Buffer.isBuffer(audioSource)) {
-      fs.writeFileSync(inputAudioPath, audioSource);
+    const inputSources: (Buffer | string)[] = Array.isArray(audioSource) ? audioSource : [audioSource];
+    const inputFilenames: string[] = Array.isArray(originalFilename) ? originalFilename : [originalFilename];
+
+    interface ChunkJob {
+      jobId: string;
+      fileIndex: number;
+      segmentIndex: number;
+      whisperWavPath: string;
+      chunkStartMs: number;
+      origFilename: string;
     }
 
-    const chunkPattern = path.join(tempDir, "whisper_chunk_%04d.wav");
-    onProgress?.({ progressPercent: 2, message: "Đang chia âm thanh thành các đoạn tạm..." });
-    const splitResult = spawnSync(
-      ffmpegPath,
-      [
-        "-y", "-i", inputAudioPath, "-vn",
-        "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le",
-        "-f", "segment", "-segment_time", "300", "-reset_timestamps", "1",
-        chunkPattern,
-      ],
-      { stdio: "pipe" }
-    );
-    if (splitResult.status !== 0) {
-      const err = splitResult.stderr?.toString().trim() || "FFmpeg không thể chia file âm thanh.";
-      throw new Error(`Không thể chuẩn bị các đoạn âm thanh: ${err}`);
+    const allChunkJobs: ChunkJob[] = [];
+    onProgress?.({ progressPercent: 2, message: "Đang phân tích và cắt các tệp âm thanh thành đoạn 16kHz..." });
+
+    for (let fileIdx = 0; fileIdx < inputSources.length; fileIdx++) {
+      const src = inputSources[fileIdx];
+      const origName = inputFilenames[fileIdx] || `audio_${fileIdx + 1}.wav`;
+      const safeBaseName = path.basename(origName).replace(/[^a-zA-Z0-9_.-]/g, "_");
+      const inputPath = typeof src === "string"
+        ? src
+        : path.join(tempDir, `input_${fileIdx}_${safeBaseName}`);
+
+      if (Buffer.isBuffer(src)) {
+        fs.writeFileSync(inputPath, src);
+      }
+
+      const fileChunkPattern = path.join(tempDir, `wchunk_${fileIdx}_%04d.wav`);
+      const splitResult = spawnSync(
+        ffmpegPath,
+        [
+          "-y", "-i", inputPath, "-vn",
+          "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le",
+          "-f", "segment", "-segment_time", "300", "-reset_timestamps", "1",
+          fileChunkPattern,
+        ],
+        { stdio: "pipe" }
+      );
+
+      if (splitResult.status !== 0) {
+        const err = splitResult.stderr?.toString().trim() || `FFmpeg không thể chia tệp âm thanh #${fileIdx + 1}.`;
+        throw new Error(`Không thể chuẩn bị đoạn âm thanh cho ${origName}: ${err}`);
+      }
+
+      const chunkFiles = fs.readdirSync(tempDir)
+        .filter((fn) => new RegExp(`^wchunk_${fileIdx}_\\d{4}\\.wav$`).test(fn))
+        .sort();
+
+      for (let sIdx = 0; sIdx < chunkFiles.length; sIdx++) {
+        allChunkJobs.push({
+          jobId: `f${fileIdx}_s${sIdx}`,
+          fileIndex: fileIdx,
+          segmentIndex: sIdx,
+          whisperWavPath: path.join(tempDir, chunkFiles[sIdx]),
+          chunkStartMs: sIdx * 300_000,
+          origFilename: origName,
+        });
+      }
     }
 
-    const chunkPaths = fs.readdirSync(tempDir)
-      .filter((filename) => /^whisper_chunk_\d{4}\.wav$/.test(filename))
-      .sort()
-      .map((filename) => path.join(tempDir, filename));
-    if (chunkPaths.length === 0) {
+    if (allChunkJobs.length === 0) {
       throw new Error("FFmpeg không tạo được đoạn âm thanh nào để xử lý.");
     }
 
-    const whisperThreads = Math.max(1, Math.min(8, availableParallelism()));
-    const newClips: DatasetClip[] = [];
+    const requestedConcurrency = Math.max(1, Math.min(8, Number(concurrency) || 2));
+    const effectiveConcurrency = Math.min(requestedConcurrency, allChunkJobs.length);
+    const totalCores = availableParallelism();
+    const threadsPerJob = Math.max(1, Math.min(8, Math.floor(totalCores / effectiveConcurrency)));
+
+    console.log(
+      `[OfflineDataset] Bắt đầu phiên âm song song: ${allChunkJobs.length} đoạn với ${effectiveConcurrency} tiến trình đồng thời (mỗi tiến trình ${threadsPerJob} threads)...`
+    );
+
+    interface RawClipResult {
+      fileIndex: number;
+      startMs: number;
+      endMs: number;
+      durationSec: number;
+      text: string;
+      full22kWavPath: string;
+      fromMs: number;
+    }
+
+    const rawClips: RawClipResult[] = [];
+    let completedChunks = 0;
+    let jobQueueIndex = 0;
+
+    const runWorker = async (workerId: number) => {
+      while (true) {
+        const currentIndex = jobQueueIndex++;
+        if (currentIndex >= allChunkJobs.length) {
+          break;
+        }
+
+        const chunkJob = allChunkJobs[currentIndex];
+        const chunkName = path.basename(chunkJob.whisperWavPath, ".wav");
+        const jsonOutPrefix = path.join(tempDir, `${chunkName}_transcription`);
+        const full22kWavPath = path.join(tempDir, `${chunkName}_22050.wav`);
+
+        // Convert chunk to 22050Hz mono for crisp dataset slicing
+        const ffmpeg22k = spawnSync(
+          ffmpegPath,
+          ["-y", "-i", chunkJob.whisperWavPath, "-ar", "22050", "-ac", "1", "-c:a", "pcm_s16le", full22kWavPath],
+          { stdio: "pipe" }
+        );
+        if (ffmpeg22k.status !== 0 || !fs.existsSync(full22kWavPath)) {
+          throw new Error(`Không thể chuyển đổi đoạn ${chunkName} sang định dạng 22050Hz.`);
+        }
+
+        // Run whisper.cpp
+        await runWhisper(
+          whisperCli,
+          [
+            "-m", modelFile,
+            "-f", chunkJob.whisperWavPath,
+            "-l", "vi",
+            "-oj",
+            "-of", jsonOutPrefix,
+            "-t", String(threadsPerJob),
+            "-pp",
+            "--max-len", "0",
+          ]
+        );
+
+        const jsonResultPath = `${jsonOutPrefix}.json`;
+        if (!fs.existsSync(jsonResultPath)) {
+          throw new Error(`Whisper.cpp không tạo kết quả cho đoạn ${chunkName}.`);
+        }
+
+        let whisperData: any;
+        try {
+          whisperData = JSON.parse(fs.readFileSync(jsonResultPath, "utf-8"));
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "JSON không hợp lệ.";
+          throw new Error(`Lỗi đọc kết quả Whisper ở đoạn ${chunkName}: ${message}`);
+        }
+
+        for (const seg of whisperData.transcription || []) {
+          const cleanText = cleanPiperText(seg.text || "");
+          if (!cleanText || cleanText.length < 2) continue;
+
+          const fromMs = Number(seg.offsets?.from) || 0;
+          const toMs = Number(seg.offsets?.to) || 0;
+          const durationSec = (toMs - fromMs) / 1000;
+          if (durationSec < minDurationSec || durationSec > maxDurationSec || toMs <= fromMs) {
+            continue;
+          }
+
+          rawClips.push({
+            fileIndex: chunkJob.fileIndex,
+            startMs: chunkJob.chunkStartMs + fromMs,
+            endMs: chunkJob.chunkStartMs + toMs,
+            durationSec: Math.round(durationSec * 10) / 10,
+            text: cleanText,
+            full22kWavPath,
+            fromMs,
+          });
+        }
+
+        fs.rmSync(chunkJob.whisperWavPath, { force: true });
+        completedChunks++;
+        const progressPercent = 5 + Math.floor((completedChunks / allChunkJobs.length) * 75);
+        onProgress?.({
+          progressPercent,
+          message: `Đang xử lý ${effectiveConcurrency} tiến trình song song: hoàn thành ${completedChunks}/${allChunkJobs.length} đoạn...`,
+        });
+      }
+    };
+
+    // Run worker pool
+    const workers = Array.from({ length: effectiveConcurrency }, (_, i) => runWorker(i));
+    await Promise.all(workers);
+
+    if (rawClips.length === 0) {
+      throw new Error("Whisper không phát hiện được câu thoại phù hợp với khoảng thời lượng cài đặt.");
+    }
+
+    // Sort raw clips chronologically by fileIndex and startMs
+    rawClips.sort((a, b) => {
+      if (a.fileIndex !== b.fileIndex) return a.fileIndex - b.fileIndex;
+      return a.startMs - b.startMs;
+    });
+
+    // Find starting clipIndex if extending
     let clipIndex = 1;
     if (existingInfo && Array.isArray(existingInfo.clips)) {
       for (const c of existingInfo.clips) {
@@ -417,108 +565,60 @@ export async function prepareOfflineDataset(
       }
     }
 
-    for (const [chunkIndex, whisperWavPath] of chunkPaths.entries()) {
-      const chunkStartMs = chunkIndex * 300_000;
-      const progressStart = 5 + Math.floor((chunkIndex / chunkPaths.length) * 80);
-      const progressSpan = Math.max(1, Math.floor(80 / chunkPaths.length));
-      const chunkName = path.basename(whisperWavPath, ".wav");
-      const jsonOutPrefix = path.join(tempDir, `${chunkName}_transcription`);
-      const full22kWavPath = path.join(tempDir, `${chunkName}_22050.wav`);
+    onProgress?.({
+      progressPercent: 82,
+      message: `Đang trích xuất ${rawClips.length} câu thoại chuẩn 22050Hz vào bộ dữ liệu...`,
+    });
 
-      onProgress?.({
-        progressPercent: progressStart,
-        message: `Đang phiên âm đoạn ${chunkIndex + 1}/${chunkPaths.length} bằng Whisper.cpp...`,
-      });
+    const newClips: DatasetClip[] = [];
+    const used22kFiles = new Set<string>();
 
-      const ffmpeg22k = spawnSync(
+    for (const [idx, clipData] of rawClips.entries()) {
+      used22kFiles.add(clipData.full22kWavPath);
+      const clipId = `clip_${String(clipIndex).padStart(4, "0")}`;
+      const clipFilename = `${clipId}.wav`;
+      const clipDestPath = path.join(wavDir, clipFilename);
+
+      const sliceProc = spawnSync(
         ffmpegPath,
-        ["-y", "-i", whisperWavPath, "-ar", "22050", "-ac", "1", "-c:a", "pcm_s16le", full22kWavPath],
-        { stdio: "pipe" }
-      );
-      if (ffmpeg22k.status !== 0 || !fs.existsSync(full22kWavPath)) {
-        throw new Error(`Không thể chuyển đổi đoạn ${chunkIndex + 1} sang định dạng 22050Hz.`);
-      }
-
-      await runWhisper(
-        whisperCli,
         [
-          "-m", modelFile,
-          "-f", whisperWavPath,
-          "-l", "vi",
-          "-oj",
-          "-of", jsonOutPrefix,
-          "-t", String(whisperThreads),
-          "-pp",
-          "--max-len", "0",
+          "-y", "-ss", (clipData.fromMs / 1000).toFixed(3),
+          "-i", clipData.full22kWavPath,
+          "-t", clipData.durationSec.toFixed(3),
+          "-c:a", "pcm_s16le",
+          clipDestPath,
         ],
-        (percent) => onProgress?.({
-          progressPercent: progressStart + Math.floor((percent / 100) * progressSpan),
-          message: `Đang phiên âm đoạn ${chunkIndex + 1}/${chunkPaths.length}: ${percent}%`,
-        })
+        { stdio: "ignore" }
       );
 
-      const jsonResultPath = `${jsonOutPrefix}.json`;
-      if (!fs.existsSync(jsonResultPath)) {
-        throw new Error(`Whisper.cpp không tạo kết quả cho đoạn ${chunkIndex + 1}.`);
+      if (sliceProc.status === 0 && fs.existsSync(clipDestPath)) {
+        newClips.push({
+          id: clipId,
+          filename: clipFilename,
+          text: clipData.text,
+          startMs: clipData.startMs,
+          endMs: clipData.endMs,
+          durationSec: clipData.durationSec,
+        });
+        clipIndex++;
       }
 
-      let whisperData: any;
-      try {
-        whisperData = JSON.parse(fs.readFileSync(jsonResultPath, "utf-8"));
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "JSON không hợp lệ.";
-        throw new Error(`Lỗi đọc kết quả Whisper ở đoạn ${chunkIndex + 1}: ${message}`);
+      if ((idx + 1) % 10 === 0 || idx === rawClips.length - 1) {
+        const sliceProgress = 82 + Math.floor(((idx + 1) / rawClips.length) * 15);
+        onProgress?.({
+          progressPercent: sliceProgress,
+          message: `Đã trích xuất ${idx + 1}/${rawClips.length} câu thoại...`,
+        });
       }
+    }
 
-      for (const seg of whisperData.transcription || []) {
-        const cleanText = cleanPiperText(seg.text || "");
-        if (!cleanText || cleanText.length < 2) continue;
-
-        const fromMs = Number(seg.offsets?.from) || 0;
-        const toMs = Number(seg.offsets?.to) || 0;
-        const durationSec = (toMs - fromMs) / 1000;
-        if (durationSec < minDurationSec || durationSec > maxDurationSec || toMs <= fromMs) {
-          continue;
-        }
-
-        const clipId = `clip_${String(clipIndex).padStart(4, "0")}`;
-        const clipFilename = `${clipId}.wav`;
-        const clipDestPath = path.join(wavDir, clipFilename);
-        const sliceProc = spawnSync(
-          ffmpegPath,
-          [
-            "-y", "-ss", (fromMs / 1000).toFixed(3),
-            "-i", full22kWavPath,
-            "-t", durationSec.toFixed(3),
-            "-c:a", "pcm_s16le",
-            clipDestPath,
-          ],
-          { stdio: "ignore" }
-        );
-
-        if (sliceProc.status === 0 && fs.existsSync(clipDestPath)) {
-          newClips.push({
-            id: clipId,
-            filename: clipFilename,
-            text: cleanText,
-            startMs: chunkStartMs + fromMs,
-            endMs: chunkStartMs + toMs,
-            durationSec: Math.round(durationSec * 10) / 10,
-          });
-          clipIndex++;
-        }
-      }
-
-      fs.rmSync(whisperWavPath, { force: true });
-      fs.rmSync(full22kWavPath, { force: true });
-      onProgress?.({
-        progressPercent: 5 + Math.floor(((chunkIndex + 1) / chunkPaths.length) * 85),
-        message: `Đã xử lý xong đoạn ${chunkIndex + 1}/${chunkPaths.length}.`,
-      });
+    // Clean up all 22k temporary files
+    for (const f of used22kFiles) {
+      fs.rmSync(f, { force: true });
     }
 
     if (newClips.length === 0) {
-      throw new Error("Whisper không phát hiện được câu thoại phù hợp với khoảng thời lượng cài đặt.");
+      throw new Error("Không thể trích xuất các đoạn âm thanh từ kết quả phiên âm.");
     }
 
     // Combine existing clips with new clips
@@ -542,15 +642,16 @@ export async function prepareOfflineDataset(
       allClips.reduce((sum, c) => sum + c.durationSec, 0) * 10
     ) / 10;
 
+    const originalAudioString = inputFilenames.join(", ");
     const datasetInfo: DatasetInfo = {
       id: datasetId,
       voiceName: (existingInfo?.voiceName || voiceName).trim() || cleanVoiceId,
       createdAt: existingInfo?.createdAt || new Date().toISOString(),
       originalAudioFilename: existingInfo
-        ? (existingInfo.originalAudioFilename.includes(originalFilename)
+        ? (existingInfo.originalAudioFilename.includes(originalAudioString)
             ? existingInfo.originalAudioFilename
-            : `${existingInfo.originalAudioFilename}, ${originalFilename}`)
-        : originalFilename,
+            : `${existingInfo.originalAudioFilename}, ${originalAudioString}`)
+        : originalAudioString,
       whisperModelUsed: whisperModelId,
       totalClips: allClips.length,
       totalDurationSec,
@@ -569,6 +670,7 @@ export async function prepareOfflineDataset(
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
 }
+
 
 // Generate ZIP file of dataset for Google Colab upload
 export function createDatasetZip(datasetId: string): string {

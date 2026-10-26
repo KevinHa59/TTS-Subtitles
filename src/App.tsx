@@ -92,6 +92,7 @@ import StorytellingTab from "./components/StorytellingTab";
 import BgmGeneratorTab from "./components/BgmGeneratorTab";
 import AudioCleanupModal from "./components/AudioCleanupModal";
 import VoiceClonePage from "./components/VoiceClonePage";
+import { copyAudioToClipboard } from "./utils/clipboardAudio";
 
 export interface ProjectPreset {
   id: string;
@@ -372,6 +373,46 @@ export default function App() {
   // Modal API code
   const [showApiModal, setShowApiModal] = useState<boolean>(false);
   const [copiedCode, setCopiedCode] = useState<boolean>(false);
+
+  // Clipboard Audio states
+  const [copiedMasterAudio, setCopiedMasterAudio] = useState<boolean>(false);
+  const [copiedSingleAudio, setCopiedSingleAudio] = useState<boolean>(false);
+  const [copiedSentenceIndex, setCopiedSentenceIndex] = useState<number | null>(null);
+
+  const handleCopyMasterAudio = async () => {
+    if (!activeJob?.id) return;
+    const url = `/api/subtitles/job/${activeJob.id}/master-audio?format=mp3`;
+    const res = await copyAudioToClipboard(url);
+    if (res.success) {
+      setCopiedMasterAudio(true);
+      setTimeout(() => setCopiedMasterAudio(false), 2500);
+    } else {
+      alert(res.message);
+    }
+  };
+
+  const handleCopySentenceAudio = async (item: SubtitleItem) => {
+    if (!activeJob?.id) return;
+    const url = `/api/subtitles/job/${activeJob.id}/item-audio/${item.index}`;
+    const res = await copyAudioToClipboard(url);
+    if (res.success) {
+      setCopiedSentenceIndex(item.index);
+      setTimeout(() => setCopiedSentenceIndex(null), 2500);
+    } else {
+      alert(res.message);
+    }
+  };
+
+  const handleCopySingleAudio = async () => {
+    if (!singleAudioUrl) return;
+    const res = await copyAudioToClipboard(singleAudioUrl);
+    if (res.success) {
+      setCopiedSingleAudio(true);
+      setTimeout(() => setCopiedSingleAudio(false), 2500);
+    } else {
+      alert(res.message);
+    }
+  };
 
   // Load voices
   const loadVoices = () => {
@@ -3196,6 +3237,24 @@ export default function App() {
                       </a>
                       <button
                         type="button"
+                        onClick={handleCopyMasterAudio}
+                        className="px-3.5 py-2.5 bg-slate-800 hover:bg-slate-700 text-amber-400 hover:text-amber-300 font-semibold text-xs rounded-xl border border-slate-700 hover:border-amber-500/40 flex items-center gap-1.5 transition-all active:scale-95 cursor-pointer shadow-sm"
+                        title="Sao chép toàn bộ Master Audio vào clipboard"
+                      >
+                        {copiedMasterAudio ? (
+                          <>
+                            <Check className="w-4 h-4 text-emerald-400 stroke-[3]" />
+                            <span className="text-emerald-400 font-bold">Đã copy!</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3.5 h-3.5" />
+                            <span>Copy Audio</span>
+                          </>
+                        )}
+                      </button>
+                      <button
+                        type="button"
                         onClick={handleResetJob}
                         className="px-3 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white font-medium text-xs rounded-xl border border-slate-700 flex items-center gap-1.5 transition-colors cursor-pointer"
                         title="Dọn dẹp tệp tạm và làm mới"
@@ -3658,6 +3717,19 @@ export default function App() {
                                     <Play className="w-3.5 h-3.5 fill-current" />
                                   </button>
                                 )}
+
+                                <button
+                                  type="button"
+                                  onClick={() => handleCopySentenceAudio(item)}
+                                  className="p-1.5 rounded-lg border border-slate-700 bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-amber-400 transition-colors cursor-pointer"
+                                  title={`Sao chép audio câu ${item.index} vào clipboard`}
+                                >
+                                  {copiedSentenceIndex === item.index ? (
+                                    <Check className="w-3.5 h-3.5 text-emerald-400 stroke-[3]" />
+                                  ) : (
+                                    <Copy className="w-3.5 h-3.5" />
+                                  )}
+                                </button>
                               </div>
                             ) : (
                               <span className="text-slate-600 font-mono text-[11px]">
@@ -4015,16 +4087,36 @@ export default function App() {
               </button>
 
               {singleAudioUrl && (
-                <div className="p-4 bg-slate-950 rounded-xl border border-slate-800 flex items-center justify-between">
+                <div className="p-4 bg-slate-950 rounded-xl border border-slate-800 flex flex-wrap items-center justify-between gap-3">
                   <audio controls src={singleAudioUrl} className="h-8 w-64" />
-                  <a
-                    href={singleAudioUrl}
-                    download={`hoaimy-${Date.now()}.${singleFormat}`}
-                    className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold rounded-lg text-xs flex items-center gap-1"
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    <span>Tải {singleFormat.toUpperCase()}</span>
-                  </a>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleCopySingleAudio}
+                      className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white font-semibold rounded-lg text-xs flex items-center gap-1.5 border border-slate-700 cursor-pointer transition-colors"
+                      title="Sao chép file audio vào clipboard"
+                    >
+                      {copiedSingleAudio ? (
+                        <>
+                          <Check className="w-3.5 h-3.5 text-emerald-400 stroke-[3]" />
+                          <span className="text-emerald-400 font-bold">Đã copy!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3.5 h-3.5 text-amber-400" />
+                          <span>Copy Audio</span>
+                        </>
+                      )}
+                    </button>
+                    <a
+                      href={singleAudioUrl}
+                      download={`hoaimy-${Date.now()}.${singleFormat}`}
+                      className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold rounded-lg text-xs flex items-center gap-1"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Tải {singleFormat.toUpperCase()}</span>
+                    </a>
+                  </div>
                 </div>
               )}
             </div>

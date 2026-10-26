@@ -33,6 +33,8 @@ import {
   Plus,
 } from "lucide-react";
 
+import { copyAudioToClipboard } from "../utils/clipboardAudio";
+
 interface SystemModelItem {
   id: string;
   name: string;
@@ -121,7 +123,8 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
   } | null>(null);
 
   // === TAB 1: DATASET PREPARATION STATE ===
-  const [audioFile, setAudioFile] = useState<File | null>(null);
+  const [audioFiles, setAudioFiles] = useState<File[]>([]);
+  const [concurrency, setConcurrency] = useState<number>(2);
   const [extendDatasetId, setExtendDatasetId] = useState<string>("");
   const [datasetVoiceName, setDatasetVoiceName] = useState<string>("giong_moi");
   const [whisperModel, setWhisperModel] = useState<string>("small");
@@ -146,6 +149,7 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
   const [editingClipId, setEditingClipId] = useState<string | null>(null);
   const [editingClipText, setEditingClipText] = useState<string>("");
   const [playingClipId, setPlayingClipId] = useState<string | null>(null);
+  const [copiedClipId, setCopiedClipId] = useState<string | null>(null);
   const clipAudioRef = useRef<HTMLAudioElement | null>(null);
   const audioInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -262,12 +266,37 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
     }
   }, [currentDataset]);
 
-  // Clean voice name from audio file
-  const handleDatasetAudioChosen = (file: File) => {
-    setAudioFile(file);
-    const rawName = file.name.replace(/\.[^/.]+$/, "").replace(/[^a-zA-Z0-9]/g, "_").toLowerCase();
+  // Clean voice name from audio files
+  const handleDatasetAudiosChosen = (files: FileList | File[]) => {
+    const list = Array.from(files);
+    if (list.length === 0) return;
+    setAudioFiles((prev) => [...prev, ...list]);
+    const first = list[0];
+    const rawName = first.name.replace(/\.[^/.]+$/, "").replace(/[^a-zA-Z0-9]/g, "_").toLowerCase();
     if (!datasetVoiceName || datasetVoiceName === "giong_moi") {
       setDatasetVoiceName(rawName.slice(0, 20));
+    }
+  };
+
+  const handleRemoveAudioFile = (index: number) => {
+    setAudioFiles((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const handleClearAudioFiles = () => {
+    setAudioFiles([]);
+    if (audioInputRef.current) audioInputRef.current.value = "";
+  };
+
+  // Copy clip audio to clipboard
+  const handleCopyClipAudio = async (clip: DatasetClip) => {
+    if (!currentDataset) return;
+    const url = `/api/dataset/${currentDataset.id}/audio/${clip.filename}`;
+    const res = await copyAudioToClipboard(url);
+    if (res.success) {
+      setCopiedClipId(clip.id);
+      setTimeout(() => setCopiedClipId(null), 2500);
+    } else {
+      alert(res.message);
     }
   };
 
@@ -362,13 +391,13 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
     }
   };
 
-  // Submit audio for offline slicing & transcribing
+  // Submit audio for offline slicing & transcribing (Supports 1 or multiple audio files + concurrency)
   const handleStartPrepareDataset = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!audioFile) {
+    if (audioFiles.length === 0) {
       setDatasetFeedback({
         type: "error",
-        message: "Vui lòng chọn một file âm thanh thu âm giọng đọc trước.",
+        message: "Vui lòng chọn ít nhất một file âm thanh thu âm giọng đọc trước.",
       });
       return;
     }
@@ -376,37 +405,96 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
     setIsProcessingDataset(true);
     setDatasetFeedback({
       type: "info",
-      message: "Đang tải file âm thanh lên và bắt đầu cắt lát offline...",
+      message: audioFiles.length > 1
+        ? `Đang chuẩn bị tải lên ${audioFiles.length} file âm thanh và kích hoạt ${concurrency} tiến trình đồng thời...`
+        : `Đang tải file âm thanh lên và xử lý với ${concurrency} tiến trình đồng thời...`,
     });
 
     try {
-      const uploadParams = new URLSearchParams({
-        originalFilename: audioFile.name,
-        voiceName: datasetVoiceName.trim(),
-        whisperModel,
-        minDuration: minDuration.toString(),
-        maxDuration: maxDuration.toString(),
-      });
-      if (extendDatasetId) {
-        uploadParams.append("extendDatasetId", extendDatasetId);
+      let jobId: string;
+
+      if (audioFiles.length === 1) {
+        const singleFile = audioFiles[0];
+        const uploadParams = new URLSearchParams({
+          originalFilename: singleFile.name,
+          voiceName: datasetVoiceName.trim(),
+          whisperModel,
+          minDuration: minDuration.toString(),
+          maxDuration: maxDuration.toString(),
+          concurrency: concurrency.toString(),
+        });
+        if (extendDatasetId) {
+          uploadParams.append("extendDatasetId", extendDatasetId);
+        }
+
+        const res = await fetch(`/api/dataset/prepare-upload?${uploadParams}`, {
+          method: "POST",
+          body: singleFile,
+        });
+
+        const data = await res.json();
+        if (!res.ok || !data.success) {
+          throw new Error(data.error || "Không thể khởi động quá trình xử lý dataset.");
+        }
+        jobId = data.jobId;
+      } else {
+        // Multi-file batch session upload
+        const sessionRes = await fetch("/api/dataset/prepare-session", { method: "POST" });
+        const sessionData = await sessionRes.json();
+        if (!sessionRes.ok || !sessionData.success) {
+          throw new Error(sessionData.error || "Không thể khởi tạo phiên tải lên nhiều tệp.");
+        }
+        const sessionId = sessionData.sessionId;
+
+        for (let i = 0; i < audioFiles.length; i++) {
+          const file = audioFiles[i];
+          setDatasetFeedback({
+            type: "info",
+            message: `Đang tải tệp ${i + 1}/${audioFiles.length}: "${file.name}"...`,
+          });
+          const fileRes = await fetch(
+            `/api/dataset/prepare-session/${sessionId}/upload?filename=${encodeURIComponent(file.name)}`,
+            {
+              method: "POST",
+              body: file,
+            }
+          );
+          const fileData = await fileRes.json();
+          if (!fileRes.ok || !fileData.success) {
+            throw new Error(fileData.error || `Lỗi tải tệp "${file.name}".`);
+          }
+        }
+
+        setDatasetFeedback({
+          type: "info",
+          message: `Đang khởi động xử lý ${audioFiles.length} tệp với ${concurrency} tiến trình đồng thời...`,
+        });
+
+        const startRes = await fetch(`/api/dataset/prepare-session/${sessionId}/start`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            voiceName: datasetVoiceName.trim(),
+            whisperModel,
+            minDuration,
+            maxDuration,
+            concurrency,
+            extendDatasetId: extendDatasetId || undefined,
+          }),
+        });
+
+        const startData = await startRes.json();
+        if (!startRes.ok || !startData.success) {
+          throw new Error(startData.error || "Không thể bắt đầu xử lý hàng loạt.");
+        }
+        jobId = startData.jobId;
       }
 
-      const res = await fetch(`/api/dataset/prepare-upload?${uploadParams}`, {
-        method: "POST",
-        body: audioFile,
-      });
-
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        throw new Error(data.error || "Không thể khởi động quá trình xử lý dataset.");
-      }
-
-      const jobId = data.jobId;
       setDatasetFeedback({
         type: "info",
         message: extendDatasetId
-          ? `Đang cắt lát và bổ sung vào bộ dữ liệu bằng Whisper.cpp (${whisperModel}) hoàn toàn offline... Vui lòng đợi trong giây lát.`
-          : `Đang cắt lát và phiên âm bằng Whisper.cpp (${whisperModel}) hoàn toàn offline... Vui lòng đợi trong giây lát.`,
+          ? `Đang chạy ${concurrency} tiến trình đồng thời để cắt lát và bổ sung vào bộ dữ liệu bằng Whisper.cpp (${whisperModel}) hoàn toàn offline... Vui lòng đợi trong giây lát.`
+          : `Đang chạy ${concurrency} tiến trình đồng thời để cắt lát và phiên âm bằng Whisper.cpp (${whisperModel}) hoàn toàn offline... Vui lòng đợi trong giây lát.`,
       });
 
       // Poll progress until finished
@@ -989,55 +1077,102 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
             {/* ============================================================== */}
             <div className="lg:col-span-4 xl:col-span-4 space-y-4">
               <form onSubmit={handleStartPrepareDataset} className="space-y-4">
-                {/* 1. File Upload Box */}
+                {/* 1. File Upload Box (Supports single or multiple audio files) */}
                 <div className="p-4 rounded-2xl bg-slate-950/70 border border-slate-800 space-y-3 shadow-md">
                   <div className="flex items-center justify-between">
                     <label className="text-xs font-bold text-white flex items-center gap-1.5">
                       <Mic className="w-4 h-4 text-amber-400" />
                       <span>File Âm Thanh Thu Âm</span>
+                      {audioFiles.length > 0 && (
+                        <span className="text-[10px] font-mono font-bold px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                          {audioFiles.length} tệp
+                        </span>
+                      )}
                     </label>
-                    {audioFile && (
+                    {audioFiles.length > 0 && (
                       <button
                         type="button"
-                        onClick={() => {
-                          setAudioFile(null);
-                          if (audioInputRef.current) audioInputRef.current.value = "";
-                        }}
+                        onClick={handleClearAudioFiles}
                         className="text-[10px] text-slate-400 hover:text-rose-400 flex items-center gap-0.5 transition-colors cursor-pointer"
-                        title="Bỏ chọn file hiện tại"
+                        title="Xóa toàn bộ tệp đã chọn"
                       >
                         <X className="w-3 h-3" />
-                        <span>Hủy</span>
+                        <span>Xóa hết</span>
                       </button>
                     )}
                   </div>
 
                   <div
                     onClick={() => audioInputRef.current?.click()}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                        handleDatasetAudiosChosen(e.dataTransfer.files);
+                      }
+                    }}
                     className="border-2 border-dashed border-slate-700/80 hover:border-amber-500/60 bg-slate-900/60 hover:bg-slate-900/90 rounded-xl p-4 flex flex-col items-center justify-center text-center cursor-pointer transition-all"
                   >
                     <input
                       ref={audioInputRef}
                       type="file"
                       accept="audio/*"
+                      multiple
                       className="hidden"
                       onChange={(e) => {
-                        if (e.target.files && e.target.files[0]) {
-                          handleDatasetAudioChosen(e.target.files[0]);
+                        if (e.target.files && e.target.files.length > 0) {
+                          handleDatasetAudiosChosen(e.target.files);
                         }
                       }}
                     />
-                    {audioFile ? (
-                      <div className="space-y-1 text-center">
-                        <CheckCircle2 className="w-8 h-8 text-emerald-400 mx-auto" />
-                        <p className="text-xs font-bold text-white truncate max-w-[220px]">
-                          {audioFile.name}
-                        </p>
-                        <p className="text-[11px] text-amber-300 font-mono">
-                          {(audioFile.size / (1024 * 1024)).toFixed(2)} MB • Sẵn sàng
-                        </p>
-                        <span className="text-[10px] text-slate-400 underline block pt-1">
-                          Bấm để chọn file khác
+                    {audioFiles.length > 0 ? (
+                      <div className="space-y-2 text-center w-full">
+                        <CheckCircle2 className="w-7 h-7 text-emerald-400 mx-auto" />
+                        <div>
+                          <p className="text-xs font-bold text-white">
+                            Đã chọn {audioFiles.length} tệp âm thanh
+                          </p>
+                          <p className="text-[11px] text-amber-300 font-mono">
+                            Tổng: {(audioFiles.reduce((s, f) => s + f.size, 0) / (1024 * 1024)).toFixed(2)} MB • Sẵn sàng
+                          </p>
+                        </div>
+
+                        {/* Mini list of selected files */}
+                        <div
+                          onClick={(e) => e.stopPropagation()}
+                          className="max-h-28 overflow-y-auto space-y-1 bg-slate-950/70 p-2 rounded-lg border border-slate-800 text-left"
+                        >
+                          {audioFiles.map((f, idx) => (
+                            <div
+                              key={`${f.name}-${idx}`}
+                              className="flex items-center justify-between text-[11px] text-slate-300 hover:bg-slate-900/60 px-1.5 py-0.5 rounded"
+                            >
+                              <span className="truncate max-w-[170px]" title={f.name}>
+                                {idx + 1}. {f.name}
+                              </span>
+                              <div className="flex items-center gap-1.5 shrink-0">
+                                <span className="font-mono text-[10px] text-slate-400">
+                                  {(f.size / (1024 * 1024)).toFixed(1)}MB
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveAudioFile(idx)}
+                                  className="text-slate-500 hover:text-rose-400 p-0.5 cursor-pointer"
+                                  title="Bỏ tệp này"
+                                >
+                                  <X className="w-3 h-3" />
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+
+                        <span className="text-[10px] text-amber-400 underline block pt-0.5">
+                          + Bấm để chọn thêm file khác
                         </span>
                       </div>
                     ) : (
@@ -1046,10 +1181,10 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
                           <UploadCloud className="w-5 h-5" />
                         </div>
                         <p className="text-xs font-semibold text-slate-200">
-                          Chọn file hoặc kéo thả
+                          Chọn 1 hoặc nhiều file (Kéo thả)
                         </p>
                         <p className="text-[10px] text-slate-400">
-                          MP3, WAV, M4A, FLAC (3 - 15 phút)
+                          MP3, WAV, M4A, FLAC (chọn nhiều file cùng lúc)
                         </p>
                       </div>
                     )}
@@ -1061,6 +1196,40 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
                   <div className="text-xs font-bold text-white flex items-center gap-1.5 pb-1 border-b border-slate-800">
                     <Settings className="w-4 h-4 text-sky-400" />
                     <span>Cấu Hình Tách & Phiên Âm</span>
+                  </div>
+
+                  {/* Concurrency input (Chạy n tiến trình đồng thời) */}
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-[11px] font-semibold text-slate-300">
+                        Chạy n tiến trình đồng thời:
+                      </label>
+                      <span className="text-[10px] text-amber-400 font-mono font-bold bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/30">
+                        {concurrency} tiến trình song song
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="range"
+                        min="1"
+                        max="8"
+                        step="1"
+                        value={concurrency}
+                        onChange={(e) => setConcurrency(parseInt(e.target.value, 10) || 1)}
+                        className="flex-1 accent-amber-500 h-1.5 bg-slate-800 rounded cursor-pointer"
+                      />
+                      <input
+                        type="number"
+                        min="1"
+                        max="8"
+                        value={concurrency}
+                        onChange={(e) => setConcurrency(Math.max(1, Math.min(8, parseInt(e.target.value, 10) || 1)))}
+                        className="w-12 px-2 py-1 text-xs rounded-lg bg-slate-900 border border-slate-700 text-white font-mono text-center font-bold"
+                      />
+                    </div>
+                    <p className="mt-1 text-[10px] text-slate-400 leading-tight">
+                      Khi tải lên nhiều audio hoặc 1 audio dài bị cắt thành nhiều đoạn nhỏ, hệ thống sẽ chạy <strong>{concurrency} audio/đoạn cùng lúc</strong>.
+                    </p>
                   </div>
 
                   {/* Dataset Extend / Create New Dropdown */}
@@ -1228,7 +1397,7 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
                 <div className="p-4 rounded-2xl bg-slate-950/70 border border-slate-800 space-y-3 shadow-md">
                   <button
                     type="submit"
-                    disabled={isProcessingDataset || !audioFile}
+                    disabled={isProcessingDataset || audioFiles.length === 0}
                     className="w-full py-3 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 disabled:opacity-40 disabled:cursor-not-allowed text-slate-950 text-xs font-black transition-all shadow-lg shadow-amber-500/20 flex items-center justify-center gap-2 cursor-pointer"
                   >
                     {isProcessingDataset ? (
@@ -1412,7 +1581,7 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
                       <table className="w-full text-left text-xs border-collapse">
                         <thead className="bg-slate-900/95 text-slate-400 sticky top-0 z-10 backdrop-blur-md">
                           <tr>
-                            <th className="py-2.5 px-3 w-14 text-center">Nghe</th>
+                            <th className="py-2.5 px-3 w-20 text-center">Nghe/Copy</th>
                             <th className="py-2.5 px-3 w-24">Mã Clip</th>
                             <th className="py-2.5 px-3 w-20">Thời lượng</th>
                             <th className="py-2.5 px-3">Văn Bản Tiếng Việt (Bấm Để Sửa)</th>
@@ -1427,18 +1596,32 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
                             return (
                               <tr key={clip.id} className="hover:bg-slate-900/50 transition-colors">
                                 <td className="py-2 px-3 text-center">
-                                  <button
-                                    type="button"
-                                    onClick={() => handlePlayClip(clip)}
-                                    className={`w-7 h-7 rounded-lg flex items-center justify-center transition-all cursor-pointer ${
-                                      isPlaying
-                                        ? "bg-amber-500 text-slate-950 shadow-md shadow-amber-500/30 animate-pulse"
-                                        : "bg-slate-800 hover:bg-slate-700 text-slate-200"
-                                    }`}
-                                    title="Nghe thử câu này"
-                                  >
-                                    {isPlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5 ml-0.5" />}
-                                  </button>
+                                  <div className="flex items-center justify-center gap-1">
+                                    <button
+                                      type="button"
+                                      onClick={() => handlePlayClip(clip)}
+                                      className={`w-7 h-7 rounded-lg flex items-center justify-center transition-all cursor-pointer ${
+                                        isPlaying
+                                          ? "bg-amber-500 text-slate-950 shadow-md shadow-amber-500/30 animate-pulse"
+                                          : "bg-slate-800 hover:bg-slate-700 text-slate-200"
+                                      }`}
+                                      title="Nghe thử câu này"
+                                    >
+                                      {isPlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5 ml-0.5" />}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleCopyClipAudio(clip)}
+                                      className="w-7 h-7 rounded-lg flex items-center justify-center bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-amber-400 border border-slate-700/60 transition-colors cursor-pointer"
+                                      title="Sao chép file audio này vào clipboard"
+                                    >
+                                      {copiedClipId === clip.id ? (
+                                        <Check className="w-3.5 h-3.5 text-emerald-400" />
+                                      ) : (
+                                        <Copy className="w-3.5 h-3.5" />
+                                      )}
+                                    </button>
+                                  </div>
                                 </td>
 
                                 <td className="py-2 px-3 font-mono text-[11px] text-slate-400">

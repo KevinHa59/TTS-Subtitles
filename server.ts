@@ -3395,15 +3395,23 @@ app.delete("/api/system/whisper-model/:modelId", (req: Request, res: Response) =
 // OFFLINE DATASET PREPARATION (WHISPER.CPP)
 // ==========================================
 
+interface DatasetUploadSession {
+  tempDir: string;
+  files: Array<{ path: string; originalFilename: string }>;
+  createdAt: number;
+}
+const datasetUploadSessions = new Map<string, DatasetUploadSession>();
+
 function startDatasetPreparation(
-  audioSource: Buffer | string,
-  originalFilename: string,
+  audioSource: Buffer | string | (Buffer | string)[],
+  originalFilename: string | string[],
   voiceName: string,
   whisperModel: string,
   minDuration: number,
   maxDuration: number,
   uploadTempDir?: string,
-  targetDatasetId?: string
+  targetDatasetId?: string,
+  concurrency: number = 2
 ): DatasetPreparationJob {
   const now = Date.now();
   for (const [id, job] of datasetPreparationJobs) {
@@ -3434,7 +3442,8 @@ function startDatasetPreparation(
       job.updatedAt = Date.now();
     },
     resolveFfmpegPath(),
-    targetDatasetId
+    targetDatasetId,
+    concurrency
   )
     .then((datasetInfo) => {
       job.status = "completed";
@@ -3517,6 +3526,7 @@ app.post("/api/dataset/prepare-upload", async (req: Request, res: Response) => {
       typeof req.query[key] === "string" ? req.query[key] as string : fallback;
     const originalFilename = path.basename(queryString("originalFilename", "audio.wav"));
     const targetDatasetId = queryString("extendDatasetId", "") || queryString("targetDatasetId", "");
+    const concurrency = Math.max(1, Math.min(8, Number(queryString("concurrency", "2")) || 2));
     const job = startDatasetPreparation(
       uploadPath,
       originalFilename,
@@ -3525,7 +3535,8 @@ app.post("/api/dataset/prepare-upload", async (req: Request, res: Response) => {
       Number(queryString("minDuration", "1")) || 1,
       Number(queryString("maxDuration", "12")) || 12,
       uploadTempDir,
-      targetDatasetId || undefined
+      targetDatasetId || undefined,
+      concurrency
     );
 
     res.status(202).json({ success: true, jobId: job.id });
@@ -3543,7 +3554,101 @@ app.post("/api/dataset/prepare-upload", async (req: Request, res: Response) => {
   }
 });
 
-// Prepare offline dataset from uploaded audio
+// Create multi-file batch upload session
+app.post("/api/dataset/prepare-session", (_req: Request, res: Response) => {
+  try {
+    const sessionId = `batch_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `tts-batch-${sessionId}-`));
+    datasetUploadSessions.set(sessionId, {
+      tempDir,
+      files: [],
+      createdAt: Date.now(),
+    });
+    res.json({ success: true, sessionId });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Không thể tạo phiên tải tệp." });
+  }
+});
+
+// Upload a single file into an active batch session
+app.post("/api/dataset/prepare-session/:sessionId/upload", async (req: Request, res: Response) => {
+  const session = datasetUploadSessions.get(req.params.sessionId);
+  if (!session) {
+    return res.status(404).json({ error: "Phiên tải lên không tồn tại hoặc đã hết hạn." });
+  }
+
+  const rawFilename = typeof req.query.filename === "string" ? req.query.filename : `audio_${session.files.length + 1}.wav`;
+  const originalFilename = path.basename(rawFilename);
+  const safeFilename = `file_${session.files.length}_${originalFilename.replace(/[^a-zA-Z0-9_.-]/g, "_")}`;
+  const destPath = path.join(session.tempDir, safeFilename);
+
+  let bytesReceived = 0;
+  const sizeLimiter = new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      bytesReceived += chunk.length;
+      if (bytesReceived > MAX_DATASET_UPLOAD_BYTES) {
+        callback(new Error("UPLOAD_TOO_LARGE"));
+        return;
+      }
+      callback(null, chunk);
+    },
+  });
+
+  try {
+    await pipeline(req, sizeLimiter, fs.createWriteStream(destPath, { flags: "wx" }));
+    if (bytesReceived < 500) {
+      fs.rmSync(destPath, { force: true });
+      return res.status(400).json({ error: "Tệp âm thanh quá nhỏ hoặc rỗng." });
+    }
+    session.files.push({ path: destPath, originalFilename });
+    res.json({ success: true, fileCount: session.files.length });
+  } catch (err: any) {
+    fs.rmSync(destPath, { force: true });
+    res.status(500).json({ error: err.message || "Lỗi lưu tệp âm thanh vào phiên." });
+  }
+});
+
+// Start processing the batch session
+app.post("/api/dataset/prepare-session/:sessionId/start", (req: Request, res: Response) => {
+  const session = datasetUploadSessions.get(req.params.sessionId);
+  if (!session) {
+    return res.status(404).json({ error: "Phiên tải lên không tồn tại hoặc đã hết hạn." });
+  }
+  if (session.files.length === 0) {
+    return res.status(400).json({ error: "Phiên tải lên không có tệp âm thanh nào." });
+  }
+
+  datasetUploadSessions.delete(req.params.sessionId);
+
+  const {
+    voiceName = "giong_moi",
+    whisperModel = "small",
+    minDuration = 1.0,
+    maxDuration = 12.0,
+    concurrency = 2,
+    extendDatasetId,
+    targetDatasetId,
+  } = req.body || {};
+
+  const audioPaths = session.files.map((f) => f.path);
+  const originalFilenames = session.files.map((f) => f.originalFilename);
+
+  const job = startDatasetPreparation(
+    audioPaths,
+    originalFilenames,
+    String(voiceName),
+    String(whisperModel),
+    Number(minDuration) || 1.0,
+    Number(maxDuration) || 12.0,
+    session.tempDir,
+    extendDatasetId || targetDatasetId || undefined,
+    Math.max(1, Math.min(8, Number(concurrency) || 2))
+  );
+
+  res.status(202).json({ success: true, jobId: job.id });
+});
+
+// Prepare offline dataset from uploaded audio (base64 fallback)
 app.post("/api/dataset/prepare", async (req: Request, res: Response) => {
   try {
     const {
@@ -3553,6 +3658,7 @@ app.post("/api/dataset/prepare", async (req: Request, res: Response) => {
       whisperModel = "small",
       minDuration = 1.0,
       maxDuration = 12.0,
+      concurrency = 2,
       extendDatasetId,
       targetDatasetId,
     } = req.body || {};
@@ -3567,7 +3673,7 @@ app.post("/api/dataset/prepare", async (req: Request, res: Response) => {
     }
 
     console.log(
-      `[OfflineDataset] Bắt đầu cắt và nhận diện bằng Whisper.cpp (${whisperModel}) cho giọng "${voiceName}"...`
+      `[OfflineDataset] Bắt đầu cắt và nhận diện bằng Whisper.cpp (${whisperModel}) cho giọng "${voiceName}" (tiến trình đồng thời: ${concurrency})...`
     );
 
     const job = startDatasetPreparation(
@@ -3578,7 +3684,8 @@ app.post("/api/dataset/prepare", async (req: Request, res: Response) => {
       Number(minDuration) || 1.0,
       Number(maxDuration) || 12.0,
       undefined,
-      extendDatasetId || targetDatasetId || undefined
+      extendDatasetId || targetDatasetId || undefined,
+      Math.max(1, Math.min(8, Number(concurrency) || 2))
     );
 
     res.status(202).json({ success: true, jobId: job.id });
