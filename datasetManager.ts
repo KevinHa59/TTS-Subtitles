@@ -27,9 +27,26 @@ export interface DatasetInfo {
   clips: DatasetClip[];
 }
 
+export interface DatasetChunkStatus {
+  id: string;
+  label: string;
+  filename: string;
+  origFilename: string;
+  fileIndex: number;
+  segmentIndex: number;
+  status: "pending" | "processing" | "completed" | "failed";
+  progressPercent: number;
+  clipsFound?: number;
+  error?: string;
+}
+
 export interface DatasetPreparationProgress {
   progressPercent: number;
   message: string;
+  totalChunks?: number;
+  completedChunks?: number;
+  concurrency?: number;
+  chunks?: DatasetChunkStatus[];
 }
 
 const DATASETS_ROOT = path.resolve(__dirname, "datasets_storage");
@@ -443,6 +460,50 @@ export async function prepareOfflineDataset(
       `[OfflineDataset] Bắt đầu phiên âm song song: ${allChunkJobs.length} đoạn với ${effectiveConcurrency} tiến trình đồng thời (mỗi tiến trình ${threadsPerJob} threads)...`
     );
 
+    const chunksStatus: DatasetChunkStatus[] = allChunkJobs.map((cj, idx) => {
+      const startSec = Math.floor(cj.chunkStartMs / 1000);
+      const endSec = startSec + 300;
+      const formatTime = (s: number) => {
+        const m = Math.floor(s / 60);
+        const sec = s % 60;
+        return `${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
+      };
+      return {
+        id: cj.jobId,
+        label: `Đoạn ${idx + 1}/${allChunkJobs.length} (${formatTime(startSec)} - ${formatTime(endSec)})`,
+        filename: path.basename(cj.whisperWavPath),
+        origFilename: cj.origFilename,
+        fileIndex: cj.fileIndex,
+        segmentIndex: cj.segmentIndex,
+        status: "pending",
+        progressPercent: 0,
+        clipsFound: 0,
+      };
+    });
+
+    let completedChunks = 0;
+
+    const emitProgress = (message: string) => {
+      const sumProgress = chunksStatus.reduce(
+        (acc, c) => acc + (c.status === "completed" ? 100 : c.progressPercent),
+        0
+      );
+      const avg = chunksStatus.length > 0 ? sumProgress / chunksStatus.length : 0;
+      const overallPercent = 5 + Math.floor(avg * 0.75);
+      onProgress?.({
+        progressPercent: Math.min(80, Math.max(5, overallPercent)),
+        message,
+        totalChunks: allChunkJobs.length,
+        completedChunks,
+        concurrency: effectiveConcurrency,
+        chunks: chunksStatus.map((c) => ({ ...c })),
+      });
+    };
+
+    emitProgress(
+      `Đã chia thành ${allChunkJobs.length} đoạn. Bắt đầu phiên âm với ${effectiveConcurrency} tiến trình song song...`
+    );
+
     interface RawClipResult {
       fileIndex: number;
       startMs: number;
@@ -454,7 +515,6 @@ export async function prepareOfflineDataset(
     }
 
     const rawClips: RawClipResult[] = [];
-    let completedChunks = 0;
     let jobQueueIndex = 0;
 
     const runWorker = async (workerId: number) => {
@@ -469,6 +529,12 @@ export async function prepareOfflineDataset(
         const jsonOutPrefix = path.join(tempDir, `${chunkName}_transcription`);
         const full22kWavPath = path.join(tempDir, `${chunkName}_22050.wav`);
 
+        chunksStatus[currentIndex].status = "processing";
+        chunksStatus[currentIndex].progressPercent = 1;
+        emitProgress(
+          `Đang xử lý ${effectiveConcurrency} tiến trình song song: bắt đầu đoạn ${currentIndex + 1}/${allChunkJobs.length}...`
+        );
+
         // Convert chunk to 22050Hz mono for crisp dataset slicing
         const ffmpeg22k = spawnSync(
           ffmpegPath,
@@ -476,10 +542,12 @@ export async function prepareOfflineDataset(
           { stdio: "pipe" }
         );
         if (ffmpeg22k.status !== 0 || !fs.existsSync(full22kWavPath)) {
+          chunksStatus[currentIndex].status = "failed";
+          chunksStatus[currentIndex].error = "Lỗi chuyển đổi 22050Hz";
           throw new Error(`Không thể chuyển đổi đoạn ${chunkName} sang định dạng 22050Hz.`);
         }
 
-        // Run whisper.cpp
+        // Run whisper.cpp with real-time percentage callback
         await runWhisper(
           whisperCli,
           [
@@ -491,11 +559,19 @@ export async function prepareOfflineDataset(
             "-t", String(threadsPerJob),
             "-pp",
             "--max-len", "0",
-          ]
+          ],
+          (percent) => {
+            chunksStatus[currentIndex].progressPercent = Math.min(99, percent);
+            emitProgress(
+              `Đang phiên âm: ${completedChunks}/${allChunkJobs.length} đoạn xong (đoạn ${currentIndex + 1} đạt ${percent}%)...`
+            );
+          }
         );
 
         const jsonResultPath = `${jsonOutPrefix}.json`;
         if (!fs.existsSync(jsonResultPath)) {
+          chunksStatus[currentIndex].status = "failed";
+          chunksStatus[currentIndex].error = "Không có kết quả JSON";
           throw new Error(`Whisper.cpp không tạo kết quả cho đoạn ${chunkName}.`);
         }
 
@@ -503,10 +579,12 @@ export async function prepareOfflineDataset(
         try {
           whisperData = JSON.parse(fs.readFileSync(jsonResultPath, "utf-8"));
         } catch (error) {
+          chunksStatus[currentIndex].status = "failed";
           const message = error instanceof Error ? error.message : "JSON không hợp lệ.";
           throw new Error(`Lỗi đọc kết quả Whisper ở đoạn ${chunkName}: ${message}`);
         }
 
+        let clipsInThisChunk = 0;
         for (const seg of whisperData.transcription || []) {
           const cleanText = cleanPiperText(seg.text || "");
           if (!cleanText || cleanText.length < 2) continue;
@@ -527,15 +605,18 @@ export async function prepareOfflineDataset(
             full22kWavPath,
             fromMs,
           });
+          clipsInThisChunk++;
         }
 
         fs.rmSync(chunkJob.whisperWavPath, { force: true });
         completedChunks++;
-        const progressPercent = 5 + Math.floor((completedChunks / allChunkJobs.length) * 75);
-        onProgress?.({
-          progressPercent,
-          message: `Đang xử lý ${effectiveConcurrency} tiến trình song song: hoàn thành ${completedChunks}/${allChunkJobs.length} đoạn...`,
-        });
+        chunksStatus[currentIndex].status = "completed";
+        chunksStatus[currentIndex].progressPercent = 100;
+        chunksStatus[currentIndex].clipsFound = clipsInThisChunk;
+
+        emitProgress(
+          `Đã hoàn tất đoạn ${currentIndex + 1}/${allChunkJobs.length} (${clipsInThisChunk} câu thoại).`
+        );
       }
     };
 
@@ -568,6 +649,10 @@ export async function prepareOfflineDataset(
     onProgress?.({
       progressPercent: 82,
       message: `Đang trích xuất ${rawClips.length} câu thoại chuẩn 22050Hz vào bộ dữ liệu...`,
+      totalChunks: allChunkJobs.length,
+      completedChunks,
+      concurrency: effectiveConcurrency,
+      chunks: chunksStatus.map((c) => ({ ...c })),
     });
 
     const newClips: DatasetClip[] = [];
@@ -608,6 +693,10 @@ export async function prepareOfflineDataset(
         onProgress?.({
           progressPercent: sliceProgress,
           message: `Đã trích xuất ${idx + 1}/${rawClips.length} câu thoại...`,
+          totalChunks: allChunkJobs.length,
+          completedChunks,
+          concurrency: effectiveConcurrency,
+          chunks: chunksStatus.map((c) => ({ ...c })),
         });
       }
     }

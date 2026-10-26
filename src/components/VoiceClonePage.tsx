@@ -31,6 +31,7 @@ import {
   ShieldCheck,
   X,
   Plus,
+  Clock,
 } from "lucide-react";
 
 import { copyAudioToClipboard } from "../utils/clipboardAudio";
@@ -100,6 +101,19 @@ interface DatasetInfo {
   clips: DatasetClip[];
 }
 
+export interface DatasetChunkStatus {
+  id: string;
+  label: string;
+  filename: string;
+  origFilename: string;
+  fileIndex: number;
+  segmentIndex: number;
+  status: "pending" | "processing" | "completed" | "failed";
+  progressPercent: number;
+  clipsFound?: number;
+  error?: string;
+}
+
 interface WhisperModelItem {
   id: string;
   name: string;
@@ -132,6 +146,14 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
   const [maxDuration, setMaxDuration] = useState<number>(12.0);
   const [, setAvailableModels] = useState<WhisperModelItem[]>([]);
   const [isProcessingDataset, setIsProcessingDataset] = useState<boolean>(false);
+  const [activeJobProgress, setActiveJobProgress] = useState<{
+    percent: number;
+    totalChunks?: number;
+    completedChunks?: number;
+    concurrency?: number;
+    chunks?: DatasetChunkStatus[];
+  } | null>(null);
+  const [isChunkDashboardCollapsed, setIsChunkDashboardCollapsed] = useState<boolean>(false);
   const [datasetFeedback, setDatasetFeedback] = useState<{
     type: "success" | "error" | "info";
     message: string;
@@ -403,6 +425,12 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
     }
 
     setIsProcessingDataset(true);
+    setActiveJobProgress({
+      percent: 1,
+      concurrency,
+      chunks: [],
+    });
+    setIsChunkDashboardCollapsed(false);
     setDatasetFeedback({
       type: "info",
       message: audioFiles.length > 1
@@ -508,6 +536,16 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
               message: pollData.job.message || "Đang xử lý âm thanh...",
             });
 
+            if (pollData.job.chunks || typeof pollData.job.progressPercent === "number") {
+              setActiveJobProgress({
+                percent: pollData.job.progressPercent || 0,
+                totalChunks: pollData.job.totalChunks,
+                completedChunks: pollData.job.completedChunks,
+                concurrency: pollData.job.concurrency || concurrency,
+                chunks: pollData.job.chunks || [],
+              });
+            }
+
             if (pollData.job.status === "completed") {
               clearInterval(pollTimer);
               setIsProcessingDataset(false);
@@ -518,6 +556,15 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
                   ? `Đã bổ sung thành công vào bộ dữ liệu "${pollData.job.dataset.voiceName}"! Tổng cộng hiện có ${pollData.job.dataset.totalClips} câu (${pollData.job.dataset.totalDurationSec}s).`
                   : `Cắt và phiên âm hoàn tất! Tạo được ${pollData.job.dataset.totalClips} câu (${pollData.job.dataset.totalDurationSec} giây).`,
               });
+              if (pollData.job.chunks) {
+                setActiveJobProgress({
+                  percent: 100,
+                  totalChunks: pollData.job.totalChunks,
+                  completedChunks: pollData.job.completedChunks,
+                  concurrency: pollData.job.concurrency || concurrency,
+                  chunks: pollData.job.chunks,
+                });
+              }
               setCurrentDataset(pollData.job.dataset);
               fetchDatasetsAndModels();
             } else if (pollData.job.status === "failed") {
@@ -527,6 +574,11 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
                 type: "error",
                 message: pollData.job.error || "Quá trình xử lý âm thanh thất bại.",
               });
+              if (pollData.job.chunks) {
+                setActiveJobProgress((prev) =>
+                  prev ? { ...prev, chunks: pollData.job.chunks } : null
+                );
+              }
             }
           }
         } catch {
@@ -1429,6 +1481,31 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
                       <span className="leading-tight">{datasetFeedback.message}</span>
                     </div>
                   )}
+
+                  {activeJobProgress && (isProcessingDataset || (activeJobProgress.chunks && activeJobProgress.chunks.length > 0)) && (
+                    <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 space-y-1.5 text-xs">
+                      <div className="flex items-center justify-between text-[11px] font-semibold text-slate-300">
+                        <span>Tiến trình tổng thể:</span>
+                        <span className="font-mono text-amber-400 font-bold">{activeJobProgress.percent}%</span>
+                      </div>
+                      <div className="w-full h-1.5 rounded-full bg-slate-950 overflow-hidden">
+                        <div
+                          className="h-full bg-gradient-to-r from-amber-500 to-orange-500 transition-all duration-300"
+                          style={{ width: `${activeJobProgress.percent}%` }}
+                        />
+                      </div>
+                      {activeJobProgress.chunks && activeJobProgress.chunks.length > 0 && (
+                        <div className="text-[10px] text-slate-400 flex items-center justify-between pt-0.5">
+                          <span>
+                            {activeJobProgress.chunks.filter((c) => c.status === "completed").length}/{activeJobProgress.chunks.length} đoạn xong
+                          </span>
+                          <span className="text-amber-300 font-semibold">
+                            {activeJobProgress.chunks.filter((c) => c.status === "processing").length} đang chạy
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 {/* 4. Switch Saved Datasets */}
@@ -1505,6 +1582,214 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
             {/* CỘT LỚN BÊN PHẢI: Dữ liệu âm thanh sau khi cắt và phiên âm      */}
             {/* ============================================================== */}
             <div className="lg:col-span-8 xl:col-span-8 space-y-4">
+              {/* BẢNG THEO DÕI TIẾN TRÌNH CẮT & PHIÊN ÂM THEO TỪNG ĐOẠN */}
+              {activeJobProgress && (isProcessingDataset || (activeJobProgress.chunks && activeJobProgress.chunks.length > 0)) && (
+                <div className="p-4 sm:p-5 rounded-2xl bg-slate-950/90 border border-slate-800 shadow-xl space-y-4">
+                  {/* Header */}
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800/80">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0">
+                        {isProcessingDataset ? (
+                          <RefreshCw className="w-5 h-5 animate-spin" />
+                        ) : (
+                          <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+                        )}
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <h3 className="text-sm font-bold text-white">
+                            {isProcessingDataset
+                              ? "Tiến Trình Cắt & Phiên Âm Âm Thanh (Whisper AI)"
+                              : "Hoàn Tất Tách & Phiên Âm Âm Thanh"}
+                          </h3>
+                          {activeJobProgress.concurrency && (
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-sky-500/15 text-sky-400 border border-sky-500/30 flex items-center gap-1">
+                              <Cpu className="w-3 h-3" />
+                              {activeJobProgress.concurrency} tiến trình song song
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-slate-400 mt-0.5 line-clamp-1">
+                          {datasetFeedback?.message || "Đang phân tích các đoạn âm thanh..."}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-3 self-end sm:self-center">
+                      <div className="text-right">
+                        <span className="text-lg font-black font-mono text-amber-400">
+                          {activeJobProgress.percent}%
+                        </span>
+                        <span className="block text-[10px] text-slate-500">Tiến độ tổng</span>
+                      </div>
+                      {!isProcessingDataset && (
+                        <button
+                          type="button"
+                          onClick={() => setActiveJobProgress(null)}
+                          className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors ml-1 cursor-pointer"
+                          title="Đóng bảng tiến độ"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Overall Progress Bar */}
+                  <div className="space-y-1.5">
+                    <div className="w-full h-2 rounded-full bg-slate-900 border border-slate-800 overflow-hidden">
+                      <div
+                        className={`h-full transition-all duration-300 ${
+                          activeJobProgress.percent === 100
+                            ? "bg-emerald-500"
+                            : "bg-gradient-to-r from-amber-500 to-orange-500"
+                        }`}
+                        style={{ width: `${activeJobProgress.percent}%` }}
+                      />
+                    </div>
+                    {activeJobProgress.chunks && activeJobProgress.chunks.length > 0 && (
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-400 pt-0.5">
+                        <div className="flex items-center gap-3 flex-wrap">
+                          <span className="flex items-center gap-1 text-emerald-400 font-semibold">
+                            <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" />
+                            Hoàn thành: {activeJobProgress.chunks.filter((c) => c.status === "completed").length}/{activeJobProgress.chunks.length}
+                          </span>
+                          <span className="flex items-center gap-1 text-amber-400 font-semibold">
+                            <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse inline-block" />
+                            Đang cắt & phiên âm: {activeJobProgress.chunks.filter((c) => c.status === "processing").length}
+                          </span>
+                          <span className="flex items-center gap-1 text-slate-400">
+                            <span className="w-2 h-2 rounded-full bg-slate-600 inline-block" />
+                            Đang chờ: {activeJobProgress.chunks.filter((c) => c.status === "pending").length}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setIsChunkDashboardCollapsed(!isChunkDashboardCollapsed)}
+                          className="text-[10px] text-slate-400 hover:text-white underline cursor-pointer"
+                        >
+                          {isChunkDashboardCollapsed ? "Mở rộng danh sách đoạn" : "Thu gọn danh sách"}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Grid / List of Chunks */}
+                  {activeJobProgress.chunks && activeJobProgress.chunks.length > 0 && !isChunkDashboardCollapsed && (
+                    <div className="space-y-2 pt-1">
+                      <div className="flex items-center justify-between text-xs font-semibold text-slate-300">
+                        <span className="flex items-center gap-1.5">
+                          <Layers className="w-3.5 h-3.5 text-amber-400" />
+                          <span>Chi tiết từng đoạn âm thanh ({activeJobProgress.chunks.length} đoạn)</span>
+                        </span>
+                        <span className="text-[10px] text-slate-500 font-normal">
+                          Cập nhật % phiên âm thời gian thực từ Whisper
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 max-h-[380px] overflow-y-auto pr-1">
+                        {activeJobProgress.chunks.map((chunk, idx) => {
+                          const isProcessing = chunk.status === "processing";
+                          const isCompleted = chunk.status === "completed";
+                          const isFailed = chunk.status === "failed";
+                          const isPending = chunk.status === "pending";
+
+                          return (
+                            <div
+                              key={chunk.id || idx}
+                              className={`p-3 rounded-xl border transition-all ${
+                                isProcessing
+                                  ? "bg-amber-950/25 border-amber-500/50 shadow-md shadow-amber-500/5 ring-1 ring-amber-500/30"
+                                  : isCompleted
+                                  ? "bg-emerald-950/15 border-emerald-500/30"
+                                  : isFailed
+                                  ? "bg-red-950/20 border-red-500/30"
+                                  : "bg-slate-900/50 border-slate-800"
+                              }`}
+                            >
+                              <div className="flex items-center justify-between gap-2 mb-1.5">
+                                <span className="font-mono text-xs font-bold text-white truncate" title={chunk.label}>
+                                  {chunk.label}
+                                </span>
+
+                                {/* Status Badge */}
+                                {isProcessing && (
+                                  <span className="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30 animate-pulse">
+                                    <RefreshCw className="w-2.5 h-2.5 animate-spin text-amber-400" />
+                                    <span>Đang cắt & phiên âm {chunk.progressPercent > 0 ? `(${chunk.progressPercent}%)` : ""}</span>
+                                  </span>
+                                )}
+                                {isCompleted && (
+                                  <span className="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                                    <CheckCircle2 className="w-2.5 h-2.5 text-emerald-400" />
+                                    <span>Hoàn thành</span>
+                                  </span>
+                                )}
+                                {isPending && (
+                                  <span className="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-800 text-slate-400 border border-slate-700">
+                                    <Clock className="w-2.5 h-2.5 text-slate-400" />
+                                    <span>Đang chờ...</span>
+                                  </span>
+                                )}
+                                {isFailed && (
+                                  <span className="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-500/20 text-red-300 border border-red-500/30">
+                                    <AlertTriangle className="w-2.5 h-2.5 text-red-400" />
+                                    <span>Thất bại</span>
+                                  </span>
+                                )}
+                              </div>
+
+                              {/* Details */}
+                              <div className="flex items-center justify-between text-[11px] mb-2">
+                                <span className="text-slate-400 truncate max-w-[190px]" title={chunk.origFilename}>
+                                  📁 {chunk.origFilename}
+                                </span>
+                                <span className="font-mono text-[10px] shrink-0">
+                                  {isCompleted && (
+                                    <strong className="text-emerald-300">
+                                      {chunk.clipsFound ?? 0} câu thoại
+                                    </strong>
+                                  )}
+                                  {isProcessing && (
+                                    <span className="text-amber-400 font-semibold">
+                                      Tiến độ: {chunk.progressPercent}%
+                                    </span>
+                                  )}
+                                  {isPending && (
+                                    <span className="text-slate-500">Trong hàng đợi...</span>
+                                  )}
+                                  {isFailed && (
+                                    <span className="text-red-400">{chunk.error || "Lỗi"}</span>
+                                  )}
+                                </span>
+                              </div>
+
+                              {/* Mini Chunk Progress Bar */}
+                              <div className="w-full h-1.5 rounded-full bg-slate-950 overflow-hidden">
+                                <div
+                                  className={`h-full transition-all duration-200 ${
+                                    isCompleted
+                                      ? "bg-emerald-500"
+                                      : isProcessing
+                                      ? "bg-gradient-to-r from-amber-500 to-orange-500"
+                                      : isFailed
+                                      ? "bg-red-500"
+                                      : "bg-slate-700"
+                                  }`}
+                                  style={{
+                                    width: isCompleted ? "100%" : isPending ? "0%" : `${Math.max(3, chunk.progressPercent)}%`,
+                                  }}
+                                />
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {currentDataset ? (
                 <div className="space-y-4">
                   {/* Header Bar của Dataset hiện tại */}
@@ -1767,7 +2052,7 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
                     )}
                   </div>
                 </div>
-              ) : (
+              ) : !isProcessingDataset && (!activeJobProgress?.chunks || activeJobProgress.chunks.length === 0) ? (
                 /* Empty State for Right Column */
                 <div className="p-10 rounded-2xl bg-slate-950/60 border border-slate-800/80 text-center space-y-4 flex flex-col items-center justify-center min-h-[420px]">
                   <div className="w-16 h-16 rounded-2xl bg-amber-500/10 border border-amber-500/25 flex items-center justify-center text-amber-400 shadow-lg">
@@ -1795,6 +2080,10 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
                       <span className="text-slate-400">Nghe lại từng câu, sửa lỗi chữ và xuất zip lên Colab.</span>
                     </div>
                   </div>
+                </div>
+              ) : (
+                <div className="p-5 rounded-2xl bg-slate-950/40 border border-slate-800/60 text-center text-xs text-slate-400">
+                  <p>⏳ Sau khi các đoạn âm thanh được xử lý xong, danh sách chi tiết các câu thoại và công cụ chỉnh sửa metadata sẽ xuất hiện tại đây.</p>
                 </div>
               )}
             </div>

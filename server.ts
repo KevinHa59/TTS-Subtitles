@@ -49,6 +49,7 @@ import {
 import {
   prepareOfflineDataset,
   DatasetPreparationProgress,
+  DatasetChunkStatus,
   listDatasets,
   getDataset,
   updateDatasetClip,
@@ -77,6 +78,10 @@ interface DatasetPreparationJob {
   status: "processing" | "completed" | "failed";
   progressPercent: number;
   message: string;
+  totalChunks?: number;
+  completedChunks?: number;
+  concurrency?: number;
+  chunks?: DatasetChunkStatus[];
   dataset?: Awaited<ReturnType<typeof prepareOfflineDataset>>;
   error?: string;
   updatedAt: number;
@@ -3439,6 +3444,10 @@ function startDatasetPreparation(
     (progress: DatasetPreparationProgress) => {
       job.progressPercent = progress.progressPercent;
       job.message = progress.message;
+      if (typeof progress.totalChunks === "number") job.totalChunks = progress.totalChunks;
+      if (typeof progress.completedChunks === "number") job.completedChunks = progress.completedChunks;
+      if (typeof progress.concurrency === "number") job.concurrency = progress.concurrency;
+      if (progress.chunks) job.chunks = progress.chunks;
       job.updatedAt = Date.now();
     },
     resolveFfmpegPath(),
@@ -3450,6 +3459,14 @@ function startDatasetPreparation(
       job.progressPercent = 100;
       job.message = `Hoàn tất: đã tạo ${datasetInfo.totalClips} câu thoại.`;
       job.dataset = datasetInfo;
+      if (job.chunks) {
+        job.chunks = job.chunks.map((c) => ({
+          ...c,
+          status: "completed",
+          progressPercent: 100,
+        }));
+        job.completedChunks = job.chunks.length;
+      }
       job.updatedAt = Date.now();
       console.log(
         `[OfflineDataset] Đã tạo thành công ${datasetInfo.totalClips} câu (${datasetInfo.totalDurationSec}s) cho "${datasetInfo.voiceName}"!`
