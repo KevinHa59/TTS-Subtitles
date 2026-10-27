@@ -7,6 +7,7 @@ import { Readable, Transform } from "stream";
 import { pipeline } from "stream/promises";
 import {
   VideoDubbingJob,
+  VideoDubbingMediaTask,
   VideoDubbingMasterGeneration,
   VideoDubbingMetadata,
 } from "./src/types/videoDubbing";
@@ -171,8 +172,23 @@ export class VideoDubbingManager {
           masterGeneration: job.state.masterGeneration
             ? { ...job.state.masterGeneration }
             : undefined,
+          audioMix: job.state.audioMix ? { ...job.state.audioMix } : undefined,
+          videoExport: job.state.videoExport
+            ? { ...job.state.videoExport }
+            : undefined,
         }
       : null;
+  }
+
+  setMediaTask(
+    jobId: string,
+    task: "audioMix" | "videoExport",
+    state: VideoDubbingMediaTask,
+  ): void {
+    const job = this.findJob(jobId);
+    if (!job) throw new Error("Không tìm thấy job Video Dubbing.");
+    job.state[task] = { ...state };
+    job.state.updatedAt = Date.now();
   }
 
   getJobDirectory(jobId: string): string | null {

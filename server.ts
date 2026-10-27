@@ -67,6 +67,7 @@ import {
 } from "./systemToolsManager";
 import { VideoDubbingManager } from "./videoDubbingManager";
 import { createVideoDubbingRouter } from "./videoDubbingRoutes";
+import { VideoDubbingMediaCoordinator } from "./videoDubbingMedia";
 import {
   VideoDubbingMasterCoordinator,
   VideoDubbingMasterRequest,
@@ -281,6 +282,13 @@ const videoDubbingManager = new VideoDubbingManager({
   storageDirectory: VIDEO_DUBBING_DIR,
   ffprobePath: resolveFfprobePath(),
 });
+const videoDubbingMediaCoordinator = new VideoDubbingMediaCoordinator(
+  videoDubbingManager,
+  {
+    ffmpegPath: resolveFfmpegPath(),
+    ffprobePath: resolveFfprobePath(),
+  },
+);
 const videoDubbingMasterCoordinator = new VideoDubbingMasterCoordinator(
   videoDubbingManager,
   {
@@ -292,6 +300,24 @@ const videoDubbingMasterCoordinator = new VideoDubbingMasterCoordinator(
           !voice.id.startsWith("vieneu:"),
       ) ||
         scanCustomModelsOnDisk().some((voice) => voice.modelId === model)),
+    isMediaBusy: (jobId) => videoDubbingMediaCoordinator.isBusy(jobId),
+    onMasterUpdated: (jobId) => {
+      const current = videoDubbingManager.getJob(jobId);
+      if (current?.audioMix?.sizeBytes) {
+        videoDubbingManager.setMediaTask(jobId, "audioMix", {
+          ...current.audioMix,
+          status: "failed",
+          error: "TTS Master đã được thay đổi; hãy tạo lại bản phối.",
+        });
+      }
+      if (current?.videoExport?.sizeBytes) {
+        videoDubbingManager.setMediaTask(jobId, "videoExport", {
+          ...current.videoExport,
+          status: "failed",
+          error: "TTS Master đã được thay đổi; MP4 này dùng bản phối cũ.",
+        });
+      }
+    },
     createJob: (request, workingDirectory, maxTimelineDuration) =>
       createTimelineJob(
         {
@@ -327,7 +353,11 @@ const videoDubbingMasterCoordinator = new VideoDubbingMasterCoordinator(
 );
 app.use(
   "/api/video-dubbing",
-  createVideoDubbingRouter(videoDubbingManager, videoDubbingMasterCoordinator),
+  createVideoDubbingRouter(
+    videoDubbingManager,
+    videoDubbingMasterCoordinator,
+    videoDubbingMediaCoordinator,
+  ),
 );
 
 // VieNeu-TTS v3 Turbo Model Directory (48 kHz Neural TTS)

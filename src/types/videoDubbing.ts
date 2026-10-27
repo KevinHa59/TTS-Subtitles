@@ -28,6 +28,8 @@ export interface VideoDubbingJob {
   uploadedBytes: number;
   metadata?: VideoDubbingMetadata;
   masterGeneration?: VideoDubbingMasterGeneration;
+  audioMix?: VideoDubbingMediaTask;
+  videoExport?: VideoDubbingMediaTask;
   error?: string;
   createdAt: number;
   updatedAt: number;
@@ -38,6 +40,24 @@ export interface VideoDubbingMasterGeneration {
   progressPercent: number;
   completedSentences: number;
   totalSentences: number;
+  durationSeconds?: number;
+  sizeBytes?: number;
+  error?: string;
+}
+
+export type VideoDubbingMediaTaskStatus =
+  | "idle"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export interface VideoDubbingMediaTask {
+  status: VideoDubbingMediaTaskStatus;
+  phase?: "extracting" | "mixing" | "remuxing" | "validating";
+  progressPercent?: number;
+  ttsVolumePercent?: number;
+  originalVolumePercent?: number;
   durationSeconds?: number;
   sizeBytes?: number;
   error?: string;

@@ -1,10 +1,12 @@
 import { Request, Response, Router } from "express";
 import { VideoDubbingMasterCoordinator } from "./videoDubbingMaster";
+import { VideoDubbingMediaCoordinator } from "./videoDubbingMedia";
 import { VideoDubbingManager } from "./videoDubbingManager";
 
 export function createVideoDubbingRouter(
   videoDubbingManager: VideoDubbingManager,
   masterCoordinator?: VideoDubbingMasterCoordinator,
+  mediaCoordinator?: VideoDubbingMediaCoordinator,
 ): Router {
   const router = Router();
 
@@ -144,11 +146,144 @@ export function createVideoDubbingRouter(
     },
   );
 
+  router.post("/jobs/:jobId/audio-mix", (req: Request, res: Response) => {
+    if (!mediaCoordinator) {
+      return res.status(501).json({ error: "Trộn âm thanh chưa được cấu hình." });
+    }
+    if (!videoDubbingManager.isValidJobId(req.params.jobId)) {
+      return res.status(400).json({ error: "ID job video không hợp lệ." });
+    }
+    if (!videoDubbingManager.getJob(req.params.jobId)) {
+      return res.status(404).json({ error: "Không tìm thấy job Video Dubbing." });
+    }
+    try {
+      const audioMix = mediaCoordinator.startMix(req.params.jobId, req.body);
+      return res.status(202).json({ success: true, audioMix });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Không thể bắt đầu trộn âm thanh.";
+      return res.status(400).json({ error: message });
+    }
+  });
+
+  router.post(
+    "/jobs/:jobId/audio-mix/cancel",
+    async (req: Request, res: Response) => {
+      if (!mediaCoordinator) {
+        return res.status(501).json({ error: "Trộn âm thanh chưa được cấu hình." });
+      }
+      if (!videoDubbingManager.isValidJobId(req.params.jobId)) {
+        return res.status(400).json({ error: "ID job video không hợp lệ." });
+      }
+      if (!videoDubbingManager.getJob(req.params.jobId)) {
+        return res.status(404).json({ error: "Không tìm thấy job Video Dubbing." });
+      }
+      try {
+        await mediaCoordinator.cancel(req.params.jobId);
+        return res.json({
+          success: true,
+          job: videoDubbingManager.getJob(req.params.jobId),
+        });
+      } catch (error) {
+        console.error("[VideoDubbing] Lỗi khi hủy trộn audio:", error);
+        return res.status(500).json({ error: "Không thể hủy trộn âm thanh." });
+      }
+    },
+  );
+
+  router.get(
+    "/jobs/:jobId/mixed-audio",
+    (req: Request, res: Response) => {
+      if (!videoDubbingManager.isValidJobId(req.params.jobId)) {
+        return res.status(400).json({ error: "ID job video không hợp lệ." });
+      }
+      const filePath = mediaCoordinator?.getAudioMixPath(req.params.jobId);
+      if (!filePath) {
+        return res.status(404).json({ error: "Bản phối âm thanh chưa sẵn sàng." });
+      }
+      res.type("audio/mp4");
+      return res.sendFile(filePath, (error) => {
+        if (error && !res.headersSent) {
+          console.error("[VideoDubbing] Lỗi gửi bản phối audio:", error);
+          res.status(500).end();
+        }
+      });
+    },
+  );
+
+  router.post("/jobs/:jobId/export", (req: Request, res: Response) => {
+    if (!mediaCoordinator) {
+      return res.status(501).json({ error: "Xuất MP4 chưa được cấu hình." });
+    }
+    if (!videoDubbingManager.isValidJobId(req.params.jobId)) {
+      return res.status(400).json({ error: "ID job video không hợp lệ." });
+    }
+    if (!videoDubbingManager.getJob(req.params.jobId)) {
+      return res.status(404).json({ error: "Không tìm thấy job Video Dubbing." });
+    }
+    try {
+      const videoExport = mediaCoordinator.startExport(req.params.jobId);
+      return res.status(202).json({ success: true, videoExport });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Không thể bắt đầu xuất MP4.";
+      return res.status(400).json({ error: message });
+    }
+  });
+
+  router.post(
+    "/jobs/:jobId/export/cancel",
+    async (req: Request, res: Response) => {
+      if (!mediaCoordinator) {
+        return res.status(501).json({ error: "Xuất MP4 chưa được cấu hình." });
+      }
+      if (!videoDubbingManager.isValidJobId(req.params.jobId)) {
+        return res.status(400).json({ error: "ID job video không hợp lệ." });
+      }
+      if (!videoDubbingManager.getJob(req.params.jobId)) {
+        return res.status(404).json({ error: "Không tìm thấy job Video Dubbing." });
+      }
+      try {
+        await mediaCoordinator.cancel(req.params.jobId);
+        return res.json({
+          success: true,
+          job: videoDubbingManager.getJob(req.params.jobId),
+        });
+      } catch (error) {
+        console.error("[VideoDubbing] Lỗi khi hủy xuất MP4:", error);
+        return res.status(500).json({ error: "Không thể hủy xuất MP4." });
+      }
+    },
+  );
+
+  router.get(
+    "/jobs/:jobId/download",
+    (req: Request, res: Response) => {
+      if (!videoDubbingManager.isValidJobId(req.params.jobId)) {
+        return res.status(400).json({ error: "ID job video không hợp lệ." });
+      }
+      const filePath = mediaCoordinator?.getVideoExportPath(req.params.jobId);
+      if (!filePath) {
+        return res.status(404).json({ error: "MP4 đầu ra chưa sẵn sàng." });
+      }
+      const fileName = `video-dubbing-${req.params.jobId}.mp4`;
+      res.type("video/mp4");
+      return res.download(filePath, fileName, (error) => {
+        if (error && !res.headersSent) {
+          console.error("[VideoDubbing] Lỗi tải MP4:", error);
+          res.status(500).end();
+        }
+      });
+    },
+  );
+
   router.post("/jobs/:jobId/cancel", async (req: Request, res: Response) => {
     if (!videoDubbingManager.isValidJobId(req.params.jobId)) {
       return res.status(400).json({ error: "ID job video không hợp lệ." });
     }
     try {
+      await mediaCoordinator?.cancel(req.params.jobId);
+      await masterCoordinator?.cancel(req.params.jobId);
       const job = await videoDubbingManager.cancelJob(req.params.jobId);
       if (!job) {
         return res.status(404).json({ error: "Không tìm thấy job Video Dubbing." });
@@ -165,6 +300,7 @@ export function createVideoDubbingRouter(
       return res.status(400).json({ error: "ID job video không hợp lệ." });
     }
     try {
+      await mediaCoordinator?.cancel(req.params.jobId);
       await masterCoordinator?.cancel(req.params.jobId);
       const deleted = await videoDubbingManager.deleteJob(req.params.jobId);
       if (!deleted) {

@@ -135,6 +135,9 @@ export default function VideoDubbingTab() {
   const [minSpeed, setMinSpeed] = useState(0.8);
   const [maxSpeed, setMaxSpeed] = useState(1.5);
   const [masterError, setMasterError] = useState<string | null>(null);
+  const [ttsVolumePercent, setTtsVolumePercent] = useState(100);
+  const [originalVolumePercent, setOriginalVolumePercent] = useState(100);
+  const [mediaError, setMediaError] = useState<string | null>(null);
   const videoInputRef = useRef<HTMLInputElement | null>(null);
   const srtInputRef = useRef<HTMLInputElement | null>(null);
   const uploadRef = useRef<XMLHttpRequest | null>(null);
@@ -190,7 +193,9 @@ export default function VideoDubbingTab() {
       !jobId ||
       (status !== "uploading" &&
         status !== "probing" &&
-        masterStatus !== "generating")
+        masterStatus !== "generating" &&
+        video?.job?.audioMix?.status !== "running" &&
+        video?.job?.videoExport?.status !== "running")
     ) {
       return;
     }
@@ -219,8 +224,10 @@ export default function VideoDubbingTab() {
   }, [
     video?.error,
     video?.job?.id,
+    video?.job?.audioMix?.status,
     video?.job?.masterGeneration?.status,
     video?.job?.status,
+    video?.job?.videoExport?.status,
   ]);
 
   const removeServerJob = async (jobId: string) => {
@@ -468,15 +475,40 @@ export default function VideoDubbingTab() {
   const selectedVoice = voices.find((voice) => voice.id === selectedVoiceId);
   const masterGeneration = job?.masterGeneration;
   const isMasterGenerating = masterGeneration?.status === "generating";
+  const audioMix = job?.audioMix;
+  const videoExport = job?.videoExport;
+  const hasMixedAudio = Boolean(audioMix?.sizeBytes && audioMix.sizeBytes > 0);
+  const hasExportedVideo = Boolean(videoExport?.sizeBytes && videoExport.sizeBytes > 0);
+  const isMediaProcessing =
+    audioMix?.status === "running" || videoExport?.status === "running";
   const hasMasterAudio = Boolean(
     masterGeneration?.durationSeconds !== undefined &&
       masterGeneration.sizeBytes !== undefined,
+  );
+  const isMixCurrent = Boolean(
+    audioMix?.status === "completed" &&
+      audioMix.ttsVolumePercent === ttsVolumePercent &&
+      audioMix.originalVolumePercent === originalVolumePercent,
   );
   const canGenerateMaster = Boolean(
     job?.status === "completed" &&
       srt?.analysis?.items.length &&
       selectedVoice &&
-      !isMasterGenerating,
+      !isMasterGenerating &&
+      !isMediaProcessing,
+  );
+  const canCreateMix = Boolean(
+    job?.status === "completed" &&
+      hasMasterAudio &&
+    !isMasterGenerating &&
+    !isMediaProcessing &&
+    audioMix?.status !== "running",
+  );
+  const canExportVideo = Boolean(
+    job?.status === "completed" &&
+    isMixCurrent &&
+    !isMasterGenerating &&
+    !isMediaProcessing,
   );
   const createMaster = async () => {
     if (!job || !srt?.analysis?.items.length || !selectedVoice) return;
@@ -537,6 +569,81 @@ export default function VideoDubbingTab() {
       );
     }
   };
+  const startAudioMix = async () => {
+    if (!job) return;
+    setMediaError(null);
+    try {
+      const response = await fetch(
+        `/api/video-dubbing/jobs/${job.id}/audio-mix`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ttsVolumePercent, originalVolumePercent }),
+        },
+      );
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error || "Không thể bắt đầu trộn âm thanh.");
+      }
+      setVideo((current) =>
+        current?.job?.id === job.id
+          ? { ...current, job: { ...current.job, audioMix: result.audioMix } }
+          : current,
+      );
+    } catch (error) {
+      setMediaError(
+        error instanceof Error ? error.message : "Không thể bắt đầu trộn âm thanh.",
+      );
+    }
+  };
+  const startVideoExport = async () => {
+    if (!job) return;
+    setMediaError(null);
+    try {
+      const response = await fetch(
+        `/api/video-dubbing/jobs/${job.id}/export`,
+        { method: "POST" },
+      );
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error || "Không thể bắt đầu xuất MP4.");
+      }
+      setVideo((current) =>
+        current?.job?.id === job.id
+          ? { ...current, job: { ...current.job, videoExport: result.videoExport } }
+          : current,
+      );
+    } catch (error) {
+      setMediaError(
+        error instanceof Error ? error.message : "Không thể bắt đầu xuất MP4.",
+      );
+    }
+  };
+  const cancelMediaTask = async (
+    task: "audio-mix" | "export",
+  ) => {
+    if (!job) return;
+    setMediaError(null);
+    try {
+      const response = await fetch(
+        `/api/video-dubbing/jobs/${job.id}/${task}/cancel`,
+        { method: "POST" },
+      );
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error || "Không thể hủy tác vụ media.");
+      }
+      if (result.job) {
+        setVideo((current) =>
+          current?.job?.id === job.id ? { ...current, job: result.job } : current,
+        );
+      }
+    } catch (error) {
+      setMediaError(
+        error instanceof Error ? error.message : "Không thể hủy tác vụ media.",
+      );
+    }
+  };
   const isBusy =
     !video?.error &&
     (!job || job.status === "uploading" || job.status === "probing");
@@ -556,7 +663,7 @@ export default function VideoDubbingTab() {
           </div>
         </div>
         <span className="self-start sm:self-auto px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wide bg-slate-800 text-slate-300 border border-slate-700">
-          Giai đoạn 2 · TTS Master
+          Giai đoạn 3A · Trộn & xuất video
         </span>
       </header>
 
@@ -965,10 +1072,244 @@ export default function VideoDubbingTab() {
         </p>
       </section>
 
+      {hasMasterAudio && (
+        <section className="rounded-2xl border border-slate-800 bg-slate-900/80 p-4 sm:p-5 space-y-5">
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-xl bg-sky-500/15 text-sky-300 border border-sky-500/25 flex items-center justify-center shrink-0">
+              <Volume2 className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="font-semibold text-white">Trộn âm thanh</h3>
+              <p className="mt-1 text-xs leading-relaxed text-slate-400">
+                Điều chỉnh riêng gain của TTS Master và audio gốc. 100% giữ
+                gain nguồn; giới hạn mỗi thanh từ 0% đến 200%.
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            {([
+              {
+                label: "TTS Master",
+                value: ttsVolumePercent,
+                update: setTtsVolumePercent,
+              },
+              {
+                label: "Âm thanh gốc của video",
+                value: originalVolumePercent,
+                update: setOriginalVolumePercent,
+              },
+            ] as const).map((volume) => (
+              <label key={volume.label} className="space-y-2">
+                <span className="flex items-center justify-between text-xs font-medium text-slate-300">
+                  {volume.label}
+                  <span className="font-bold text-white">{volume.value}%</span>
+                </span>
+                <input
+                  type="range"
+                  min={0}
+                  max={200}
+                  step={1}
+                  value={volume.value}
+                  onChange={(event) => volume.update(Number(event.target.value))}
+                  disabled={isMediaProcessing}
+                  className="w-full accent-amber-400 disabled:opacity-50"
+                  aria-label={`${volume.label} volume`}
+                />
+                <span className="flex justify-between text-[10px] text-slate-500">
+                  <span>Tắt tiếng</span>
+                  <span>100% nguồn</span>
+                  <span>200%</span>
+                </span>
+              </label>
+            ))}
+          </div>
+
+          {job?.metadata?.audioCodec === null && (
+            <p className="rounded-lg border border-amber-500/25 bg-amber-950/20 p-3 text-xs text-amber-200">
+              Video không có audio gốc; track audio gốc sẽ là im lặng. Bạn vẫn
+              có thể chọn mức âm lượng nhưng không có âm thanh để khuếch đại.
+            </p>
+          )}
+
+          {mediaError && (
+            <div className="flex items-start gap-2 rounded-lg border border-rose-500/30 bg-rose-950/40 p-3 text-xs text-rose-200">
+              <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
+              <span>{mediaError}</span>
+            </div>
+          )}
+          {audioMix?.status === "failed" && audioMix.error && (
+            <div className="flex items-start gap-2 rounded-lg border border-rose-500/30 bg-rose-950/40 p-3 text-xs text-rose-200">
+              <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
+              <span>{audioMix.error}</span>
+            </div>
+          )}
+          {videoExport?.status === "failed" && videoExport.error && (
+            <div className="flex items-start gap-2 rounded-lg border border-rose-500/30 bg-rose-950/40 p-3 text-xs text-rose-200">
+              <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
+              <span>{videoExport.error}</span>
+            </div>
+          )}
+
+          {audioMix?.status === "running" && (
+            <div className="space-y-2 rounded-xl border border-amber-500/25 bg-amber-950/20 p-3.5">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                <span className="inline-flex items-center gap-2 text-amber-200">
+                  <LoaderCircle className="w-4 h-4 animate-spin" />
+                  {audioMix.phase === "extracting"
+                    ? "Đang trích xuất audio gốc"
+                    : audioMix.phase === "validating"
+                      ? "Đang xác minh bản phối"
+                      : "Đang trộn âm thanh"}
+                </span>
+                <span className="text-slate-300">
+                  {audioMix.progressPercent === undefined
+                    ? "Đang xử lý…"
+                    : `${audioMix.progressPercent}%`}
+                </span>
+              </div>
+              {audioMix.progressPercent !== undefined && (
+                <div className="h-2 rounded-full bg-slate-800 overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-amber-400 transition-all"
+                    style={{ width: `${audioMix.progressPercent}%` }}
+                  />
+                </div>
+              )}
+              <button
+                type="button"
+                onClick={() => void cancelMediaTask("audio-mix")}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-950/70 px-2.5 py-1.5 text-xs text-slate-300 hover:text-white hover:border-slate-500 transition-colors"
+              >
+                <X className="w-3.5 h-3.5" />
+                Hủy trộn
+              </button>
+            </div>
+          )}
+          {videoExport?.status === "running" && (
+            <div className="space-y-2 rounded-xl border border-amber-500/25 bg-amber-950/20 p-3.5">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                <span className="inline-flex items-center gap-2 text-amber-200">
+                  <LoaderCircle className="w-4 h-4 animate-spin" />
+                  {videoExport.phase === "validating"
+                    ? "Đang xác minh MP4"
+                    : "Đang xuất MP4 (copy video stream)"}
+                </span>
+                <span className="text-slate-300">
+                  {videoExport.progressPercent === undefined
+                    ? "Đang xử lý…"
+                    : `${videoExport.progressPercent}%`}
+                </span>
+              </div>
+              {videoExport.progressPercent !== undefined && (
+                <div className="h-2 rounded-full bg-slate-800 overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-amber-400 transition-all"
+                    style={{ width: `${videoExport.progressPercent}%` }}
+                  />
+                </div>
+              )}
+              <button
+                type="button"
+                onClick={() => void cancelMediaTask("export")}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-950/70 px-2.5 py-1.5 text-xs text-slate-300 hover:text-white hover:border-slate-500 transition-colors"
+              >
+                <X className="w-3.5 h-3.5" />
+                Hủy xuất video
+              </button>
+            </div>
+          )}
+
+          <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+            <button
+              type="button"
+              onClick={() => void startAudioMix()}
+              disabled={!canCreateMix}
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-amber-500 px-4 py-2.5 text-sm font-bold text-slate-950 transition-colors hover:bg-amber-400 disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-500"
+            >
+              {audioMix?.status === "running" ? (
+                <LoaderCircle className="w-4 h-4 animate-spin" />
+              ) : (
+                <Volume2 className="w-4 h-4" />
+              )}
+              Tạo bản phối âm thanh
+            </button>
+            {audioMix?.status === "completed" && (
+              <span className="inline-flex items-center gap-1.5 text-xs text-emerald-300">
+                <CheckCircle2 className="w-4 h-4" />
+                Bản phối sẵn sàng
+                {audioMix.durationSeconds !== undefined &&
+                  ` · ${formatDuration(audioMix.durationSeconds)}`}
+              </span>
+            )}
+          </div>
+
+          {hasMixedAudio && job && (
+            <div className="space-y-3 rounded-xl border border-emerald-500/25 bg-emerald-950/20 p-3.5">
+              <p className="text-xs font-semibold text-emerald-300">
+                {isMixCurrent
+                  ? "Nghe thử bản phối"
+                  : "Bản phối trước đó vẫn được giữ nguyên"}
+              </p>
+              <audio
+                key={`${job.id}-${audioMix?.sizeBytes}`}
+                controls
+                preload="metadata"
+                src={`/api/video-dubbing/jobs/${job.id}/mixed-audio`}
+                className="w-full"
+              >
+                Trình duyệt không hỗ trợ phát audio AAC.
+              </audio>
+            </div>
+          )}
+
+          <div className="border-t border-slate-800 pt-4 space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+              <button
+                type="button"
+                onClick={() => void startVideoExport()}
+                disabled={!canExportVideo}
+                className="inline-flex items-center justify-center gap-2 rounded-xl bg-sky-500 px-4 py-2.5 text-sm font-bold text-slate-950 transition-colors hover:bg-sky-400 disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-500"
+              >
+                {videoExport?.status === "running" ? (
+                  <LoaderCircle className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Film className="w-4 h-4" />
+                )}
+                Xuất video MP4
+              </button>
+              {hasExportedVideo && job && (
+                <a
+                  href={`/api/video-dubbing/jobs/${job.id}/download`}
+                  download={`video-dubbing-${job.id}.mp4`}
+                  className="inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-500/40 bg-emerald-950/30 px-4 py-2.5 text-sm font-bold text-emerald-200 hover:bg-emerald-950/60"
+                >
+                  {videoExport?.status === "completed" && isMixCurrent
+                    ? "Tải MP4"
+                    : "Tải MP4 trước đó"}{" "}
+                  ({formatFileSize(videoExport?.sizeBytes || 0)})
+                </a>
+              )}
+              {hasExportedVideo &&
+                videoExport?.durationSeconds !== undefined && (
+                  <span className="text-xs text-slate-400">
+                    {formatDuration(videoExport.durationSeconds)}
+                  </span>
+                )}
+            </div>
+            {!isMixCurrent && (
+              <p className="text-xs text-slate-500">
+                Tạo lại bản phối với mức âm lượng hiện tại trước khi xuất video.
+              </p>
+            )}
+          </div>
+        </section>
+      )}
+
       <div className="flex items-start gap-2 rounded-xl border border-slate-800 bg-slate-950/60 p-3.5 text-xs text-slate-400">
         <AlertCircle className="w-4 h-4 shrink-0 text-amber-400" />
         <p>
-          Giai đoạn này chỉ tạo TTS Master. Chưa trích xuất/trộn âm thanh, tách giọng, điều chỉnh âm lượng hoặc xuất video.
+          Giai đoạn này trộn TTS Master với audio gốc và remux video thành MP4. Chưa có AI separation hoặc preset.
         </p>
       </div>
     </section>

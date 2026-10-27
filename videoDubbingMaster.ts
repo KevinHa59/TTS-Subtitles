@@ -22,6 +22,8 @@ export interface VideoDubbingMasterRequest {
 
 interface TimelineAdapter {
   isPiperVoiceAvailable(model: string): boolean;
+  isMediaBusy?(jobId: string): boolean;
+  onMasterUpdated?(jobId: string): void;
   createJob(
     request: VideoDubbingMasterRequest,
     workingDirectory: string,
@@ -59,6 +61,9 @@ export class VideoDubbingMasterCoordinator {
     }
     if (this.activeJobs.has(jobId)) {
       throw new Error("TTS Master của job này đang được tạo.");
+    }
+    if (this.timeline.isMediaBusy?.(jobId)) {
+      throw new Error("Job đang trộn hoặc xuất media; hãy chờ tác vụ hoàn tất.");
     }
 
     const request = this.validateRequest(input);
@@ -308,6 +313,7 @@ export class VideoDubbingMasterCoordinator {
         duration,
       );
       temporaryMasterPath = undefined;
+      this.timeline.onMasterUpdated?.(videoJobId);
     } catch (error) {
       if (active.cancelled) {
         this.setTerminalStatus(videoJobId, active, "cancelled");
