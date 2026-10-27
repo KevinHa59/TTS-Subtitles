@@ -67,6 +67,10 @@ import {
 } from "./systemToolsManager";
 import { VideoDubbingManager } from "./videoDubbingManager";
 import { createVideoDubbingRouter } from "./videoDubbingRoutes";
+import {
+  VideoDubbingMasterCoordinator,
+  VideoDubbingMasterRequest,
+} from "./videoDubbingMaster";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -277,7 +281,54 @@ const videoDubbingManager = new VideoDubbingManager({
   storageDirectory: VIDEO_DUBBING_DIR,
   ffprobePath: resolveFfprobePath(),
 });
-app.use("/api/video-dubbing", createVideoDubbingRouter(videoDubbingManager));
+const videoDubbingMasterCoordinator = new VideoDubbingMasterCoordinator(
+  videoDubbingManager,
+  {
+    isPiperVoiceAvailable: (model) =>
+      (AVAILABLE_MODELS.some(
+        (voice) =>
+          voice.modelId === model &&
+          voice.engine !== "vieneu" &&
+          !voice.id.startsWith("vieneu:"),
+      ) ||
+        scanCustomModelsOnDisk().some((voice) => voice.modelId === model)),
+    createJob: (request, workingDirectory, maxTimelineDuration) =>
+      createTimelineJob(
+        {
+          items: request.items,
+          model: request.model,
+          speakerId: request.speakerId,
+          options: {
+            batchSize: 4,
+            minSpeed: request.options.minSpeed,
+            maxSpeed: request.options.maxSpeed,
+            speedPriority: request.options.speedPriority,
+            padSilence: true,
+            outputFormat: "wav",
+            normalizeNumbers: true,
+          },
+        },
+        workingDirectory,
+        maxTimelineDuration,
+      ),
+    processJob: (job) => {
+      job.status = "running";
+      job.overallProgress.startTimeMs = Date.now();
+      return runJobProcessor(job);
+    },
+    removeJob: (jobId) => {
+      jobs.delete(jobId);
+      sseClients.delete(jobId);
+      timelineJobDirectories.delete(jobId);
+    },
+    getAudioDuration,
+    ffmpegPath: resolveFfmpegPath(),
+  },
+);
+app.use(
+  "/api/video-dubbing",
+  createVideoDubbingRouter(videoDubbingManager, videoDubbingMasterCoordinator),
+);
 
 // VieNeu-TTS v3 Turbo Model Directory (48 kHz Neural TTS)
 const VIENEU_MODELS_DIR = path.resolve(MODELS_DIR, "vieneu");
@@ -925,6 +976,7 @@ interface TimelineJobOptions {
   trimStartMs?: number;
   trimEndMs?: number;
   videoDuration?: number;
+  maxTimelineDuration?: number;
   outputFormat: "mp3" | "wav";
   normalizeNumbers?: boolean;
   customReplacements?: { from: string; to: string }[];
@@ -964,6 +1016,13 @@ interface TimelineJob {
 
 const jobs = new Map<string, TimelineJob>();
 const sseClients = new Map<string, Set<Response>>();
+const timelineJobDirectories = new Map<string, string>();
+
+function getTimelineJobDirectory(jobId: string): string {
+  return (
+    timelineJobDirectories.get(jobId) || path.join(JOBS_DIR, jobId)
+  );
+}
 
 // -------------------------------------------------------------
 // STORYTELLING TYPES & STATE
@@ -1584,7 +1643,7 @@ const DEFAULT_STAGES: ProcessingStage[] = [
 async function assembleJobTimeline(
   job: TimelineJob,
 ): Promise<{ wavPath: string; mp3Path: string; duration: number }> {
-  const jobDir = path.join(JOBS_DIR, job.id);
+  const jobDir = getTimelineJobDirectory(job.id);
   if (!fs.existsSync(jobDir)) {
     fs.mkdirSync(jobDir, { recursive: true });
   }
@@ -1613,6 +1672,12 @@ async function assembleJobTimeline(
 
   if (job.options.videoDuration && job.options.videoDuration > maxEndTime) {
     maxEndTime = job.options.videoDuration;
+  }
+  if (
+    Number.isFinite(job.options.maxTimelineDuration) &&
+    job.options.maxTimelineDuration! > 0
+  ) {
+    maxEndTime = Math.min(maxEndTime, job.options.maxTimelineDuration!);
   }
 
   addJobLog(
@@ -1732,7 +1797,7 @@ async function assembleJobTimeline(
 async function runJobProcessor(job: TimelineJob) {
   if (job.status !== "running") return;
 
-  const jobDir = path.join(JOBS_DIR, job.id);
+  const jobDir = getTimelineJobDirectory(job.id);
   if (!fs.existsSync(jobDir)) {
     fs.mkdirSync(jobDir, { recursive: true });
   }
@@ -2012,15 +2077,29 @@ async function runJobProcessor(job: TimelineJob) {
 // -------------------------------------------------------------
 
 // Create a new timeline job
-app.post("/api/subtitles/job/create", (req: Request, res: Response) => {
-  const { items, options = {}, model = DEFAULT_MODEL, speakerId } = req.body;
+interface TimelineJobCreationInput {
+  items: Array<{
+    id?: string;
+    index?: number;
+    startTime: number;
+    endTime: number;
+    text: string;
+    warning?: string;
+  }>;
+  options?: Partial<TimelineJobOptions>;
+  model?: string;
+  speakerId?: number;
+}
 
-  if (!items || !Array.isArray(items) || items.length === 0) {
-    return res
-      .status(400)
-      .json({ error: "Danh sách phụ đề trống hoặc không hợp lệ." });
+function createTimelineJob(
+  input: TimelineJobCreationInput,
+  workingDirectory?: string,
+  maxTimelineDuration?: number,
+): TimelineJob {
+  const { items, options = {}, model = DEFAULT_MODEL, speakerId } = input;
+  if (!Array.isArray(items) || items.length === 0) {
+    throw new Error("Danh sách phụ đề trống hoặc không hợp lệ.");
   }
-
   const jobId = `job_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
   const batchSize = Math.max(1, Math.min(32, Number(options.batchSize) || 4));
   const maxSpeed = Math.max(1.1, Math.min(3, Number(options.maxSpeed) || 1.5));
@@ -2070,6 +2149,7 @@ app.post("/api/subtitles/job/create", (req: Request, res: Response) => {
       videoDuration: options.videoDuration
         ? Number(options.videoDuration)
         : undefined,
+      maxTimelineDuration,
       outputFormat: options.outputFormat === "wav" ? "wav" : "mp3",
       normalizeNumbers: options.normalizeNumbers !== false,
       customReplacements: Array.isArray(options.customReplacements)
@@ -2079,6 +2159,7 @@ app.post("/api/subtitles/job/create", (req: Request, res: Response) => {
   };
 
   jobs.set(jobId, job);
+  if (workingDirectory) timelineJobDirectories.set(jobId, workingDirectory);
   addJobLog(
     job,
     "INFO",
@@ -2092,7 +2173,19 @@ app.post("/api/subtitles/job/create", (req: Request, res: Response) => {
     );
   }
 
-  res.json({ success: true, jobId, job });
+  return job;
+}
+
+app.post("/api/subtitles/job/create", (req: Request, res: Response) => {
+  const { items } = req.body || {};
+  if (!items || !Array.isArray(items) || items.length === 0) {
+    return res
+      .status(400)
+      .json({ error: "Danh sách phụ đề trống hoặc không hợp lệ." });
+  }
+
+  const job = createTimelineJob(req.body as TimelineJobCreationInput);
+  res.json({ success: true, jobId: job.id, job });
 });
 
 // Get job state
@@ -2220,7 +2313,7 @@ app.post(
     if (!item)
       return res.status(404).json({ error: "Không tìm thấy câu phụ đề." });
 
-    const jobDir = path.join(JOBS_DIR, job.id);
+    const jobDir = getTimelineJobDirectory(job.id);
     if (!fs.existsSync(jobDir)) fs.mkdirSync(jobDir, { recursive: true });
 
     addJobLog(

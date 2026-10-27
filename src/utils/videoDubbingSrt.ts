@@ -1,4 +1,8 @@
-import { parseSrtContent, parseTimestampToSeconds } from "./srtParser";
+import {
+  parseSrtContent,
+  parseTimestampToSeconds,
+  sanitizeSubtitleText,
+} from "./srtParser";
 import { SrtAnalysis } from "../types/videoDubbing";
 
 const TIMESTAMP_PATTERN = /^\d{2,}:[0-5]\d:[0-5]\d[,.]\d{1,3}$/;
@@ -12,6 +16,7 @@ export function analyzeSrtContent(content: string): SrtAnalysis {
   const parsed = parseSrtContent(normalized);
   const blocks = normalized.split(/\r?\n\s*\r?\n/);
   const validRanges: Array<{ start: number; end: number }> = [];
+  const validItemIds = new Set<string>();
   let invalidBlockCount = 0;
   let hasTimestamp = false;
 
@@ -41,7 +46,11 @@ export function analyzeSrtContent(content: string): SrtAnalysis {
     const end = parseTimestampToSeconds(timing[2]);
     const text = lines.slice(2).join("\n").trim();
     const parsedRange = parsed.items.find(
-      (item) => item.startTime === start && item.endTime === end,
+      (item) =>
+        !validItemIds.has(item.id) &&
+        item.startTime === start &&
+        item.endTime === end &&
+        item.text === sanitizeSubtitleText(text),
     );
 
     if (
@@ -57,6 +66,7 @@ export function analyzeSrtContent(content: string): SrtAnalysis {
     }
 
     validRanges.push({ start, end });
+    validItemIds.add(parsedRange.id);
   }
 
   if (!hasTimestamp || validRanges.length === 0) {
@@ -68,5 +78,6 @@ export function analyzeSrtContent(content: string): SrtAnalysis {
     earliestStart: Math.min(...validRanges.map((range) => range.start)),
     latestEnd: Math.max(...validRanges.map((range) => range.end)),
     invalidBlockCount,
+    items: parsed.items.filter((item) => validItemIds.has(item.id)),
   };
 }

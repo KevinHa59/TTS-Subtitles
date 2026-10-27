@@ -1,3 +1,5 @@
+import { SubtitleItem } from "./subtitles";
+
 export interface VideoDubbingMetadata {
   durationSeconds: number;
   width: number;
@@ -25,9 +27,20 @@ export interface VideoDubbingJob {
   sizeBytes: number;
   uploadedBytes: number;
   metadata?: VideoDubbingMetadata;
+  masterGeneration?: VideoDubbingMasterGeneration;
   error?: string;
   createdAt: number;
   updatedAt: number;
+}
+
+export interface VideoDubbingMasterGeneration {
+  status: "idle" | "generating" | "completed" | "failed" | "cancelled";
+  progressPercent: number;
+  completedSentences: number;
+  totalSentences: number;
+  durationSeconds?: number;
+  sizeBytes?: number;
+  error?: string;
 }
 
 export interface SrtAnalysis {
@@ -35,4 +48,5 @@ export interface SrtAnalysis {
   earliestStart: number;
   latestEnd: number;
   invalidBlockCount: number;
+  items: SubtitleItem[];
 }

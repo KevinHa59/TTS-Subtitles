@@ -54,12 +54,14 @@ Bạn **không cần** mở VS Code, không cần gõ lệnh dòng lệnh phức
 - Nhấp đúp vào file **`Stop-App.bat`** (hoặc chỉ cần đóng cửa sổ máy chủ `Start-App.bat`).
 - Ứng dụng sẽ dừng đúng tiến trình và giải phóng cổng 3000 hoàn toàn.
 
-### Video Dubbing (Giai đoạn 1)
+### Video Dubbing (Giai đoạn 1–2)
 
 - Mở tab **Video Dubbing**, chọn video MP4, MKV, MOV, AVI hoặc WebM và chọn tệp SRT theo thứ tự bất kỳ.
-- Video được gửi theo luồng tới máy chủ local để FFprobe đọc metadata; SRT chỉ được đọc trong trình duyệt để thống kê timestamp.
-- FFmpeg/FFprobe phải có trong `PATH` hoặc được cấu hình qua `FFPROBE_PATH`. Giới hạn upload mặc định là 4 GiB; có thể đặt `VIDEO_DUBBING_MAX_UPLOAD_BYTES` (đơn vị byte) trước khi chạy `Start-App.bat`.
-- Video đã kiểm tra được giữ trong `video_dubbing_storage` cho đến khi chọn **Bỏ video**. Các job hiện chỉ tồn tại trong bộ nhớ của máy chủ; nếu máy chủ dừng trước khi dọn job, dữ liệu còn lại trong thư mục này không được khôi phục vào giao diện.
+- Video được gửi theo luồng tới máy chủ local để FFprobe đọc metadata. SRT được phân tích bằng parser hiện có; khi bấm **Tạo TTS Master**, các câu thoại và timestamp đã phân tích được gửi tới máy chủ local để dùng lại pipeline Đồng Bộ Phụ Đề.
+- Chọn một giọng Piper có mô hình cục bộ và thiết lập tốc độ. Master được tạo thành WAV PCM mono 22,050 Hz trong thư mục job tương ứng; có thể theo dõi tiến trình và nghe thử ngay trong tab.
+- Timeline giữ nguyên thứ tự và timestamp do parser Đồng Bộ Phụ Đề trả về. Các câu kéo dài quá cue vẫn dùng cơ chế giới hạn tốc độ hiện có; phần track vượt thời lượng video được trim ở cuối. Master ngắn hơn video không được kéo dài.
+- FFmpeg/FFprobe phải có trong `PATH` hoặc được cấu hình lần lượt qua `FFMPEG_PATH`/`FFPROBE_PATH`. Giới hạn upload mặc định là 4 GiB; có thể đặt `VIDEO_DUBBING_MAX_UPLOAD_BYTES` (đơn vị byte) trước khi chạy `Start-App.bat`.
+- Video nguồn, WAV Master và dữ liệu tạm được lưu trong thư mục riêng của job dưới `video_dubbing_storage`; chọn **Bỏ video** để dọn job. Các job hiện chỉ tồn tại trong bộ nhớ máy chủ; nếu máy chủ dừng trước khi dọn job, dữ liệu còn lại trong thư mục này không được khôi phục vào giao diện.
 - `Start-App.bat` chỉ bind máy chủ vào `127.0.0.1`. Khi chạy trực tiếp ngoài launcher, có thể đặt biến `HOST` phù hợp với môi trường triển khai.
 
 ---
@@ -98,7 +100,8 @@ Bạn **không cần** mở VS Code, không cần gõ lệnh dòng lệnh phức
 | `server.ts`                    | Máy chủ Express tích hợp PiperNativeTTS, FFmpeg spawning, timeline assembly |
 | `videoDubbingManager.ts`        | Quản lý upload, thư mục job và kiểm tra metadata video                       |
 | `videoDubbingRoutes.ts`         | API job Video Dubbing                                                        |
-| `src/components/VideoDubbingTab.tsx` | Giao diện chọn video và SRT                                                |
+| `videoDubbingMaster.ts`         | Điều phối pipeline Đồng Bộ Phụ Đề hiện có cho TTS Master Video Dubbing       |
+| `src/components/VideoDubbingTab.tsx` | Giao diện chọn video/SRT và tạo/nghe thử Master                           |
 | `models/`                       | Thư mục chứa các mô hình giọng đọc Piper ONNX và file cấu hình              |
 | `jobs_storage/`                 | Thư mục tạm dùng trong lúc ghép nối timeline (tự xóa sau khi xong)          |
 | `video_dubbing_storage/`        | Thư mục riêng chứa video nguồn của các job Video Dubbing                    |

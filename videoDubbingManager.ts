@@ -7,6 +7,7 @@ import { Readable, Transform } from "stream";
 import { pipeline } from "stream/promises";
 import {
   VideoDubbingJob,
+  VideoDubbingMasterGeneration,
   VideoDubbingMetadata,
 } from "./src/types/videoDubbing";
 
@@ -145,6 +146,12 @@ export class VideoDubbingManager {
       fileName: safeName,
       sizeBytes,
       uploadedBytes: 0,
+      masterGeneration: {
+        status: "idle",
+        progressPercent: 0,
+        completedSentences: 0,
+        totalSentences: 0,
+      },
       createdAt: now,
       updatedAt: now,
     };
@@ -158,7 +165,81 @@ export class VideoDubbingManager {
 
   getJob(jobId: string): VideoDubbingJob | null {
     const job = this.findJob(jobId);
-    return job ? { ...job.state } : null;
+    return job
+      ? {
+          ...job.state,
+          masterGeneration: job.state.masterGeneration
+            ? { ...job.state.masterGeneration }
+            : undefined,
+        }
+      : null;
+  }
+
+  getJobDirectory(jobId: string): string | null {
+    return this.findJob(jobId)?.directory || null;
+  }
+
+  getMasterAudioPath(jobId: string): string | null {
+    const job = this.findJob(jobId);
+    if (!job) return null;
+    const audioPath = path.resolve(job.directory, "tts-master.wav");
+    if (!audioPath.startsWith(`${path.resolve(job.directory)}${path.sep}`)) {
+      throw new Error("Đường dẫn Master nằm ngoài thư mục job.");
+    }
+    return fs.existsSync(audioPath) ? audioPath : null;
+  }
+
+  setMasterGeneration(
+    jobId: string,
+    generation: VideoDubbingMasterGeneration,
+  ): void {
+    const job = this.findJob(jobId);
+    if (!job) throw new Error("Không tìm thấy job Video Dubbing.");
+    job.state.masterGeneration = { ...generation };
+    job.state.updatedAt = Date.now();
+  }
+
+  completeMasterGeneration(
+    jobId: string,
+    temporaryPath: string,
+    durationSeconds: number,
+  ): VideoDubbingMasterGeneration {
+    const job = this.findJob(jobId);
+    if (!job) throw new Error("Không tìm thấy job Video Dubbing.");
+    const directory = path.resolve(job.directory);
+    const temporary = path.resolve(temporaryPath);
+    if (!temporary.startsWith(`${directory}${path.sep}`)) {
+      throw new Error("Tệp Master tạm nằm ngoài thư mục job.");
+    }
+
+    const masterPath = path.join(directory, "tts-master.wav");
+    const backupPath = path.join(
+      directory,
+      `.tts-master-${randomBytes(8).toString("hex")}.bak`,
+    );
+    const hadPreviousMaster = fs.existsSync(masterPath);
+    if (hadPreviousMaster) fs.renameSync(masterPath, backupPath);
+    try {
+      fs.renameSync(temporary, masterPath);
+      if (hadPreviousMaster) fs.rmSync(backupPath, { force: true });
+    } catch (error) {
+      if (hadPreviousMaster && fs.existsSync(backupPath)) {
+        fs.renameSync(backupPath, masterPath);
+      }
+      throw error;
+    }
+
+    const generation: VideoDubbingMasterGeneration = {
+      status: "completed",
+      progressPercent: 100,
+      completedSentences: job.state.masterGeneration?.totalSentences || 0,
+      totalSentences: job.state.masterGeneration?.totalSentences || 0,
+      durationSeconds,
+      sizeBytes: fs.statSync(masterPath).size,
+    };
+    job.state.masterGeneration = generation;
+    job.state.updatedAt = Date.now();
+    return { ...generation };
   }
 
   async receiveUpload(

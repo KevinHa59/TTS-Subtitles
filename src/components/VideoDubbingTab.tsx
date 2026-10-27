@@ -9,6 +9,7 @@ import {
   LoaderCircle,
   Trash2,
   Upload,
+  Volume2,
   X,
 } from "lucide-react";
 import {
@@ -32,6 +33,15 @@ interface SelectedSrt {
   sizeBytes: number;
   analysis?: SrtAnalysis;
   error?: string;
+}
+
+interface PiperVoice {
+  id: string;
+  modelId: string;
+  speakerId?: number;
+  name: string;
+  engine?: "piper" | "vieneu";
+  hasLocalFile?: boolean;
 }
 
 const ACCEPTED_VIDEO_EXTENSIONS = new Set([
@@ -116,6 +126,15 @@ function MetadataGrid({ metadata }: { metadata: VideoDubbingMetadata }) {
 export default function VideoDubbingTab() {
   const [video, setVideo] = useState<SelectedVideo | null>(null);
   const [srt, setSrt] = useState<SelectedSrt | null>(null);
+  const [voices, setVoices] = useState<PiperVoice[]>([]);
+  const [selectedVoiceId, setSelectedVoiceId] = useState("");
+  const [voicesError, setVoicesError] = useState<string | null>(null);
+  const [speedPriority, setSpeedPriority] = useState<
+    "balanced" | "strict" | "natural"
+  >("balanced");
+  const [minSpeed, setMinSpeed] = useState(0.8);
+  const [maxSpeed, setMaxSpeed] = useState(1.5);
+  const [masterError, setMasterError] = useState<string | null>(null);
   const videoInputRef = useRef<HTMLInputElement | null>(null);
   const srtInputRef = useRef<HTMLInputElement | null>(null);
   const uploadRef = useRef<XMLHttpRequest | null>(null);
@@ -124,12 +143,54 @@ export default function VideoDubbingTab() {
   const activeJobIdRef = useRef<string | null>(null);
 
   useEffect(() => {
+    let active = true;
+    const loadVoices = async () => {
+      try {
+        const response = await fetch("/api/voices");
+        const result = await response.json();
+        if (!response.ok || !Array.isArray(result.voices)) {
+          throw new Error(result.error || "Không thể tải danh sách giọng Piper.");
+        }
+        const piperVoices = (result.voices as PiperVoice[]).filter(
+          (voice) =>
+            voice.engine === "piper" &&
+            voice.hasLocalFile !== false &&
+            Boolean(voice.modelId),
+        );
+        if (!active) return;
+        setVoices(piperVoices);
+        const defaultVoice = piperVoices.find(
+          (voice) => voice.modelId === result.defaultModel,
+        );
+        setSelectedVoiceId(defaultVoice?.id || piperVoices[0]?.id || "");
+        if (piperVoices.length === 0) {
+          setVoicesError("Không tìm thấy mô hình Piper đã có sẵn trên máy.");
+        }
+      } catch (error) {
+        if (!active) return;
+        setVoicesError(
+          error instanceof Error
+            ? error.message
+            : "Không thể tải danh sách giọng Piper.",
+        );
+      }
+    };
+    void loadVoices();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
     const jobId = video?.job?.id;
     const status = video?.job?.status;
+    const masterStatus = video?.job?.masterGeneration?.status;
     if (
       video?.error ||
       !jobId ||
-      (status !== "uploading" && status !== "probing")
+      (status !== "uploading" &&
+        status !== "probing" &&
+        masterStatus !== "generating")
     ) {
       return;
     }
@@ -155,7 +216,12 @@ export default function VideoDubbingTab() {
       active = false;
       window.clearInterval(interval);
     };
-  }, [video?.error, video?.job?.id, video?.job?.status]);
+  }, [
+    video?.error,
+    video?.job?.id,
+    video?.job?.masterGeneration?.status,
+    video?.job?.status,
+  ]);
 
   const removeServerJob = async (jobId: string) => {
     try {
@@ -399,6 +465,78 @@ export default function VideoDubbingTab() {
   };
 
   const job = video?.job || null;
+  const selectedVoice = voices.find((voice) => voice.id === selectedVoiceId);
+  const masterGeneration = job?.masterGeneration;
+  const isMasterGenerating = masterGeneration?.status === "generating";
+  const hasMasterAudio = Boolean(
+    masterGeneration?.durationSeconds !== undefined &&
+      masterGeneration.sizeBytes !== undefined,
+  );
+  const canGenerateMaster = Boolean(
+    job?.status === "completed" &&
+      srt?.analysis?.items.length &&
+      selectedVoice &&
+      !isMasterGenerating,
+  );
+  const createMaster = async () => {
+    if (!job || !srt?.analysis?.items.length || !selectedVoice) return;
+    setMasterError(null);
+    try {
+      const response = await fetch(
+        `/api/video-dubbing/jobs/${job.id}/master`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            items: srt.analysis.items,
+            model: selectedVoice.modelId,
+            speakerId: selectedVoice.speakerId,
+            options: { minSpeed, maxSpeed, speedPriority },
+          }),
+        },
+      );
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error || "Không thể bắt đầu tạo TTS Master.");
+      }
+      setVideo((current) =>
+        current?.job?.id === job.id
+          ? {
+              ...current,
+              job: { ...current.job, masterGeneration: result.masterGeneration },
+            }
+          : current,
+      );
+    } catch (error) {
+      setMasterError(
+        error instanceof Error
+          ? error.message
+          : "Không thể bắt đầu tạo TTS Master.",
+      );
+    }
+  };
+  const cancelMaster = async () => {
+    if (!job) return;
+    try {
+      const response = await fetch(
+        `/api/video-dubbing/jobs/${job.id}/master/cancel`,
+        { method: "POST" },
+      );
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error || "Không thể hủy tạo TTS Master.");
+      }
+      if (result.job) {
+        setVideo((current) =>
+          current?.job?.id === job.id ? { ...current, job: result.job } : current,
+        );
+      }
+    } catch (error) {
+      setMasterError(
+        error instanceof Error ? error.message : "Không thể hủy TTS Master.",
+      );
+    }
+  };
   const isBusy =
     !video?.error &&
     (!job || job.status === "uploading" || job.status === "probing");
@@ -413,12 +551,12 @@ export default function VideoDubbingTab() {
           <div>
             <h2 className="text-xl font-bold text-white">Video Dubbing</h2>
             <p className="text-xs sm:text-sm text-slate-400">
-              Chọn video nguồn và phụ đề SRT để kiểm tra đầu vào.
+              Tạo TTS Master theo timestamp bằng pipeline Đồng Bộ Phụ Đề hiện có.
             </p>
           </div>
         </div>
         <span className="self-start sm:self-auto px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wide bg-slate-800 text-slate-300 border border-slate-700">
-          Giai đoạn 1 · Kiểm tra đầu vào
+          Giai đoạn 2 · TTS Master
         </span>
       </header>
 
@@ -635,10 +773,202 @@ export default function VideoDubbingTab() {
         </section>
       </div>
 
+      <section className="rounded-2xl border border-slate-800 bg-slate-900/80 p-4 sm:p-5 space-y-5">
+        <div className="flex items-start gap-3">
+          <div className="w-10 h-10 rounded-xl bg-amber-500/15 text-amber-400 border border-amber-500/25 flex items-center justify-center shrink-0">
+            <Volume2 className="w-5 h-5" />
+          </div>
+          <div>
+            <h3 className="font-semibold text-white">Tạo TTS Master</h3>
+            <p className="mt-1 text-xs leading-relaxed text-slate-400">
+              Dùng pipeline Đồng Bộ Phụ Đề hiện có: Piper tạo từng câu, căn theo
+              timestamp rồi ghép WAV mono 22,050 Hz. Nếu timeline vượt video,
+              phần dư cuối track sẽ được trim.
+            </p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+          <label className="space-y-1.5">
+            <span className="text-xs font-medium text-slate-300">Giọng Piper</span>
+            <select
+              value={selectedVoiceId}
+              onChange={(event) => setSelectedVoiceId(event.target.value)}
+              disabled={voices.length === 0}
+              className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-white focus:border-amber-500 focus:outline-none disabled:opacity-50"
+            >
+              {voices.length === 0 ? (
+                <option value="">Không có giọng Piper khả dụng</option>
+              ) : (
+                voices.map((voice) => (
+                  <option key={voice.id} value={voice.id}>
+                    {voice.name}
+                  </option>
+                ))
+              )}
+            </select>
+          </label>
+
+          <label className="space-y-1.5">
+            <span className="text-xs font-medium text-slate-300">Ưu tiên tốc độ</span>
+            <select
+              value={speedPriority}
+              onChange={(event) =>
+                setSpeedPriority(
+                  event.target.value as "balanced" | "strict" | "natural",
+                )
+              }
+              className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-white focus:border-amber-500 focus:outline-none"
+            >
+              <option value="balanced">Cân bằng</option>
+              <option value="strict">Khớp timestamp</option>
+              <option value="natural">Ưu tiên tự nhiên</option>
+            </select>
+          </label>
+
+          <label className="space-y-1.5">
+            <span className="text-xs font-medium text-slate-300">Tốc độ tối thiểu</span>
+            <select
+              value={minSpeed}
+              onChange={(event) => setMinSpeed(Number(event.target.value))}
+              className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-white focus:border-amber-500 focus:outline-none"
+            >
+              {[0.5, 0.6, 0.7, 0.8, 0.9, 1].map((speed) => (
+                <option key={speed} value={speed}>{speed.toFixed(1)}×</option>
+              ))}
+            </select>
+          </label>
+
+          <label className="space-y-1.5">
+            <span className="text-xs font-medium text-slate-300">Tốc độ tối đa</span>
+            <select
+              value={maxSpeed}
+              onChange={(event) => setMaxSpeed(Number(event.target.value))}
+              className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-white focus:border-amber-500 focus:outline-none"
+            >
+              {[1.1, 1.25, 1.5, 1.75, 2, 2.5, 3].map((speed) => (
+                <option key={speed} value={speed}>{speed.toFixed(2).replace(/0+$/, "").replace(/\.$/, "")}×</option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        {voicesError && (
+          <div className="flex items-start gap-2 rounded-lg border border-rose-500/30 bg-rose-950/40 p-3 text-xs text-rose-200">
+            <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
+            <span>{voicesError}</span>
+          </div>
+        )}
+
+        {masterGeneration?.status === "generating" && (
+          <div className="space-y-2 rounded-xl border border-amber-500/25 bg-amber-950/20 p-3.5">
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+              <span className="inline-flex items-center gap-2 text-amber-200">
+                <LoaderCircle className="w-4 h-4 animate-spin" />
+                Đang tạo TTS Master
+              </span>
+              <span className="text-slate-300">
+                {masterGeneration.completedSentences}/{masterGeneration.totalSentences} câu · {Math.round(masterGeneration.progressPercent)}%
+              </span>
+            </div>
+            <div className="h-2 rounded-full bg-slate-800 overflow-hidden">
+              <div
+                className="h-full rounded-full bg-amber-400 transition-all"
+                style={{ width: `${masterGeneration.progressPercent}%` }}
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => void cancelMaster()}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-950/70 px-2.5 py-1.5 text-xs text-slate-300 hover:text-white hover:border-slate-500 transition-colors"
+            >
+              <X className="w-3.5 h-3.5" />
+              Hủy tạo Master
+            </button>
+          </div>
+        )}
+
+        {masterError && (
+          <div className="flex items-start gap-2 rounded-lg border border-rose-500/30 bg-rose-950/40 p-3 text-xs text-rose-200">
+            <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
+            <span>{masterError}</span>
+          </div>
+        )}
+        {masterGeneration?.status === "failed" && masterGeneration.error && (
+          <div className="flex items-start gap-2 rounded-lg border border-rose-500/30 bg-rose-950/40 p-3 text-xs text-rose-200">
+            <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
+            <span>{masterGeneration.error}</span>
+          </div>
+        )}
+        {masterGeneration?.status === "cancelled" && !isMasterGenerating && (
+          <p className="text-xs text-slate-400">Đã hủy quá trình tạo TTS Master.</p>
+        )}
+
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+          <button
+            type="button"
+            onClick={() => void createMaster()}
+            disabled={!canGenerateMaster}
+            className="inline-flex items-center justify-center gap-2 rounded-xl bg-amber-500 px-4 py-2.5 text-sm font-bold text-slate-950 transition-colors hover:bg-amber-400 disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-500"
+          >
+            {isMasterGenerating ? (
+              <LoaderCircle className="w-4 h-4 animate-spin" />
+            ) : (
+              <Volume2 className="w-4 h-4" />
+            )}
+            Tạo TTS Master
+          </button>
+          {!canGenerateMaster && !isMasterGenerating && (
+            <p className="text-xs text-slate-500">
+              Cần video đã kiểm tra thành công, SRT có cue hợp lệ và một giọng Piper.
+            </p>
+          )}
+        </div>
+
+        {hasMasterAudio && masterGeneration?.durationSeconds !== undefined && (
+            <div className="space-y-3 rounded-xl border border-emerald-500/25 bg-emerald-950/20 p-3.5">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                <span className="inline-flex items-center gap-1.5 font-semibold text-emerald-300">
+                  {masterGeneration.status === "completed" ? (
+                    <>
+                      <CheckCircle2 className="w-4 h-4" />
+                      TTS Master hoàn tất
+                    </>
+                  ) : (
+                    "Master đã hoàn tất trước đó, vẫn được giữ"
+                  )}
+                </span>
+                <span className="text-slate-300">
+                  Thời lượng {formatDuration(masterGeneration.durationSeconds)}
+                </span>
+                {masterGeneration.sizeBytes !== undefined && (
+                  <span className="text-slate-400">
+                    {formatFileSize(masterGeneration.sizeBytes)}
+                  </span>
+                )}
+              </div>
+              <audio
+                key={`${job?.id}-${masterGeneration.sizeBytes}`}
+                controls
+                preload="metadata"
+                src={`/api/video-dubbing/jobs/${job?.id}/master-audio`}
+                className="w-full"
+              >
+                Trình duyệt không hỗ trợ phát WAV.
+              </audio>
+            </div>
+          )}
+
+        <p className="text-[11px] leading-relaxed text-slate-500">
+          Tùy chọn giọng/tốc độ chỉ áp dụng cho lần tạo mới; Master đã hoàn tất
+          vẫn được giữ nguyên cho đến khi tạo Master mới hoặc bỏ job video.
+        </p>
+      </section>
+
       <div className="flex items-start gap-2 rounded-xl border border-slate-800 bg-slate-950/60 p-3.5 text-xs text-slate-400">
         <AlertCircle className="w-4 h-4 shrink-0 text-amber-400" />
         <p>
-          Giai đoạn này chỉ chọn và kiểm tra đầu vào. Chưa tạo TTS, trích xuất/trộn âm thanh, tách giọng hoặc xuất video.
+          Giai đoạn này chỉ tạo TTS Master. Chưa trích xuất/trộn âm thanh, tách giọng, điều chỉnh âm lượng hoặc xuất video.
         </p>
       </div>
     </section>

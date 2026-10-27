@@ -90,6 +90,18 @@ test("rejects empty and malformed SRT input", () => {
   );
 });
 
+test("keeps separate cues with matching timestamps in SRT order", () => {
+  const analysis = analyzeSrtContent(
+    "1\n00:00:01,000 --> 00:00:02,000\nCâu đầu.\n\n" +
+      "2\n00:00:01,000 --> 00:00:02,000\nCâu thứ hai.\n",
+  );
+  assert.equal(analysis.subtitleCount, 2);
+  assert.deepEqual(
+    analysis.items.map((item) => item.text),
+    ["Câu đầu.", "Câu thứ hai."],
+  );
+});
+
 test("probes a Unicode-named video and accepts a source without audio", async () => {
   const directory = await createTemporaryDirectory();
   const storageDirectory = path.join(directory, "jobs");
