@@ -68,6 +68,7 @@ import {
 import { VideoDubbingManager } from "./videoDubbingManager";
 import { createVideoDubbingRouter } from "./videoDubbingRoutes";
 import { VideoDubbingMediaCoordinator } from "./videoDubbingMedia";
+import { VideoDubbingSeparationCoordinator } from "./videoDubbingSeparation";
 import {
   VideoDubbingMasterCoordinator,
   VideoDubbingMasterRequest,
@@ -289,6 +290,17 @@ const videoDubbingMediaCoordinator = new VideoDubbingMediaCoordinator(
     ffprobePath: resolveFfprobePath(),
   },
 );
+const videoDubbingSeparationCoordinator =
+  new VideoDubbingSeparationCoordinator(videoDubbingManager, {
+    pythonPath:
+      process.env.VIDEO_DUBBING_SEPARATION_PYTHON ||
+      process.env.BGM_PYTHON ||
+      process.env.PYTHON ||
+      "python",
+    ffmpegPath: resolveFfmpegPath(),
+    ffprobePath: resolveFfprobePath(),
+    isMediaBusy: (jobId) => videoDubbingMediaCoordinator.isBusy(jobId),
+  });
 const videoDubbingMasterCoordinator = new VideoDubbingMasterCoordinator(
   videoDubbingManager,
   {
@@ -300,7 +312,9 @@ const videoDubbingMasterCoordinator = new VideoDubbingMasterCoordinator(
           !voice.id.startsWith("vieneu:"),
       ) ||
         scanCustomModelsOnDisk().some((voice) => voice.modelId === model)),
-    isMediaBusy: (jobId) => videoDubbingMediaCoordinator.isBusy(jobId),
+    isMediaBusy: (jobId) =>
+      videoDubbingMediaCoordinator.isBusy(jobId) ||
+      videoDubbingSeparationCoordinator.isBusy(jobId),
     onMasterUpdated: (jobId) => {
       const current = videoDubbingManager.getJob(jobId);
       if (current?.audioMix?.sizeBytes) {
@@ -357,6 +371,7 @@ app.use(
     videoDubbingManager,
     videoDubbingMasterCoordinator,
     videoDubbingMediaCoordinator,
+    videoDubbingSeparationCoordinator,
   ),
 );
 

@@ -10,6 +10,7 @@ import {
   VideoDubbingMediaTask,
   VideoDubbingMasterGeneration,
   VideoDubbingMetadata,
+  VideoDubbingSeparationTask,
 } from "./src/types/videoDubbing";
 
 const DEFAULT_MAX_UPLOAD_BYTES = 4 * 1024 * 1024 * 1024;
@@ -176,6 +177,9 @@ export class VideoDubbingManager {
           videoExport: job.state.videoExport
             ? { ...job.state.videoExport }
             : undefined,
+          separation: job.state.separation
+            ? { ...job.state.separation }
+            : undefined,
         }
       : null;
   }
@@ -188,6 +192,16 @@ export class VideoDubbingManager {
     const job = this.findJob(jobId);
     if (!job) throw new Error("Không tìm thấy job Video Dubbing.");
     job.state[task] = { ...state };
+    job.state.updatedAt = Date.now();
+  }
+
+  setSeparationTask(
+    jobId: string,
+    state: VideoDubbingSeparationTask,
+  ): void {
+    const job = this.findJob(jobId);
+    if (!job) throw new Error("Không tìm thấy job Video Dubbing.");
+    job.state.separation = { ...state };
     job.state.updatedAt = Date.now();
   }
 

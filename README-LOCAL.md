@@ -67,6 +67,15 @@ Bạn **không cần** mở VS Code, không cần gõ lệnh dòng lệnh phức
 - Video nguồn, WAV Master và dữ liệu tạm được lưu trong thư mục riêng của job dưới `video_dubbing_storage`; chọn **Bỏ video** để dọn job. Các job hiện chỉ tồn tại trong bộ nhớ máy chủ; nếu máy chủ dừng trước khi dọn job, dữ liệu còn lại trong thư mục này không được khôi phục vào giao diện.
 - `Start-App.bat` chỉ bind máy chủ vào `127.0.0.1`. Khi chạy trực tiếp ngoài launcher, có thể đặt biến `HOST` phù hợp với môi trường triển khai.
 
+### Tách giọng và nhạc nền (Giai đoạn 3B-1)
+
+- Video Dubbing có thể tách audio gốc bằng Demucs `htdemucs`, chạy cục bộ trên CPU hoặc CUDA khi PyTorch xác nhận CUDA dùng được. Kết quả được lưu trong thư mục job thành `vocals.wav` và `instrumental.wav`; hai file được FFprobe xác minh trước khi công bố.
+- Tác vụ chuẩn hóa audio đầu vào thành WAV stereo 44.1 kHz để phù hợp với model. Khi inference, mạng bị vô hiệu hóa và model chỉ dùng từ cache; ứng dụng không tự cài package hay tải model. Nếu chưa sẵn sàng, API/UI báo unavailable.
+- Mặc định dùng `python` trên PATH. Có thể trỏ riêng một Python environment bằng `VIDEO_DUBBING_SEPARATION_PYTHON` trước khi chạy ứng dụng; ứng dụng cũng nhận `BGM_PYTHON` hoặc `PYTHON` làm fallback. Để tránh ảnh hưởng môi trường Piper, nên tạo environment riêng, cài Demucs/PyTorch và tải model htdemucs riêng theo hướng dẫn chính thức rồi cấu hình biến này.
+- Model inference không cung cấp phần trăm tiến trình đáng tin cậy; giao diện chỉ hiển thị trạng thái xử lý. Nguồn tách không hoàn hảo: vocals có thể còn nhạc và instrumental có thể còn giọng. Kết quả không được tự động đưa vào bản phối hiện tại.
+- Mã nguồn Demucs được phát hành theo MIT ([LICENSE upstream](https://github.com/facebookresearch/demucs/blob/main/LICENSE)). Repository model HTDemucs hiện không công bố trường license trong metadata/model card đã kiểm tra; cần tự xác minh điều kiện sử dụng weights, đặc biệt trước khi phân phối hoặc dùng thương mại.
+- API: `GET /api/video-dubbing/separation/status`; `POST /api/video-dubbing/jobs/:jobId/separation`; `GET /api/video-dubbing/jobs/:jobId/separation`; `POST /api/video-dubbing/jobs/:jobId/separation/cancel`; nghe thử qua `GET /api/video-dubbing/jobs/:jobId/separation/vocals` và `/instrumental`.
+
 ---
 
 ## 3. Quy trình xử lý Audio & Dọn dẹp tệp tạm
@@ -105,6 +114,7 @@ Bạn **không cần** mở VS Code, không cần gõ lệnh dòng lệnh phức
 | `videoDubbingRoutes.ts`         | API job Video Dubbing                                                        |
 | `videoDubbingMaster.ts`         | Điều phối pipeline Đồng Bộ Phụ Đề hiện có cho TTS Master Video Dubbing       |
 | `videoDubbingMedia.ts`           | Điều phối trích audio, trộn, xác minh và xuất MP4 bằng FFmpeg/FFprobe        |
+| `videoDubbingSeparation.ts`      | Kiểm tra Demucs/model cục bộ, tách và xác minh hai track                       |
 | `src/components/VideoDubbingTab.tsx` | Giao diện chọn video/SRT, tạo Master, trộn và xuất MP4                   |
 | `models/`                       | Thư mục chứa các mô hình giọng đọc Piper ONNX và file cấu hình              |
 | `jobs_storage/`                 | Thư mục tạm dùng trong lúc ghép nối timeline (tự xóa sau khi xong)          |

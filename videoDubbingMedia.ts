@@ -139,7 +139,10 @@ export class VideoDubbingMediaCoordinator {
   }
 
   private assertNoActiveTask(jobId: string): void {
-    if (this.activeTasks.has(jobId)) {
+    if (
+      this.activeTasks.has(jobId) ||
+      this.manager.getJob(jobId)?.separation?.status === "processing"
+    ) {
       throw new Error("Job này đang có tác vụ FFmpeg khác chạy.");
     }
   }

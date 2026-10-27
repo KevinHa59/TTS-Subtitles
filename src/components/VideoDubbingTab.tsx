@@ -1,6 +1,7 @@
 import { ChangeEvent, useEffect, useRef, useState } from "react";
 import {
   AlertCircle,
+  AudioLines,
   CheckCircle2,
   Clock3,
   FileText,
@@ -16,6 +17,7 @@ import {
   SrtAnalysis,
   VideoDubbingJob,
   VideoDubbingMetadata,
+  VideoDubbingSeparationAvailability,
 } from "../types/videoDubbing";
 import { formatSecondsToSrtTime } from "../utils/srtParser";
 import { analyzeSrtContent } from "../utils/videoDubbingSrt";
@@ -138,6 +140,9 @@ export default function VideoDubbingTab() {
   const [ttsVolumePercent, setTtsVolumePercent] = useState(100);
   const [originalVolumePercent, setOriginalVolumePercent] = useState(100);
   const [mediaError, setMediaError] = useState<string | null>(null);
+  const [separationAvailability, setSeparationAvailability] =
+    useState<VideoDubbingSeparationAvailability | null>(null);
+  const [separationError, setSeparationError] = useState<string | null>(null);
   const videoInputRef = useRef<HTMLInputElement | null>(null);
   const srtInputRef = useRef<HTMLInputElement | null>(null);
   const uploadRef = useRef<XMLHttpRequest | null>(null);
@@ -185,6 +190,32 @@ export default function VideoDubbingTab() {
   }, []);
 
   useEffect(() => {
+    let active = true;
+    const loadSeparationAvailability = async () => {
+      try {
+        const response = await fetch("/api/video-dubbing/separation/status");
+        const result = (await response.json()) as VideoDubbingSeparationAvailability;
+        if (!response.ok) {
+          throw new Error("Không thể kiểm tra công cụ tách audio.");
+        }
+        if (active) setSeparationAvailability(result);
+      } catch {
+        if (active) {
+          setSeparationAvailability({
+            status: "unavailable",
+            model: "htdemucs",
+            message: "Không thể kiểm tra trạng thái Demucs trên máy này.",
+          });
+        }
+      }
+    };
+    void loadSeparationAvailability();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
     const jobId = video?.job?.id;
     const status = video?.job?.status;
     const masterStatus = video?.job?.masterGeneration?.status;
@@ -195,7 +226,8 @@ export default function VideoDubbingTab() {
         status !== "probing" &&
         masterStatus !== "generating" &&
         video?.job?.audioMix?.status !== "running" &&
-        video?.job?.videoExport?.status !== "running")
+        video?.job?.videoExport?.status !== "running" &&
+        video?.job?.separation?.status !== "processing")
     ) {
       return;
     }
@@ -226,6 +258,7 @@ export default function VideoDubbingTab() {
     video?.job?.id,
     video?.job?.audioMix?.status,
     video?.job?.masterGeneration?.status,
+    video?.job?.separation?.status,
     video?.job?.status,
     video?.job?.videoExport?.status,
   ]);
@@ -477,10 +510,14 @@ export default function VideoDubbingTab() {
   const isMasterGenerating = masterGeneration?.status === "generating";
   const audioMix = job?.audioMix;
   const videoExport = job?.videoExport;
+  const separation = job?.separation;
+  const isSeparationProcessing = separation?.status === "processing";
   const hasMixedAudio = Boolean(audioMix?.sizeBytes && audioMix.sizeBytes > 0);
   const hasExportedVideo = Boolean(videoExport?.sizeBytes && videoExport.sizeBytes > 0);
   const isMediaProcessing =
-    audioMix?.status === "running" || videoExport?.status === "running";
+    audioMix?.status === "running" ||
+    videoExport?.status === "running" ||
+    isSeparationProcessing;
   const hasMasterAudio = Boolean(
     masterGeneration?.durationSeconds !== undefined &&
       masterGeneration.sizeBytes !== undefined,
@@ -490,10 +527,18 @@ export default function VideoDubbingTab() {
       audioMix.ttsVolumePercent === ttsVolumePercent &&
       audioMix.originalVolumePercent === originalVolumePercent,
   );
+  const canStartSeparation = Boolean(
+    job?.status === "completed" &&
+      !isSeparationProcessing &&
+      separationAvailability?.status === "ready" &&
+      Boolean(job.metadata?.audioCodec) &&
+      !isMasterGenerating &&
+      !isMediaProcessing,
+  );
   const canGenerateMaster = Boolean(
     job?.status === "completed" &&
-      srt?.analysis?.items.length &&
-      selectedVoice &&
+    srt?.analysis?.items.length &&
+    selectedVoice &&
       !isMasterGenerating &&
       !isMediaProcessing,
   );
@@ -641,6 +686,55 @@ export default function VideoDubbingTab() {
     } catch (error) {
       setMediaError(
         error instanceof Error ? error.message : "Không thể hủy tác vụ media.",
+      );
+    }
+  };
+  const startSeparation = async () => {
+    if (!job) return;
+    setSeparationError(null);
+    try {
+      const response = await fetch(
+        `/api/video-dubbing/jobs/${job.id}/separation`,
+        { method: "POST" },
+      );
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error || "Không thể bắt đầu tách audio.");
+      }
+      setVideo((current) =>
+        current?.job?.id === job.id
+          ? {
+              ...current,
+              job: { ...current.job, separation: result.separation },
+            }
+          : current,
+      );
+    } catch (error) {
+      setSeparationError(
+        error instanceof Error ? error.message : "Không thể bắt đầu tách audio.",
+      );
+    }
+  };
+  const cancelSeparation = async () => {
+    if (!job) return;
+    setSeparationError(null);
+    try {
+      const response = await fetch(
+        `/api/video-dubbing/jobs/${job.id}/separation/cancel`,
+        { method: "POST" },
+      );
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error || "Không thể hủy tác vụ tách audio.");
+      }
+      if (result.job) {
+        setVideo((current) =>
+          current?.job?.id === job.id ? { ...current, job: result.job } : current,
+        );
+      }
+    } catch (error) {
+      setSeparationError(
+        error instanceof Error ? error.message : "Không thể hủy tác vụ tách audio.",
       );
     }
   };
@@ -1072,6 +1166,143 @@ export default function VideoDubbingTab() {
         </p>
       </section>
 
+      {job?.status === "completed" && (
+        <section className="rounded-2xl border border-slate-800 bg-slate-900/80 p-4 sm:p-5 space-y-4">
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-xl bg-violet-500/15 text-violet-300 border border-violet-500/25 flex items-center justify-center shrink-0">
+              <AudioLines className="w-5 h-5" />
+            </div>
+            <div className="min-w-0">
+              <h3 className="font-semibold text-white">Tách giọng và nhạc nền</h3>
+              <p className="mt-1 text-xs leading-relaxed text-slate-400">
+                Chạy cục bộ bằng Demucs {separationAvailability?.model || "htdemucs"}.
+                Kết quả là các stem ước lượng, có thể còn lẫn giọng hoặc nhạc.
+              </p>
+            </div>
+          </div>
+
+          {!separationAvailability ? (
+            <p className="text-xs text-slate-400">Đang kiểm tra Python, model và thiết bị…</p>
+          ) : (
+            <div
+              className={`rounded-xl border p-3 text-xs ${
+                separationAvailability.status === "ready"
+                  ? "border-emerald-500/25 bg-emerald-950/20 text-emerald-200"
+                  : "border-amber-500/25 bg-amber-950/20 text-amber-200"
+              }`}
+            >
+              <div className="font-semibold">
+                {separationAvailability.status === "ready"
+                  ? `Sẵn sàng · ${separationAvailability.device === "cuda" ? "CUDA" : "CPU"}`
+                  : "Chưa sẵn sàng"}
+              </div>
+              <p className="mt-1 leading-relaxed">{separationAvailability.message}</p>
+              {separationAvailability.status === "unavailable" && (
+                <p className="mt-2 leading-relaxed">
+                  Cấu hình riêng Python bằng biến VIDEO_DUBBING_SEPARATION_PYTHON rồi khởi động lại ứng dụng. Cần cài Demucs/PyTorch và tải model htdemucs trước; nút xử lý không tự cài hoặc tải model.
+                </p>
+              )}
+            </div>
+          )}
+
+          {job.metadata?.audioCodec === null && (
+            <p className="rounded-lg border border-amber-500/25 bg-amber-950/20 p-3 text-xs text-amber-200">
+              Video này không có audio gốc để tách.
+            </p>
+          )}
+          {separationError && (
+            <div className="flex items-start gap-2 rounded-lg border border-rose-500/30 bg-rose-950/40 p-3 text-xs text-rose-200">
+              <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
+              <span>{separationError}</span>
+            </div>
+          )}
+          {separation?.status === "error" && separation.error && (
+            <div className="flex items-start gap-2 rounded-lg border border-rose-500/30 bg-rose-950/40 p-3 text-xs text-rose-200">
+              <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
+              <span>{separation.error}</span>
+            </div>
+          )}
+          {isSeparationProcessing && (
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-xl border border-violet-500/25 bg-violet-950/20 p-3.5">
+              <span className="inline-flex items-center gap-2 text-xs text-violet-200">
+                <LoaderCircle className="w-4 h-4 animate-spin" />
+                {separation.phase === "extracting"
+                  ? "Đang trích và chuẩn hóa audio nguồn"
+                  : separation.phase === "validating"
+                    ? "Đang kiểm tra hai track"
+                    : "Demucs đang tách audio (tiến trình phần trăm không khả dụng)"}
+              </span>
+              <button
+                type="button"
+                onClick={() => void cancelSeparation()}
+                className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-700 bg-slate-950/70 px-2.5 py-1.5 text-xs text-slate-300 hover:text-white hover:border-slate-500 transition-colors"
+              >
+                <X className="w-3.5 h-3.5" />
+                Hủy tách audio
+              </button>
+            </div>
+          )}
+          {separation?.status === "cancelled" && (
+            <p className="text-xs text-amber-300">Tác vụ tách audio đã bị hủy.</p>
+          )}
+
+          {separationAvailability?.status === "ready" &&
+            Boolean(job.metadata?.audioCodec) && (
+              <button
+                type="button"
+                onClick={() => void startSeparation()}
+                disabled={!canStartSeparation}
+                className="inline-flex items-center justify-center gap-2 rounded-xl bg-violet-500 px-4 py-2.5 text-sm font-bold text-white transition-colors hover:bg-violet-400 disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-500"
+              >
+                {isSeparationProcessing ? (
+                  <LoaderCircle className="w-4 h-4 animate-spin" />
+                ) : (
+                  <AudioLines className="w-4 h-4" />
+                )}
+                Tách audio nguồn
+              </button>
+            )}
+
+          {(separation?.vocalsSizeBytes || separation?.instrumentalSizeBytes) && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {([
+                { key: "vocals", label: "Giọng (vocals)", size: separation.vocalsSizeBytes },
+                {
+                  key: "instrumental",
+                  label: "Nhạc nền (instrumental)",
+                  size: separation.instrumentalSizeBytes,
+                },
+              ] as const).map((track) => (
+                <div
+                  key={track.key}
+                  className="space-y-2 rounded-xl border border-slate-800 bg-slate-950/60 p-3"
+                >
+                  <div className="flex items-center justify-between gap-2 text-xs">
+                    <span className="font-semibold text-slate-200">{track.label}</span>
+                    <span className="text-slate-400">
+                      {track.size ? formatFileSize(track.size) : "Không có"}
+                    </span>
+                  </div>
+                  <audio
+                    controls
+                    preload="metadata"
+                    src={`/api/video-dubbing/jobs/${job.id}/separation/${track.key}`}
+                    className="w-full"
+                  >
+                    Trình duyệt không hỗ trợ phát WAV.
+                  </audio>
+                </div>
+              ))}
+            </div>
+          )}
+          {separation?.status === "completed" && (
+            <p className="text-xs text-emerald-300">
+              Đã xác minh hai track WAV · {formatDuration(separation.durationSeconds || 0)} · {separation.sampleRate} Hz · {separation.channels} kênh. Kết quả chưa được tự động đưa vào bản phối.
+            </p>
+          )}
+        </section>
+      )}
+
       {hasMasterAudio && (
         <section className="rounded-2xl border border-slate-800 bg-slate-900/80 p-4 sm:p-5 space-y-5">
           <div className="flex items-start gap-3">
@@ -1309,7 +1540,7 @@ export default function VideoDubbingTab() {
       <div className="flex items-start gap-2 rounded-xl border border-slate-800 bg-slate-950/60 p-3.5 text-xs text-slate-400">
         <AlertCircle className="w-4 h-4 shrink-0 text-amber-400" />
         <p>
-          Giai đoạn này trộn TTS Master với audio gốc và remux video thành MP4. Chưa có AI separation hoặc preset.
+          Tách giọng và nhạc nền chạy cục bộ bằng Demucs khi model đã sẵn sàng. Các track tách được chỉ để nghe thử; chưa tự động đưa vào bản phối. Preset chưa được hỗ trợ.
         </p>
       </div>
     </section>
