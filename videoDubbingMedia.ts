@@ -4,7 +4,10 @@ import { randomBytes } from "crypto";
 import { ChildProcessByStdio, spawn } from "child_process";
 import { Readable } from "stream";
 import {
+  VideoDubbingFinalMixTask,
   VideoDubbingJob,
+  VideoDubbingMixerSettings,
+  VideoDubbingMixerTrack,
   VideoDubbingMediaTask,
 } from "./src/types/videoDubbing";
 import { VideoDubbingManager } from "./videoDubbingManager";
@@ -33,7 +36,7 @@ interface MediaProbe {
 
 interface ActiveTask {
   jobId: string;
-  kind: "audioMix" | "videoExport";
+  kind: "audioMix" | "videoExport" | "finalMix";
   child?: ChildProcessByStdio<null, Readable, Readable>;
   cancelled: boolean;
   operation: Promise<void>;
@@ -129,6 +132,75 @@ export class VideoDubbingMediaCoordinator {
       : null;
   }
 
+  getFinalMixPath(jobId: string): string | null {
+    const job = this.manager.getJob(jobId);
+    const directory = this.manager.getJobDirectory(jobId);
+    if (!job || !directory) return null;
+    const filePath = path.join(directory, "mixed-audio.wav");
+    return fs.existsSync(filePath) && fs.statSync(filePath).size > 44
+      ? filePath
+      : null;
+  }
+
+  updateMixerSettings(
+    jobId: string,
+    input: unknown,
+  ): VideoDubbingMixerSettings {
+    this.requireReadyJob(jobId);
+    this.assertNoActiveTask(jobId);
+    return this.manager.updateMixerSettings(
+      jobId,
+      this.validateMixerSettings(input),
+    );
+  }
+
+  startFinalMix(
+    jobId: string,
+    input: unknown,
+  ): VideoDubbingFinalMixTask {
+    const job = this.requireReadyJob(jobId);
+    this.assertNoActiveTask(jobId);
+    const settings = this.validateMixerSettings(input);
+    this.requireMaster(jobId, job);
+    const directory = this.requireDirectory(jobId);
+    const hasEnabledTrack =
+      (!settings.ttsMaster.muted && settings.ttsMaster.volumePercent > 0) ||
+      (["vocals", "instrumental"] as const).some(
+        (track) => {
+          const recordedSize =
+            track === "vocals"
+              ? job.separation?.vocalsSizeBytes
+              : job.separation?.instrumentalSizeBytes;
+          const filePath = path.join(directory, `${track}.wav`);
+          return (
+            !settings[track].muted &&
+            settings[track].volumePercent > 0 &&
+            Boolean(recordedSize && recordedSize > 44) &&
+            fs.existsSync(filePath) &&
+            fs.statSync(filePath).size > 44
+          );
+        },
+      );
+    if (!hasEnabledTrack) {
+      throw new Error("Bật ít nhất một track có sẵn với âm lượng lớn hơn 0%.");
+    }
+    const savedSettings = this.manager.updateMixerSettings(jobId, settings);
+    const previous = job.finalMix;
+    const task: VideoDubbingFinalMixTask = {
+      status: "running",
+      phase: "rendering",
+      progressPercent: 0,
+      sizeBytes: previous?.sizeBytes,
+      durationSeconds: previous?.durationSeconds,
+      renderedSettings: previous?.renderedSettings,
+      includedTracks: previous?.includedTracks,
+    };
+    this.manager.setFinalMixTask(jobId, task);
+    const active = this.registerTask(jobId, "finalMix");
+    active.operation = this.runFinalMix(job, active, savedSettings);
+    return { ...task };
+  }
+
   private requireReadyJob(jobId: string): VideoDubbingJob {
     const job = this.manager.getJob(jobId);
     if (!job) throw new Error("Không tìm thấy job Video Dubbing.");
@@ -139,9 +211,11 @@ export class VideoDubbingMediaCoordinator {
   }
 
   private assertNoActiveTask(jobId: string): void {
+    const job = this.manager.getJob(jobId);
     if (
       this.activeTasks.has(jobId) ||
-      this.manager.getJob(jobId)?.separation?.status === "processing"
+      job?.separation?.status === "processing" ||
+      job?.masterGeneration?.status === "generating"
     ) {
       throw new Error("Job này đang có tác vụ FFmpeg khác chạy.");
     }
@@ -166,11 +240,37 @@ export class VideoDubbingMediaCoordinator {
     if (job.masterGeneration?.status === "generating") {
       throw new Error("Hãy đợi TTS Master hoàn tất trước khi xuất MP4.");
     }
+    if (job.mixSelection === "final") {
+      const currentFinalMix = this.isFinalMixCurrent(job);
+      if (!currentFinalMix) {
+        throw new Error(
+          "Mixer settings đã thay đổi hoặc final mix chưa được render; hãy render lại trước khi xuất MP4.",
+        );
+      }
+      const finalMixPath = this.getFinalMixPath(jobId);
+      if (!finalMixPath) {
+        throw new Error("File final mix chưa sẵn sàng.");
+      }
+      return finalMixPath;
+    }
     const mixedAudioPath = this.getAudioMixPath(jobId);
     if (!mixedAudioPath || job.audioMix?.status !== "completed") {
       throw new Error("Hãy tạo bản phối âm thanh thành công trước khi xuất MP4.");
     }
     return mixedAudioPath;
+  }
+
+  private isFinalMixCurrent(job: VideoDubbingJob): boolean {
+    return Boolean(
+      job.finalMix &&
+        ["completed", "failed", "cancelled", "interrupted"].includes(
+          job.finalMix.status,
+        ) &&
+      job.finalMix?.renderedSettings &&
+        JSON.stringify(job.finalMix.renderedSettings) ===
+          JSON.stringify(job.mixerSettings) &&
+        this.getFinalMixPath(job.id),
+    );
   }
 
   private validateVolumes(input: unknown): {
@@ -180,6 +280,7 @@ export class VideoDubbingMediaCoordinator {
     if (!input || typeof input !== "object") {
       throw new Error("Thiếu cấu hình âm lượng.");
     }
+
     const values = input as Record<string, unknown>;
     const validate = (value: unknown, label: string) => {
       if (typeof value !== "number" || !Number.isFinite(value)) {
@@ -199,26 +300,82 @@ export class VideoDubbingMediaCoordinator {
     };
   }
 
+  private validateMixerSettings(input: unknown): VideoDubbingMixerSettings {
+    if (!input || typeof input !== "object") {
+      throw new Error("Thiếu cấu hình mixer.");
+    }
+    const values = input as Record<string, unknown>;
+    const tracks: VideoDubbingMixerTrack[] = [
+      "vocals",
+      "instrumental",
+      "ttsMaster",
+    ];
+    const settings = {} as VideoDubbingMixerSettings;
+    for (const track of tracks) {
+      const value = values[track];
+      if (!value || typeof value !== "object") {
+        throw new Error(`Thiếu cấu hình track ${track}.`);
+      }
+      const setting = value as Record<string, unknown>;
+      if (
+        typeof setting.volumePercent !== "number" ||
+        !Number.isFinite(setting.volumePercent) ||
+        setting.volumePercent < 0 ||
+        setting.volumePercent > MAX_GAIN_PERCENT ||
+        typeof setting.muted !== "boolean"
+      ) {
+        throw new Error(
+          `Cấu hình track ${track} không hợp lệ (volume 0–${MAX_GAIN_PERCENT}%, muted phải là boolean).`,
+        );
+      }
+      settings[track] = {
+        volumePercent: setting.volumePercent,
+        muted: setting.muted,
+      };
+    }
+    return settings;
+  }
+
+  private createTask(
+    jobId: string,
+    kind: "finalMix",
+    task: VideoDubbingFinalMixTask,
+  ): VideoDubbingFinalMixTask;
   private createTask(
     jobId: string,
     kind: "audioMix" | "videoExport",
     task: VideoDubbingMediaTask,
-  ): VideoDubbingMediaTask {
-    this.manager.setMediaTask(jobId, kind, task);
-    return task;
+  ): VideoDubbingMediaTask;
+  private createTask(
+    jobId: string,
+    kind: "audioMix" | "videoExport" | "finalMix",
+    task: VideoDubbingMediaTask | VideoDubbingFinalMixTask,
+  ): VideoDubbingMediaTask | VideoDubbingFinalMixTask;
+  private createTask(
+    jobId: string,
+    kind: "audioMix" | "videoExport" | "finalMix",
+    task: VideoDubbingMediaTask | VideoDubbingFinalMixTask,
+  ): VideoDubbingMediaTask | VideoDubbingFinalMixTask {
+    if (kind === "finalMix") {
+      this.manager.setFinalMixTask(jobId, task as VideoDubbingFinalMixTask);
+      return task as VideoDubbingFinalMixTask;
+    }
+    this.manager.setMediaTask(jobId, kind, task as VideoDubbingMediaTask);
+    return task as VideoDubbingMediaTask;
   }
 
   private getTask(
     jobId: string,
-    kind: "audioMix" | "videoExport",
-  ): VideoDubbingMediaTask | undefined {
+    kind: "audioMix" | "videoExport" | "finalMix",
+  ): VideoDubbingMediaTask | VideoDubbingFinalMixTask | undefined {
     const job = this.manager.getJob(jobId);
+    if (kind === "finalMix") return job?.finalMix;
     return kind === "audioMix" ? job?.audioMix : job?.videoExport;
   }
 
   private registerTask(
     jobId: string,
-    kind: "audioMix" | "videoExport",
+    kind: "audioMix" | "videoExport" | "finalMix",
   ): ActiveTask {
     const active: ActiveTask = {
       jobId,
@@ -285,6 +442,7 @@ export class VideoDubbingMediaCoordinator {
           10,
         );
       }
+
       this.assertNotCancelled(active);
       this.assertOutputExists(originalTemp, "Không thể trích xuất audio gốc.");
       const masterPath = this.requireMaster(active.jobId, job);
@@ -383,6 +541,147 @@ export class VideoDubbingMediaCoordinator {
     }
   }
 
+  private async runFinalMix(
+    job: VideoDubbingJob,
+    active: ActiveTask,
+    settings: VideoDubbingMixerSettings,
+  ): Promise<void> {
+    const directory = this.requireDirectory(active.jobId);
+    const duration = job.metadata!.durationSeconds;
+    const availableSources: Array<{
+      track: VideoDubbingMixerTrack;
+      filePath: string;
+    }> = [
+      {
+        track: "ttsMaster",
+        filePath: this.requireMaster(active.jobId, job),
+      },
+    ];
+    for (const track of ["vocals", "instrumental"] as const) {
+      const filePath = path.join(directory, `${track}.wav`);
+      const recordedSize =
+        track === "vocals"
+          ? job.separation?.vocalsSizeBytes
+          : job.separation?.instrumentalSizeBytes;
+      if (
+        recordedSize &&
+        recordedSize > 44 &&
+        fs.existsSync(filePath) &&
+        fs.statSync(filePath).size > 44
+      ) {
+        availableSources.push({ track, filePath });
+      }
+    }
+    const included = availableSources.filter(({ track }) => {
+      const setting = settings[track];
+      return !setting.muted && setting.volumePercent > 0;
+    });
+    if (included.length === 0) {
+      this.failOrCancel(
+        active,
+        new Error("Bật ít nhất một track có sẵn với âm lượng lớn hơn 0%."),
+      );
+      await this.cleanup(active);
+      return;
+    }
+
+    const temporaryOutput = path.join(
+      directory,
+      `.mixed-audio-${randomBytes(8).toString("hex")}.wav`,
+    );
+    active.temporaryFiles.add(temporaryOutput);
+    try {
+      for (const source of included) {
+        this.assertNotCancelled(active);
+        const probe = await this.probe(source.filePath, active);
+        const stream = probe.streams?.find(
+          (item) => item.codec_type === "audio",
+        );
+        const sourceDuration = Number(probe.format?.duration);
+        if (
+          !stream ||
+          !Number.isFinite(sourceDuration) ||
+          sourceDuration <= 0 ||
+          (source.track !== "ttsMaster" &&
+            Math.abs(sourceDuration - duration) > 0.25)
+        ) {
+          throw new Error(
+            `Track ${source.track} không hợp lệ hoặc không đồng bộ với thời lượng video.`,
+          );
+        }
+      }
+      const filters = included.map(({ track }, index) => {
+        const gain = settings[track].volumePercent / 100;
+        return `[${index}:a:0]aresample=${AUDIO_SAMPLE_RATE},aformat=sample_fmts=fltp:channel_layouts=stereo,volume=${gain.toFixed(4)},apad,atrim=duration=${duration},asetpts=PTS-STARTPTS[${track}]`;
+      });
+      const inputs = included.map(({ track }) => `[${track}]`).join("");
+      filters.push(
+        `${inputs}amix=inputs=${included.length}:duration=longest:dropout_transition=0:normalize=0,alimiter=limit=0.98:level=disabled[mix]`,
+      );
+      const ffmpegArgs = included.flatMap(({ filePath }) => ["-i", filePath]);
+      ffmpegArgs.push(
+        "-filter_complex",
+        filters.join(";"),
+        "-map",
+        "[mix]",
+        "-t",
+        String(duration),
+        "-ar",
+        String(AUDIO_SAMPLE_RATE),
+        "-ac",
+        "2",
+        "-c:a",
+        "pcm_s16le",
+        temporaryOutput,
+      );
+      await this.runFfmpeg(active, ffmpegArgs, duration, "mixing", 0, 90);
+      this.assertNotCancelled(active);
+      this.createTask(active.jobId, active.kind, {
+        status: "running",
+        phase: "validating",
+        progressPercent: 95,
+        renderedSettings: settings,
+        includedTracks: included.map(({ track }) => track),
+      });
+      this.assertOutputExists(
+        temporaryOutput,
+        "FFmpeg không tạo được final mix WAV.",
+      );
+      const probe = await this.probe(temporaryOutput, active);
+      this.assertNotCancelled(active);
+      const audioStream = probe.streams?.find(
+        (stream) => stream.codec_type === "audio",
+      );
+      const outputDuration = Number(probe.format?.duration);
+      if (
+        !audioStream ||
+        audioStream.codec_name !== "pcm_s16le" ||
+        Number(audioStream.sample_rate) !== AUDIO_SAMPLE_RATE ||
+        audioStream.channels !== 2 ||
+        !Number.isFinite(outputDuration) ||
+        Math.abs(outputDuration - duration) > 0.1
+      ) {
+        throw new Error("Final mix không vượt qua xác minh stream hoặc thời lượng.");
+      }
+      const outputPath = path.join(directory, "mixed-audio.wav");
+      this.publishFile(temporaryOutput, outputPath, directory);
+      active.temporaryFiles.delete(temporaryOutput);
+      this.createTask(active.jobId, active.kind, {
+        status: "completed",
+        phase: "validating",
+        progressPercent: 100,
+        durationSeconds: outputDuration,
+        sizeBytes: fs.statSync(outputPath).size,
+        renderedSettings: settings,
+        includedTracks: included.map(({ track }) => track),
+      });
+    } catch (error) {
+      this.failOrCancel(active, error);
+    } finally {
+      await this.cleanup(active);
+    }
+  }
+
   private async runExport(
     job: VideoDubbingJob,
     active: ActiveTask,
@@ -395,6 +694,10 @@ export class VideoDubbingMediaCoordinator {
     );
     active.temporaryFiles.add(tempOutput);
     const duration = job.metadata!.durationSeconds;
+    const finalMixInput = path.extname(mixedAudioPath).toLowerCase() === ".wav";
+    const audioCodecArgs = finalMixInput
+      ? ["-c:a", "aac", "-b:a", "192k", "-ar", String(AUDIO_SAMPLE_RATE), "-ac", "2"]
+      : ["-c:a", "copy"];
     try {
       await this.runFfmpeg(
         active,
@@ -413,8 +716,7 @@ export class VideoDubbingMediaCoordinator {
           "0",
           "-c:v",
           "copy",
-          "-c:a",
-          "copy",
+          ...audioCodecArgs,
           "-t",
           String(duration),
           "-movflags",
@@ -491,12 +793,7 @@ export class VideoDubbingMediaCoordinator {
     progressSpan: number,
   ): Promise<void> {
     this.assertNotCancelled(active);
-    const current = this.getTask(active.jobId, active.kind);
-    this.createTask(active.jobId, active.kind, {
-      ...current,
-      status: "running",
-      phase,
-    });
+    this.updateTaskProgress(active, phase);
 
     await new Promise<void>((resolve, reject) => {
       const child = spawn(
@@ -547,14 +844,7 @@ export class VideoDubbingMediaCoordinator {
               94,
               Math.round(progressStart + progressSpan * phaseProgress),
             );
-            const state = this.getTask(active.jobId, active.kind);
-            if (state?.status === "running") {
-              this.createTask(active.jobId, active.kind, {
-                ...state,
-                phase,
-                progressPercent,
-              });
-            }
+            this.updateTaskProgress(active, phase, progressPercent);
           }
           lineEnd = progressBuffer.indexOf("\n");
         }
@@ -593,6 +883,38 @@ export class VideoDubbingMediaCoordinator {
           resolve();
         }
       });
+    });
+  }
+
+  private updateTaskProgress(
+    active: ActiveTask,
+    phase: "extracting" | "mixing" | "remuxing",
+    progressPercent?: number,
+  ): void {
+    const job = this.manager.getJob(active.jobId);
+    if (active.kind === "finalMix") {
+      const state = job?.finalMix;
+      if (!state || state.status !== "running") return;
+      this.manager.setFinalMixTask(active.jobId, {
+        ...state,
+        phase: "rendering",
+        progressPercent:
+          progressPercent === undefined
+            ? state.progressPercent
+            : Math.max(state.progressPercent || 0, progressPercent),
+      });
+      return;
+    }
+    const state =
+      active.kind === "audioMix" ? job?.audioMix : job?.videoExport;
+    if (!state || state.status !== "running") return;
+    this.manager.setMediaTask(active.jobId, active.kind, {
+      ...state,
+      phase,
+      progressPercent:
+        progressPercent === undefined
+          ? state.progressPercent
+          : Math.max(state.progressPercent || 0, progressPercent),
     });
   }
 

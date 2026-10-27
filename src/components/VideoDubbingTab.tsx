@@ -10,7 +10,10 @@ import {
   HardDrive,
   History,
   LoaderCircle,
+  Pause,
+  Play,
   RefreshCw,
+  Square,
   Trash2,
   Upload,
   Volume2,
@@ -21,6 +24,8 @@ import {
   VideoDubbingJob,
   VideoDubbingJobHistoryItem,
   VideoDubbingMetadata,
+  VideoDubbingMixerSettings,
+  VideoDubbingMixerTrack,
   VideoDubbingSeparationAvailability,
 } from "../types/videoDubbing";
 import { formatSecondsToSrtTime } from "../utils/srtParser";
@@ -58,6 +63,17 @@ const ACCEPTED_VIDEO_EXTENSIONS = new Set([
   ".avi",
   ".webm",
 ]);
+
+const DEFAULT_MIXER_SETTINGS: VideoDubbingMixerSettings = {
+  vocals: { volumePercent: 100, muted: false },
+  instrumental: { volumePercent: 100, muted: false },
+  ttsMaster: { volumePercent: 100, muted: false },
+};
+
+interface PreviewTrackNode {
+  element: HTMLAudioElement;
+  gain: GainNode;
+}
 
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -146,6 +162,16 @@ export default function VideoDubbingTab() {
   const [masterError, setMasterError] = useState<string | null>(null);
   const [ttsVolumePercent, setTtsVolumePercent] = useState(100);
   const [originalVolumePercent, setOriginalVolumePercent] = useState(100);
+  const [mixerSettings, setMixerSettings] =
+    useState<VideoDubbingMixerSettings>(DEFAULT_MIXER_SETTINGS);
+  const [mixerSettingsSaved, setMixerSettingsSaved] = useState(false);
+  const [mixerMode, setMixerMode] = useState<"legacy" | "final">("legacy");
+  const [mixerError, setMixerError] = useState<string | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewStatus, setPreviewStatus] = useState<
+    "stopped" | "playing" | "paused"
+  >("stopped");
+  const [previewCurrentTime, setPreviewCurrentTime] = useState(0);
   const [mediaError, setMediaError] = useState<string | null>(null);
   const [separationAvailability, setSeparationAvailability] =
     useState<VideoDubbingSeparationAvailability | null>(null);
@@ -159,6 +185,226 @@ export default function VideoDubbingTab() {
   const videoGenerationRef = useRef(0);
   const srtGenerationRef = useRef(0);
   const activeJobIdRef = useRef<string | null>(null);
+  const mixerSettingsTimerRef = useRef<number | null>(null);
+  const mixerSettingsRequestRef = useRef(0);
+  const mixerSaveChainRef = useRef(Promise.resolve());
+  const mixerTouchedRef = useRef(false);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const previewNodesRef = useRef<Map<VideoDubbingMixerTrack, PreviewTrackNode>>(
+    new Map(),
+  );
+  const previewJobIdRef = useRef<string | null>(null);
+  const previewTimerRef = useRef<number | null>(null);
+  const previewClockRef = useRef({ offset: 0, startedAt: 0 });
+
+  const releasePreviewGraph = (updateUi = true) => {
+    if (previewTimerRef.current !== null) {
+      window.clearInterval(previewTimerRef.current);
+      previewTimerRef.current = null;
+    }
+    for (const { element } of previewNodesRef.current.values()) {
+      element.pause();
+      element.removeAttribute("src");
+      element.load();
+    }
+    previewNodesRef.current.clear();
+    const context = audioContextRef.current;
+    audioContextRef.current = null;
+    if (context && context.state !== "closed") {
+      void context.close().catch((error: unknown) => {
+        console.error("Không thể đóng Web Audio context:", error);
+      });
+    }
+    previewJobIdRef.current = null;
+    previewClockRef.current = { offset: 0, startedAt: 0 };
+    if (updateUi) {
+      setPreviewStatus("stopped");
+      setPreviewCurrentTime(0);
+    }
+  };
+
+  const pauseMixerPreview = () => {
+    const context = audioContextRef.current;
+    if (previewStatus !== "playing" || !context) return;
+    const elapsed = Math.max(
+      0,
+      context.currentTime - previewClockRef.current.startedAt,
+    );
+    previewClockRef.current.offset += elapsed;
+    for (const { element } of previewNodesRef.current.values()) {
+      element.pause();
+    }
+    if (previewTimerRef.current !== null) {
+      window.clearInterval(previewTimerRef.current);
+      previewTimerRef.current = null;
+    }
+    setPreviewCurrentTime(previewClockRef.current.offset);
+    setPreviewStatus("paused");
+  };
+
+  const stopMixerPreview = () => {
+    for (const { element } of previewNodesRef.current.values()) {
+      element.pause();
+      try {
+        element.currentTime = 0;
+      } catch (error) {
+        console.error("Không thể tua track mixer về đầu:", error);
+      }
+    }
+    if (previewTimerRef.current !== null) {
+      window.clearInterval(previewTimerRef.current);
+      previewTimerRef.current = null;
+    }
+    previewClockRef.current = { offset: 0, startedAt: 0 };
+    setPreviewCurrentTime(0);
+    setPreviewStatus("stopped");
+  };
+
+  const seekMixerPreview = (time: number) => {
+    const context = audioContextRef.current;
+    const seekTo = Math.max(0, time);
+    for (const { element } of previewNodesRef.current.values()) {
+      try {
+        element.currentTime = seekTo;
+      } catch (error) {
+        console.error("Không thể seek track mixer:", error);
+      }
+    }
+    previewClockRef.current = {
+      offset: seekTo,
+      startedAt: context?.currentTime || 0,
+    };
+    setPreviewCurrentTime(seekTo);
+  };
+
+  const updateMixerSetting = (
+    track: VideoDubbingMixerTrack,
+    patch: Partial<VideoDubbingMixerSettings[VideoDubbingMixerTrack]>,
+  ) => {
+    mixerTouchedRef.current = true;
+    setMixerMode("final");
+    setMixerSettingsSaved(false);
+    setMixerSettings((current) => ({
+      ...current,
+      [track]: { ...current[track], ...patch },
+    }));
+  };
+
+  const playMixerPreview = async () => {
+    const job = video?.job;
+    if (!job) return;
+    if (previewStatus === "playing") {
+      pauseMixerPreview();
+      return;
+    }
+    const availableTracks: Array<{
+      track: VideoDubbingMixerTrack;
+      url: string;
+    }> = [];
+    if (
+      job.masterGeneration?.sizeBytes &&
+      job.masterGeneration.durationSeconds !== undefined
+    ) {
+      availableTracks.push({
+        track: "ttsMaster",
+        url: `/api/video-dubbing/jobs/${job.id}/master-audio`,
+      });
+    }
+    if (job.separation?.vocalsSizeBytes) {
+      availableTracks.push({
+        track: "vocals",
+        url: `/api/video-dubbing/jobs/${job.id}/separation/vocals`,
+      });
+    }
+    if (job.separation?.instrumentalSizeBytes) {
+      availableTracks.push({
+        track: "instrumental",
+        url: `/api/video-dubbing/jobs/${job.id}/separation/instrumental`,
+      });
+    }
+    const included = availableTracks.filter(
+      ({ track }) =>
+        !mixerSettings[track].muted &&
+        mixerSettings[track].volumePercent > 0,
+    );
+    if (included.length === 0) {
+      setPreviewError("Bật ít nhất một track có sẵn để nghe thử.");
+      return;
+    }
+    setPreviewError(null);
+    try {
+      let context = audioContextRef.current;
+      if (!context || previewJobIdRef.current !== job.id) {
+        releasePreviewGraph(false);
+        context = new AudioContext();
+        const limiter = context.createDynamicsCompressor();
+        limiter.threshold.value = -1;
+        limiter.knee.value = 0;
+        limiter.ratio.value = 20;
+        limiter.attack.value = 0.003;
+        limiter.release.value = 0.15;
+        limiter.connect(context.destination);
+        audioContextRef.current = context;
+        previewJobIdRef.current = job.id;
+        for (const { track, url } of availableTracks) {
+          const element = new Audio();
+          element.preload = "auto";
+          element.src = url;
+          const source = context.createMediaElementSource(element);
+          const gain = context.createGain();
+          source.connect(gain);
+          gain.connect(limiter);
+          const setting = mixerSettings[track];
+          gain.gain.value = setting.muted ? 0 : setting.volumePercent / 100;
+          previewNodesRef.current.set(track, { element, gain });
+        }
+      }
+      await context.resume();
+      const nodes = included
+        .map(({ track }) => previewNodesRef.current.get(track))
+        .filter((node): node is PreviewTrackNode => Boolean(node));
+      if (nodes.length !== included.length) {
+        throw new Error("Không thể tạo đầy đủ các track nghe thử.");
+      }
+      await Promise.all(nodes.map(({ element }) => element.play()));
+      const duration = job.metadata?.durationSeconds || 0;
+      const offset = previewClockRef.current.offset;
+      for (const { element } of nodes) {
+        if (offset > 0 && Number.isFinite(element.duration)) {
+          element.currentTime = Math.min(offset, element.duration);
+        } else if (offset > 0) {
+          element.currentTime = offset;
+        }
+      }
+      previewClockRef.current = {
+        offset,
+        startedAt: context.currentTime,
+      };
+      setPreviewCurrentTime(offset);
+      setPreviewStatus("playing");
+      previewTimerRef.current = window.setInterval(() => {
+        const currentContext = audioContextRef.current;
+        if (!currentContext) return;
+        const current =
+          previewClockRef.current.offset +
+          currentContext.currentTime -
+          previewClockRef.current.startedAt;
+        if (duration > 0 && current >= duration) {
+          stopMixerPreview();
+          return;
+        }
+        setPreviewCurrentTime(Math.min(current, duration || current));
+      }, 100);
+    } catch (error) {
+      for (const { element } of previewNodesRef.current.values()) {
+        element.pause();
+      }
+      setPreviewStatus("paused");
+      setPreviewError(
+        error instanceof Error ? error.message : "Không thể phát mixer preview.",
+      );
+    }
+  };
 
   const loadJobHistory = async (): Promise<VideoDubbingJobHistoryItem[]> => {
     setHistoryLoading(true);
@@ -318,6 +564,7 @@ export default function VideoDubbingTab() {
         status !== "probing" &&
         masterStatus !== "generating" &&
         video?.job?.audioMix?.status !== "running" &&
+        video?.job?.finalMix?.status !== "running" &&
         video?.job?.videoExport?.status !== "running" &&
         video?.job?.separation?.status !== "processing")
     ) {
@@ -349,11 +596,109 @@ export default function VideoDubbingTab() {
     video?.error,
     video?.job?.id,
     video?.job?.audioMix?.status,
+    video?.job?.finalMix?.status,
     video?.job?.masterGeneration?.status,
     video?.job?.separation?.status,
     video?.job?.status,
     video?.job?.videoExport?.status,
   ]);
+
+  const serverMixerSettingsKey = JSON.stringify(
+    video?.job?.mixerSettings || null,
+  );
+  const localMixerSettingsKey = JSON.stringify(mixerSettings);
+
+  useEffect(() => {
+    releasePreviewGraph();
+    setPreviewError(null);
+    setMixerError(null);
+    mixerTouchedRef.current = false;
+  }, [video?.job?.id]);
+
+  useEffect(() => {
+    const savedSettings = video?.job?.mixerSettings;
+    setMixerSettings(savedSettings || DEFAULT_MIXER_SETTINGS);
+    setMixerSettingsSaved(Boolean(savedSettings));
+    setMixerMode(
+      video?.job?.mixSelection ||
+        (savedSettings ? "final" : "legacy"),
+    );
+  }, [video?.job?.id, serverMixerSettingsKey, video?.job?.mixSelection]);
+
+  useEffect(() => {
+    const job = video?.job;
+    if (!job || job.status !== "completed" || !mixerTouchedRef.current) return;
+    const version = ++mixerSettingsRequestRef.current;
+    if (mixerSettingsTimerRef.current !== null) {
+      window.clearTimeout(mixerSettingsTimerRef.current);
+    }
+    mixerSettingsTimerRef.current = window.setTimeout(() => {
+      mixerSaveChainRef.current = mixerSaveChainRef.current.then(async () => {
+        if (version !== mixerSettingsRequestRef.current) return;
+        try {
+          const response = await fetch(
+            `/api/video-dubbing/jobs/${job.id}/mixer-settings`,
+            {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: localMixerSettingsKey,
+            },
+          );
+          const result = await response.json();
+          if (!response.ok) {
+            throw new Error(result.error || "Không thể lưu mixer settings.");
+          }
+          if (version === mixerSettingsRequestRef.current) {
+            mixerTouchedRef.current = false;
+            setMixerSettingsSaved(true);
+            setMixerError(null);
+          }
+        } catch (error) {
+          if (version === mixerSettingsRequestRef.current) {
+            setMixerSettingsSaved(false);
+            setMixerError(
+              error instanceof Error
+                ? error.message
+                : "Không thể lưu mixer settings.",
+            );
+          }
+        }
+      });
+    }, 350);
+    return () => {
+      if (mixerSettingsTimerRef.current !== null) {
+        window.clearTimeout(mixerSettingsTimerRef.current);
+        mixerSettingsTimerRef.current = null;
+      }
+    };
+  }, [
+    video?.job?.id,
+    video?.job?.status,
+    localMixerSettingsKey,
+  ]);
+
+  useEffect(() => {
+    const context = audioContextRef.current;
+    if (!context) return;
+    for (const [track, node] of previewNodesRef.current) {
+      const setting = mixerSettings[track];
+      node.gain.gain.setTargetAtTime(
+        setting.muted ? 0 : setting.volumePercent / 100,
+        context.currentTime,
+        0.015,
+      );
+    }
+  }, [localMixerSettingsKey]);
+
+  useEffect(
+    () => () => {
+      releasePreviewGraph(false);
+      if (mixerSettingsTimerRef.current !== null) {
+        window.clearTimeout(mixerSettingsTimerRef.current);
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     const job = video?.job;
@@ -381,6 +726,8 @@ export default function VideoDubbingTab() {
                 exportedVideo:
                   job.videoExport?.status === "completed" ||
                   item.outputs.exportedVideo,
+                finalMix:
+                  job.finalMix?.status === "completed" || item.outputs.finalMix,
               },
             }
           : item,
@@ -640,13 +987,16 @@ export default function VideoDubbingTab() {
   const masterGeneration = job?.masterGeneration;
   const isMasterGenerating = masterGeneration?.status === "generating";
   const audioMix = job?.audioMix;
+  const finalMix = job?.finalMix;
   const videoExport = job?.videoExport;
   const separation = job?.separation;
   const isSeparationProcessing = separation?.status === "processing";
   const hasMixedAudio = Boolean(audioMix?.sizeBytes && audioMix.sizeBytes > 0);
+  const hasFinalMix = Boolean(finalMix?.sizeBytes && finalMix.sizeBytes > 44);
   const hasExportedVideo = Boolean(videoExport?.sizeBytes && videoExport.sizeBytes > 0);
   const isMediaProcessing =
     audioMix?.status === "running" ||
+    finalMix?.status === "running" ||
     videoExport?.status === "running" ||
     isSeparationProcessing;
   const hasMasterAudio = Boolean(
@@ -657,6 +1007,37 @@ export default function VideoDubbingTab() {
     audioMix?.status === "completed" &&
       audioMix.ttsVolumePercent === ttsVolumePercent &&
       audioMix.originalVolumePercent === originalVolumePercent,
+  );
+  const isFinalMixCurrent = Boolean(
+    finalMix &&
+      finalMix.status !== "stale" &&
+      finalMix.status !== "idle" &&
+      finalMix.sizeBytes &&
+      JSON.stringify(finalMix.renderedSettings) === localMixerSettingsKey,
+  );
+  const isSelectedMixCurrent =
+    mixerMode === "final"
+      ? mixerSettingsSaved && isFinalMixCurrent
+      : isMixCurrent;
+  const mixerTrackAvailability: Record<VideoDubbingMixerTrack, boolean> = {
+    vocals: Boolean(separation?.vocalsSizeBytes),
+    instrumental: Boolean(
+      separation?.instrumentalSizeBytes,
+    ),
+    ttsMaster: hasMasterAudio,
+  };
+  const hasPreviewTrack = Object.entries(mixerTrackAvailability).some(
+    ([track, available]) =>
+      available &&
+      !mixerSettings[track as VideoDubbingMixerTrack].muted &&
+      mixerSettings[track as VideoDubbingMixerTrack].volumePercent > 0,
+  );
+  const canRenderFinalMix = Boolean(
+    job?.status === "completed" &&
+      hasMasterAudio &&
+      hasPreviewTrack &&
+      !isMasterGenerating &&
+      !isMediaProcessing,
   );
   const canStartSeparation = Boolean(
     job?.status === "completed" &&
@@ -682,7 +1063,7 @@ export default function VideoDubbingTab() {
   );
   const canExportVideo = Boolean(
     job?.status === "completed" &&
-    isMixCurrent &&
+    isSelectedMixCurrent &&
     !isMasterGenerating &&
     !isMediaProcessing,
   );
@@ -723,6 +1104,68 @@ export default function VideoDubbingTab() {
       );
     }
   };
+  const startFinalMix = async () => {
+    if (!job) return;
+    setMediaError(null);
+    setMixerError(null);
+    try {
+      await flushMixerSettings(job.id);
+      const response = await fetch(
+        `/api/video-dubbing/jobs/${job.id}/final-mix`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: localMixerSettingsKey,
+        },
+      );
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error || "Không thể render final mix.");
+      }
+      setMixerMode("final");
+      setMixerSettingsSaved(true);
+      mixerTouchedRef.current = false;
+      setVideo((current) =>
+        current?.job?.id === job.id
+          ? {
+              ...current,
+              job: {
+                ...current.job,
+                mixerSettings,
+                mixSelection: "final",
+                finalMix: result.finalMix,
+              },
+            }
+          : current,
+      );
+    } catch (error) {
+      setMediaError(
+        error instanceof Error ? error.message : "Không thể render final mix.",
+      );
+    }
+  };
+  const cancelFinalMix = async () => {
+    if (!job) return;
+    try {
+      const response = await fetch(
+        `/api/video-dubbing/jobs/${job.id}/final-mix/cancel`,
+        { method: "POST" },
+      );
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error || "Không thể hủy final mix.");
+      }
+      if (result.job) {
+        setVideo((current) =>
+          current?.job?.id === job.id ? { ...current, job: result.job } : current,
+        );
+      }
+    } catch (error) {
+      setMediaError(
+        error instanceof Error ? error.message : "Không thể hủy final mix.",
+      );
+    }
+  };
   const cancelMaster = async () => {
     if (!job) return;
     try {
@@ -745,10 +1188,36 @@ export default function VideoDubbingTab() {
       );
     }
   };
+  const flushMixerSettings = async (jobId: string) => {
+    if (mixerSettingsTimerRef.current !== null) {
+      window.clearTimeout(mixerSettingsTimerRef.current);
+      mixerSettingsTimerRef.current = null;
+    }
+    const version = ++mixerSettingsRequestRef.current;
+    if (!mixerTouchedRef.current) return;
+    const response = await fetch(
+      `/api/video-dubbing/jobs/${jobId}/mixer-settings`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: localMixerSettingsKey,
+      },
+    );
+    const result = await response.json();
+    if (!response.ok) {
+      throw new Error(result.error || "Không thể lưu mixer settings.");
+    }
+    if (version === mixerSettingsRequestRef.current) {
+      mixerTouchedRef.current = false;
+      setMixerSettingsSaved(true);
+      setMixerError(null);
+    }
+  };
   const startAudioMix = async () => {
     if (!job) return;
     setMediaError(null);
     try {
+      await flushMixerSettings(job.id);
       const response = await fetch(
         `/api/video-dubbing/jobs/${job.id}/audio-mix`,
         {
@@ -763,9 +1232,17 @@ export default function VideoDubbingTab() {
       }
       setVideo((current) =>
         current?.job?.id === job.id
-          ? { ...current, job: { ...current.job, audioMix: result.audioMix } }
+          ? {
+              ...current,
+              job: {
+                ...current.job,
+                audioMix: result.audioMix,
+                mixSelection: "legacy",
+              },
+            }
           : current,
       );
+      setMixerMode("legacy");
     } catch (error) {
       setMediaError(
         error instanceof Error ? error.message : "Không thể bắt đầu trộn âm thanh.",
@@ -956,6 +1433,7 @@ export default function VideoDubbingTab() {
                 ["Vocals", item.outputs.vocals],
                 ["Instrumental", item.outputs.instrumental],
                 ["Bản phối", item.outputs.mixedAudio],
+                ["Final mix", item.outputs.finalMix],
                 ["MP4", item.outputs.exportedVideo],
               ] as const;
               return (
@@ -1642,17 +2120,287 @@ export default function VideoDubbingTab() {
         </section>
       )}
 
-      {(hasMasterAudio || hasMixedAudio || hasExportedVideo) && (
+      {job?.status === "completed" && (
+        <section className="space-y-4 rounded-2xl border border-cyan-500/25 bg-slate-900/80 p-4 sm:p-5">
+          <div className="flex items-start gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-cyan-500/25 bg-cyan-500/15 text-cyan-300">
+              <AudioLines className="h-5 w-5" />
+            </div>
+            <div>
+              <h3 className="font-semibold text-white">Mixer Preview · 3 track</h3>
+              <p className="mt-1 text-xs leading-relaxed text-slate-400">
+                Nghe đồng bộ bằng Web Audio với gain riêng cho vocals,
+                instrumental và TTS Master. Mọi thay đổi chỉ áp dụng tức thời
+                cho preview; chỉ nút render mới tạo file dùng khi xuất MP4.
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+            {(
+              [
+                ["vocals", "Giọng tách (vocals)"],
+                ["instrumental", "Nhạc nền (instrumental)"],
+                ["ttsMaster", "TTS Master"],
+              ] as const
+            ).map(([track, label]) => {
+              const available = mixerTrackAvailability[track];
+              const setting = mixerSettings[track];
+              return (
+                <div
+                  key={track}
+                  className={`space-y-3 rounded-xl border p-3 ${
+                    available
+                      ? "border-slate-700 bg-slate-950/60"
+                      : "border-slate-800 bg-slate-950/30 opacity-60"
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-semibold text-slate-200">
+                      {label}
+                    </span>
+                    <span className="text-[10px] text-slate-500">
+                      {available ? "Sẵn sàng" : "Chưa có track"}
+                    </span>
+                  </div>
+                  <label className="block space-y-2">
+                    <span className="flex justify-between text-[11px] text-slate-400">
+                      <span>Âm lượng</span>
+                      <span className="font-semibold text-slate-200">
+                        {setting.volumePercent}%
+                      </span>
+                    </span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={200}
+                      step={1}
+                      value={setting.volumePercent}
+                      disabled={!available || isMediaProcessing}
+                      onChange={(event) =>
+                        updateMixerSetting(track, {
+                          volumePercent: Number(event.target.value),
+                        })
+                      }
+                      className="w-full accent-cyan-400 disabled:cursor-not-allowed disabled:opacity-40"
+                      aria-label={`${label} preview volume`}
+                    />
+                  </label>
+                  <label className="inline-flex items-center gap-2 text-[11px] text-slate-300">
+                    <input
+                      type="checkbox"
+                      checked={setting.muted}
+                      disabled={!available || isMediaProcessing}
+                      onChange={(event) =>
+                        updateMixerSetting(track, {
+                          muted: event.target.checked,
+                        })
+                      }
+                      className="accent-cyan-400"
+                    />
+                    Tắt track
+                  </label>
+                </div>
+              );
+            })}
+          </div>
+
+          {!hasMasterAudio && (
+            <p className="rounded-lg border border-amber-500/25 bg-amber-950/20 p-3 text-xs text-amber-200">
+              Cần tạo TTS Master bằng pipeline hiện có trước khi render final
+              mix. Các track vocals/instrumental có thể nghe riêng ở phần tách
+              audio phía trên.
+            </p>
+          )}
+          {mixerError && (
+            <p className="rounded-lg border border-rose-500/30 bg-rose-950/30 p-3 text-xs text-rose-200">
+              {mixerError}
+            </p>
+          )}
+          {previewError && (
+            <p className="rounded-lg border border-rose-500/30 bg-rose-950/30 p-3 text-xs text-rose-200">
+              {previewError}
+            </p>
+          )}
+          {mediaError && (
+            <p className="rounded-lg border border-rose-500/30 bg-rose-950/30 p-3 text-xs text-rose-200">
+              {mediaError}
+            </p>
+          )}
+
+          <div className="space-y-3 rounded-xl border border-slate-800 bg-slate-950/60 p-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void playMixerPreview()}
+                disabled={!hasPreviewTrack || isMediaProcessing}
+                className="inline-flex items-center gap-2 rounded-lg border border-cyan-500/30 bg-cyan-950/30 px-3 py-2 text-xs font-semibold text-cyan-100 hover:bg-cyan-950/60 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {previewStatus === "playing" ? (
+                  <Pause className="h-3.5 w-3.5" />
+                ) : (
+                  <Play className="h-3.5 w-3.5" />
+                )}
+                {previewStatus === "playing"
+                  ? "Tạm dừng preview"
+                  : previewStatus === "paused"
+                    ? "Tiếp tục preview"
+                    : "Nghe thử đồng bộ"}
+              </button>
+              <button
+                type="button"
+                onClick={stopMixerPreview}
+                disabled={previewStatus === "stopped"}
+                className="inline-flex items-center gap-2 rounded-lg border border-slate-700 px-3 py-2 text-xs text-slate-300 hover:text-white disabled:opacity-40"
+              >
+                <Square className="h-3 w-3" />
+                Dừng
+              </button>
+              <span className="text-xs tabular-nums text-slate-400">
+                {formatDuration(previewCurrentTime)}
+                {job.metadata && ` / ${formatDuration(job.metadata.durationSeconds)}`}
+              </span>
+            </div>
+            {job.metadata && (
+              <input
+                type="range"
+                min={0}
+                max={job.metadata.durationSeconds}
+                step={0.05}
+                value={Math.min(
+                  previewCurrentTime,
+                  job.metadata.durationSeconds,
+                )}
+                onChange={(event) =>
+                  seekMixerPreview(Number(event.target.value))
+                }
+                className="w-full accent-cyan-400"
+                aria-label="Tua mixer preview"
+              />
+            )}
+            <p className="text-[10px] leading-relaxed text-slate-500">
+              Preview dùng compressor giới hạn đỉnh để giảm nguy cơ clipping;
+              bản render cuối được FFmpeg trộn và xác minh riêng. Hai kết quả
+              nghe có thể khác nhẹ.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={() => void startFinalMix()}
+              disabled={!canRenderFinalMix}
+              className="inline-flex items-center gap-2 rounded-xl bg-cyan-400 px-4 py-2.5 text-sm font-bold text-slate-950 hover:bg-cyan-300 disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-500"
+            >
+              {finalMix?.status === "running" ? (
+                <LoaderCircle className="h-4 w-4 animate-spin" />
+              ) : (
+                <Volume2 className="h-4 w-4" />
+              )}
+              Render final mix
+            </button>
+            {finalMix?.status === "running" && (
+              <button
+                type="button"
+                onClick={() => void cancelFinalMix()}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 px-3 py-2 text-xs text-slate-300 hover:border-rose-500/40 hover:text-rose-200"
+              >
+                <X className="h-3.5 w-3.5" />
+                Hủy render
+              </button>
+            )}
+            {mixerSettingsSaved ? (
+              <span className="text-[11px] text-emerald-300">
+                Cấu hình mixer đã lưu cho job
+              </span>
+            ) : mixerTouchedRef.current ? (
+              <span className="text-[11px] text-slate-400">
+                Đang lưu cấu hình mixer…
+              </span>
+            ) : (
+              <span className="text-[11px] text-slate-400">
+                Cấu hình mặc định · thay đổi để lưu
+              </span>
+            )}
+          </div>
+
+          {finalMix?.status === "running" && (
+            <div className="space-y-2 rounded-xl border border-cyan-500/25 bg-cyan-950/20 p-3">
+              <div className="flex justify-between gap-3 text-xs text-cyan-100">
+                <span>
+                  {finalMix.phase === "validating"
+                    ? "Đang xác minh WAV đầu ra"
+                    : "Đang render các track bằng FFmpeg"}
+                </span>
+                <span>
+                  {finalMix.progressPercent === undefined
+                    ? "Đang xử lý…"
+                    : `${finalMix.progressPercent}%`}
+                </span>
+              </div>
+              <div
+                role="progressbar"
+                aria-label="Tiến trình render final mix"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={finalMix.progressPercent}
+                className="h-2 overflow-hidden rounded-full bg-slate-800"
+              >
+                <div
+                  className="h-full rounded-full bg-cyan-400 transition-all"
+                  style={{
+                    width: `${finalMix.progressPercent ?? 30}%`,
+                    ...(finalMix.progressPercent === undefined
+                      ? { animation: "pulse 1.5s ease-in-out infinite" }
+                      : {}),
+                  }}
+                />
+              </div>
+            </div>
+          )}
+          {finalMix?.status === "failed" && finalMix.error && (
+            <p className="rounded-lg border border-rose-500/30 bg-rose-950/30 p-3 text-xs text-rose-200">
+              Render final mix thất bại: {finalMix.error}
+            </p>
+          )}
+          {finalMix?.status === "cancelled" && (
+            <p className="text-xs text-amber-200">Đã hủy render final mix.</p>
+          )}
+          {finalMix?.status === "interrupted" && finalMix.error && (
+            <p className="text-xs text-amber-200">{finalMix.error}</p>
+          )}
+          {hasFinalMix && job && (
+            <div className="space-y-2 rounded-xl border border-emerald-500/25 bg-emerald-950/20 p-3.5">
+              <p className="text-xs font-semibold text-emerald-300">
+                {isFinalMixCurrent
+                  ? "Final mix đã xác minh"
+                  : "Final mix cũ vẫn được giữ; chưa khớp mixer settings hiện tại"}
+              </p>
+              <audio
+                key={`${job.id}-${finalMix?.sizeBytes}`}
+                controls
+                preload="metadata"
+                src={`/api/video-dubbing/jobs/${job.id}/final-mix-audio`}
+                className="w-full"
+              >
+                Trình duyệt không hỗ trợ phát WAV.
+              </audio>
+            </div>
+          )}
+        </section>
+      )}
+
+      {(hasMasterAudio || hasMixedAudio || hasFinalMix || hasExportedVideo) && (
         <section className="rounded-2xl border border-slate-800 bg-slate-900/80 p-4 sm:p-5 space-y-5">
           <div className="flex items-start gap-3">
             <div className="w-10 h-10 rounded-xl bg-sky-500/15 text-sky-300 border border-sky-500/25 flex items-center justify-center shrink-0">
               <Volume2 className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="font-semibold text-white">Trộn âm thanh</h3>
+              <h3 className="font-semibold text-white">Trộn cơ bản · 2 track</h3>
               <p className="mt-1 text-xs leading-relaxed text-slate-400">
-                Điều chỉnh riêng gain của TTS Master và audio gốc. 100% giữ
-                gain nguồn; giới hạn mỗi thanh từ 0% đến 200%.
+                Mixer tương thích cũ cho TTS Master và audio gốc của video.
+                Dùng Mixer Preview 3 track ở trên để phối vocals/instrumental.
               </p>
             </div>
           </div>
@@ -1827,7 +2575,7 @@ export default function VideoDubbingTab() {
           {hasMixedAudio && job && (
             <div className="space-y-3 rounded-xl border border-emerald-500/25 bg-emerald-950/20 p-3.5">
               <p className="text-xs font-semibold text-emerald-300">
-                {isMixCurrent
+                {isMixCurrent && mixerMode === "legacy"
                   ? "Nghe thử bản phối"
                   : "Bản phối trước đó vẫn được giữ nguyên"}
               </p>
@@ -1864,7 +2612,7 @@ export default function VideoDubbingTab() {
                   download={`video-dubbing-${job.id}.mp4`}
                   className="inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-500/40 bg-emerald-950/30 px-4 py-2.5 text-sm font-bold text-emerald-200 hover:bg-emerald-950/60"
                 >
-                  {videoExport?.status === "completed" && isMixCurrent
+                  {videoExport?.status === "completed" && isSelectedMixCurrent
                     ? "Tải MP4"
                     : "Tải MP4 trước đó"}{" "}
                   ({formatFileSize(videoExport?.sizeBytes || 0)})
@@ -1877,9 +2625,9 @@ export default function VideoDubbingTab() {
                   </span>
                 )}
             </div>
-            {!isMixCurrent && (
+            {!isSelectedMixCurrent && (
               <p className="text-xs text-slate-500">
-                Tạo lại bản phối với mức âm lượng hiện tại trước khi xuất video.
+                Render lại đúng mixer mode và settings hiện tại trước khi xuất video.
               </p>
             )}
           </div>

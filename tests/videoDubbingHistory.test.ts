@@ -210,6 +210,23 @@ test("lists persistent jobs after restart, verifies outputs, streams the right j
     durationSeconds: 1,
     sizeBytes: fs.statSync(path.join(directoryA, "output.mp4")).size,
   });
+  const mixerSettings = {
+    vocals: { volumePercent: 80, muted: false },
+    instrumental: { volumePercent: 35, muted: true },
+    ttsMaster: { volumePercent: 125, muted: false },
+  };
+  firstManager.updateMixerSettings(jobA, mixerSettings);
+  const finalMixPath = path.join(directoryA, "mixed-audio.wav");
+  createWav(finalMixPath);
+  firstManager.setFinalMixTask(jobA, {
+    status: "completed",
+    phase: "validating",
+    progressPercent: 100,
+    durationSeconds: 1,
+    sizeBytes: fs.statSync(finalMixPath).size,
+    renderedSettings: mixerSettings,
+    includedTracks: ["ttsMaster"],
+  });
 
   const restartedManager = createManager(storage);
   const availability: VideoDubbingSeparationAvailability = {
@@ -258,7 +275,11 @@ test("lists persistent jobs after restart, verifies outputs, streams the right j
       instrumental: true,
       mixedAudio: true,
       exportedVideo: true,
+      finalMix: true,
     });
+    assert.deepEqual(first.job.mixerSettings, mixerSettings);
+    assert.equal(first.job.finalMix?.status, "completed");
+    assert.equal(first.job.mixSelection, "final");
 
     const reopened = await fetch(`${baseUrl}/jobs/${jobA}`);
     assert.equal(reopened.status, 200);

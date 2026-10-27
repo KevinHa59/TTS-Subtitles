@@ -131,11 +131,13 @@ function createCoordinator(manager: VideoDubbingManager) {
 async function waitForTask(
   manager: VideoDubbingManager,
   jobId: string,
-  task: "audioMix" | "videoExport",
+  task: "audioMix" | "videoExport" | "finalMix",
 ): Promise<void> {
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
-    const state = manager.getJob(jobId)?.[task];
+    const job = manager.getJob(jobId);
+    const state =
+      task === "finalMix" ? job?.finalMix : job?.[task];
     if (state?.status === "completed" || state?.status === "failed" || state?.status === "cancelled") {
       return;
     }
@@ -214,7 +216,7 @@ function probeMedia(filePath: string) {
     "-v",
     "error",
     "-show_entries",
-    "format=duration:stream=codec_type,codec_name,width,height",
+    "format=duration:stream=codec_type,codec_name,width,height,sample_rate,channels",
     "-of",
     "json",
     filePath,
@@ -226,6 +228,8 @@ function probeMedia(filePath: string) {
       codec_name: string;
       width?: number;
       height?: number;
+      sample_rate?: string;
+      channels?: number;
     }>;
   };
 }
@@ -380,6 +384,197 @@ test("rejects invalid gains and requires a completed Master before mixing", asyn
     );
   }
   assert.equal(manager.getJob(job.id)?.audioMix, undefined);
+});
+
+test("renders a synchronized three-track WAV, persists settings, blocks stale export, and exports AAC MP4", async () => {
+  const root = await createTemporaryDirectory();
+  const fixtureDirectory = path.join(root, "fixtures");
+  fs.mkdirSync(fixtureDirectory);
+  const manager = new VideoDubbingManager({
+    storageDirectory: path.join(root, "jobs"),
+    ffprobePath: "ffprobe",
+  });
+  const coordinator = createCoordinator(manager);
+  const job = await createReadyJob(
+    manager,
+    fixtureDirectory,
+    "three-track",
+    1.4,
+    true,
+    0.6,
+  );
+  const jobDirectory = manager.getJobDirectory(job.id)!;
+  const vocals = createMaster(
+    path.join(fixtureDirectory, "vocals.wav"),
+    1.4,
+    440,
+  );
+  const instrumental = createMaster(
+    path.join(fixtureDirectory, "instrumental.wav"),
+    1.4,
+    660,
+  );
+  fs.writeFileSync(path.join(jobDirectory, "vocals.wav"), vocals);
+  fs.writeFileSync(path.join(jobDirectory, "instrumental.wav"), instrumental);
+  manager.setSeparationTask(job.id, {
+    status: "completed",
+    phase: "validating",
+    progressPercent: 100,
+    completedSegments: 1,
+    totalSegments: 1,
+    durationSeconds: 1.4,
+    sampleRate: 48_000,
+    channels: 2,
+    vocalsSizeBytes: vocals.length,
+    instrumentalSizeBytes: instrumental.length,
+  });
+
+  const vocalOnly = {
+    vocals: { volumePercent: 100, muted: false },
+    instrumental: { volumePercent: 0, muted: false },
+    ttsMaster: { volumePercent: 0, muted: false },
+  };
+  coordinator.startFinalMix(job.id, vocalOnly);
+  await waitForTask(manager, job.id, "finalMix");
+  assert.equal(manager.getJob(job.id)?.finalMix?.status, "completed");
+  assert.deepEqual(
+    manager.getJob(job.id)?.finalMix?.includedTracks,
+    ["vocals"],
+  );
+  let finalMixPath = coordinator.getFinalMixPath(job.id);
+  assert.ok(finalMixPath);
+  let metadata = probeMedia(finalMixPath);
+  assert.equal(metadata.streams[0]?.codec_name, "pcm_s16le");
+  assert.equal(metadata.streams[0]?.sample_rate, "48000");
+  assert.equal(metadata.streams[0]?.channels, 2);
+  assert.ok(Math.abs(Number(metadata.format.duration) - 1.4) < 0.1);
+  let samples = decodeAudio(finalMixPath);
+  assert.ok(amplitudeAt(samples, 440, 0.1, 0.2) > 0.02);
+  assert.ok(amplitudeAt(samples, 660, 0.1, 0.2) < 0.004);
+  assert.ok(amplitudeAt(samples, 880, 0.1, 0.2) < 0.004);
+  const successfulMixBytes = fs.readFileSync(finalMixPath);
+  const failingCoordinator = new VideoDubbingMediaCoordinator(manager, {
+    ffmpegPath: path.join(root, "missing-final-mix-ffmpeg.exe"),
+    ffprobePath: "ffprobe",
+  });
+  failingCoordinator.startFinalMix(job.id, vocalOnly);
+  await waitForTask(manager, job.id, "finalMix");
+  assert.equal(manager.getJob(job.id)?.finalMix?.status, "failed");
+  assert.deepEqual(fs.readFileSync(finalMixPath), successfulMixBytes);
+
+  const backgroundAndTts = {
+    vocals: { volumePercent: 0, muted: false },
+    instrumental: { volumePercent: 100, muted: false },
+    ttsMaster: { volumePercent: 100, muted: false },
+  };
+  assert.throws(
+    () =>
+      coordinator.updateMixerSettings(job.id, {
+        ...backgroundAndTts,
+        vocals: { volumePercent: Number.NaN, muted: false },
+      }),
+    /không hợp lệ/i,
+  );
+  coordinator.updateMixerSettings(job.id, backgroundAndTts);
+  assert.equal(manager.getJob(job.id)?.finalMix?.status, "stale");
+  assert.throws(() => coordinator.startExport(job.id), /render lại/i);
+  coordinator.startFinalMix(job.id, backgroundAndTts);
+  await waitForTask(manager, job.id, "finalMix");
+  assert.equal(manager.getJob(job.id)?.finalMix?.status, "completed");
+  assert.deepEqual(
+    manager.getJob(job.id)?.finalMix?.includedTracks,
+    ["ttsMaster", "instrumental"],
+  );
+  finalMixPath = coordinator.getFinalMixPath(job.id);
+  assert.ok(finalMixPath);
+  samples = decodeAudio(finalMixPath);
+  assert.ok(amplitudeAt(samples, 660, 0.1, 0.2) > 0.02);
+  assert.ok(amplitudeAt(samples, 880, 0.1, 0.2) > 0.02);
+  assert.ok(amplitudeAt(samples, 440, 0.1, 0.2) < 0.004);
+
+  coordinator.startExport(job.id);
+  await waitForTask(manager, job.id, "videoExport");
+  assert.equal(manager.getJob(job.id)?.videoExport?.status, "completed");
+  const exportedPath = coordinator.getVideoExportPath(job.id);
+  assert.ok(exportedPath);
+  const exportMetadata = probeMedia(exportedPath);
+  assert.ok(exportMetadata.streams.some((stream) => stream.codec_type === "video"));
+  const exportedAudio = exportMetadata.streams.find(
+    (stream) => stream.codec_type === "audio",
+  );
+  assert.equal(exportedAudio?.codec_name, "aac");
+  assert.ok(Math.abs(Number(exportMetadata.format.duration) - 1.4) < 0.1);
+
+  const app = express();
+  app.use(
+    "/api/video-dubbing",
+    createVideoDubbingRouter(manager, undefined, coordinator),
+  );
+  const server = app.listen(0);
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    const response = await fetch(
+      `http://127.0.0.1:${address.port}/api/video-dubbing/jobs/${job.id}/final-mix-audio`,
+    );
+    assert.equal(response.status, 200);
+    assert.deepEqual(
+      Buffer.from(await response.arrayBuffer()),
+      fs.readFileSync(finalMixPath),
+    );
+  } finally {
+    await new Promise<void>((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
+  }
+  manager.setMasterGeneration(job.id, {
+    status: "generating",
+    progressPercent: 0,
+    completedSentences: 0,
+    totalSentences: 1,
+  });
+  manager.setMasterGeneration(job.id, {
+    status: "cancelled",
+    progressPercent: 0,
+    completedSentences: 0,
+    totalSentences: 1,
+  });
+  assert.equal(manager.getJob(job.id)?.finalMix?.status, "stale");
+  assert.throws(() => coordinator.startExport(job.id), /render lại/i);
+});
+
+test("cancels a final mix before publishing output and leaves no task-owned files", async () => {
+  const root = await createTemporaryDirectory();
+  const fixtureDirectory = path.join(root, "fixtures");
+  fs.mkdirSync(fixtureDirectory);
+  const manager = new VideoDubbingManager({
+    storageDirectory: path.join(root, "jobs"),
+    ffprobePath: "ffprobe",
+  });
+  const coordinator = createCoordinator(manager);
+  const job = await createReadyJob(
+    manager,
+    fixtureDirectory,
+    "cancel-final-mix",
+    1.4,
+    true,
+    0.6,
+  );
+  const settings = {
+    vocals: { volumePercent: 0, muted: false },
+    instrumental: { volumePercent: 0, muted: false },
+    ttsMaster: { volumePercent: 100, muted: false },
+  };
+  coordinator.startFinalMix(job.id, settings);
+  await coordinator.cancel(job.id);
+  assert.equal(manager.getJob(job.id)?.finalMix?.status, "cancelled");
+  assert.equal(coordinator.isBusy(job.id), false);
+  const directory = manager.getJobDirectory(job.id)!;
+  assert.equal(fs.existsSync(path.join(directory, "mixed-audio.wav")), false);
+  assert.deepEqual(
+    fs.readdirSync(directory).filter((file) => file.startsWith(".mixed-audio-")),
+    [],
+  );
 });
 
 test("cancels a running mix and removes task-owned temporary files", async () => {

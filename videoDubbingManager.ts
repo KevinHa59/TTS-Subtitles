@@ -11,6 +11,8 @@ import {
   VideoDubbingMasterGeneration,
   VideoDubbingMetadata,
   VideoDubbingJobHistoryItem,
+  VideoDubbingFinalMixTask,
+  VideoDubbingMixerSettings,
   VideoDubbingSeparationTask,
 } from "./src/types/videoDubbing";
 
@@ -43,6 +45,7 @@ const MEDIA_STATUSES = new Set([
   "failed",
   "cancelled",
   "interrupted",
+  "stale",
 ]);
 const SEPARATION_STATUSES = new Set([
   "unavailable",
@@ -50,6 +53,15 @@ const SEPARATION_STATUSES = new Set([
   "completed",
   "error",
   "cancelled",
+  "interrupted",
+]);
+const FINAL_MIX_STATUSES = new Set([
+  "idle",
+  "running",
+  "completed",
+  "failed",
+  "cancelled",
+  "stale",
   "interrupted",
 ]);
 
@@ -244,6 +256,20 @@ export class VideoDubbingManager {
           videoExport: job.state.videoExport
             ? { ...job.state.videoExport }
             : undefined,
+          finalMix: job.state.finalMix
+            ? {
+                ...job.state.finalMix,
+                renderedSettings: job.state.finalMix.renderedSettings
+                  ? this.cloneMixerSettings(job.state.finalMix.renderedSettings)
+                  : undefined,
+                includedTracks: job.state.finalMix.includedTracks
+                  ? [...job.state.finalMix.includedTracks]
+                  : undefined,
+              }
+            : undefined,
+          mixerSettings: job.state.mixerSettings
+            ? this.cloneMixerSettings(job.state.mixerSettings)
+            : undefined,
           separation: job.state.separation
             ? { ...job.state.separation }
             : undefined,
@@ -259,8 +285,77 @@ export class VideoDubbingManager {
     const job = this.findJob(jobId);
     if (!job) throw new Error("Không tìm thấy job Video Dubbing.");
     job.state[task] = { ...state };
+    if (task === "audioMix") job.state.mixSelection = "legacy";
     job.state.updatedAt = Date.now();
     this.persistJob(job);
+  }
+
+  setFinalMixTask(jobId: string, state: VideoDubbingFinalMixTask): void {
+    const job = this.findJob(jobId);
+    if (!job) throw new Error("Không tìm thấy job Video Dubbing.");
+    job.state.finalMix = {
+      ...state,
+      renderedSettings: state.renderedSettings
+        ? this.cloneMixerSettings(state.renderedSettings)
+        : undefined,
+      includedTracks: state.includedTracks
+        ? [...state.includedTracks]
+        : undefined,
+    };
+    job.state.mixSelection = "final";
+    job.state.updatedAt = Date.now();
+    this.persistJob(job);
+  }
+
+  updateMixerSettings(
+    jobId: string,
+    settings: VideoDubbingMixerSettings,
+  ): VideoDubbingMixerSettings {
+    const job = this.findJob(jobId);
+    if (!job) throw new Error("Không tìm thấy job Video Dubbing.");
+    if (
+      job.state.finalMix?.status === "running" ||
+      job.state.videoExport?.status === "running"
+    ) {
+      throw new Error("Không thể thay đổi mixer settings khi render hoặc xuất video đang chạy.");
+    }
+    const normalized = this.validateMixerSettings(settings);
+    job.state.mixerSettings = normalized;
+    job.state.mixSelection = "final";
+    if (
+      job.state.finalMix?.renderedSettings &&
+      JSON.stringify(job.state.finalMix.renderedSettings) !==
+        JSON.stringify(normalized)
+    ) {
+      job.state.finalMix = {
+        ...job.state.finalMix,
+        status: "stale",
+        error: "Mixer settings đã thay đổi; hãy render lại final mix.",
+      };
+      if (job.state.videoExport?.status === "completed") {
+        job.state.videoExport = {
+          ...job.state.videoExport,
+          status: "stale",
+          error: "Mixer settings đã thay đổi; hãy render final mix và xuất lại MP4.",
+        } as VideoDubbingJob["videoExport"];
+      }
+    } else if (
+      job.state.finalMix?.renderedSettings &&
+      JSON.stringify(job.state.finalMix.renderedSettings) ===
+        JSON.stringify(normalized) &&
+      ["stale", "failed", "cancelled"].includes(job.state.finalMix.status) &&
+      fs.existsSync(path.join(job.directory, "mixed-audio.wav")) &&
+      fs.statSync(path.join(job.directory, "mixed-audio.wav")).size > 44
+    ) {
+      job.state.finalMix = {
+        ...job.state.finalMix,
+        status: "completed",
+        error: undefined,
+      };
+    }
+    job.state.updatedAt = Date.now();
+    this.persistJob(job);
+    return this.cloneMixerSettings(normalized);
   }
 
   setSeparationTask(
@@ -269,6 +364,15 @@ export class VideoDubbingManager {
   ): void {
     const job = this.findJob(jobId);
     if (!job) throw new Error("Không tìm thấy job Video Dubbing.");
+    if (
+      state.status === "completed" &&
+      job.state.finalMix?.renderedSettings &&
+      job.state.finalMix.includedTracks?.some(
+        (track) => track === "vocals" || track === "instrumental",
+      )
+    ) {
+      this.invalidateFinalMix(job, "Các track tách audio đã được thay đổi.");
+    }
     job.state.separation = { ...state };
     job.state.updatedAt = Date.now();
     this.persistJob(job);
@@ -294,6 +398,12 @@ export class VideoDubbingManager {
   ): void {
     const job = this.findJob(jobId);
     if (!job) throw new Error("Không tìm thấy job Video Dubbing.");
+    if (
+      generation.status === "generating" &&
+      job.state.finalMix?.renderedSettings
+    ) {
+      this.invalidateFinalMix(job, "TTS Master đang được tạo lại.");
+    }
     job.state.masterGeneration = { ...generation };
     job.state.updatedAt = Date.now();
     this.persistJob(job);
@@ -337,6 +447,9 @@ export class VideoDubbingManager {
       durationSeconds,
       sizeBytes: fs.statSync(masterPath).size,
     };
+    if (job.state.finalMix?.renderedSettings) {
+      this.invalidateFinalMix(job, "TTS Master đã thay đổi.");
+    }
     job.state.masterGeneration = generation;
     job.state.updatedAt = Date.now();
     this.persistJob(job);
@@ -431,6 +544,8 @@ export class VideoDubbingManager {
           (parsed.audioMix && !MEDIA_STATUSES.has(parsed.audioMix.status)) ||
           (parsed.videoExport &&
             !MEDIA_STATUSES.has(parsed.videoExport.status)) ||
+          (parsed.finalMix &&
+            !FINAL_MIX_STATUSES.has(parsed.finalMix.status)) ||
           (parsed.separation &&
             !SEPARATION_STATUSES.has(parsed.separation.status))
         ) {
@@ -446,6 +561,15 @@ export class VideoDubbingManager {
             ? parsed.updatedAt
             : parsed.createdAt,
         } as VideoDubbingJob;
+        if (state.mixerSettings) {
+          try {
+            state.mixerSettings = this.validateMixerSettings(state.mixerSettings);
+          } catch {
+            state.mixerSettings = undefined;
+            state.warning =
+              "Mixer settings cũ không hợp lệ; đã quay về mặc định khi mở mixer.";
+          }
+        }
       } catch {
         metadataWasInvalid = true;
       }
@@ -506,6 +630,13 @@ export class VideoDubbingManager {
           ...state.videoExport,
           status: "interrupted",
           error: "Xuất video bị gián đoạn khi máy chủ dừng.",
+        };
+      }
+      if (state.finalMix?.status === "running") {
+        state.finalMix = {
+          ...state.finalMix,
+          status: "interrupted",
+          error: "Render final mix bị gián đoạn khi máy chủ dừng.",
         };
       }
       if (state.separation?.status === "processing") {
@@ -577,6 +708,9 @@ export class VideoDubbingManager {
       ) <= 0.1;
     const mixedAudio = await this.isValidAudio(
       path.join(job.directory, "mixed-audio.m4a"),
+    );
+    const finalMixAudio = await this.isValidAudio(
+      path.join(job.directory, "mixed-audio.wav"),
     );
     const exportedVideo = await this.isValidVideoFile(
       path.join(job.directory, "output.mp4"),
@@ -659,6 +793,35 @@ export class VideoDubbingManager {
       };
     }
     if (
+      job.state.finalMix?.renderedSettings &&
+      !finalMixAudio
+    ) {
+      job.state.finalMix = {
+        ...job.state.finalMix,
+        status: "interrupted",
+        sizeBytes: undefined,
+        durationSeconds: undefined,
+        error: "File final mix bị thiếu hoặc không hợp lệ.",
+      };
+      warnings.push("Final mix không còn khả dụng.");
+    } else if (
+      finalMixAudio &&
+      ![
+        "completed",
+        "stale",
+        "failed",
+        "cancelled",
+        "interrupted",
+      ].includes(job.state.finalMix?.status || "")
+    ) {
+      job.state.finalMix = {
+        ...job.state.finalMix,
+        status: "interrupted",
+        error: "Có file final mix nhưng metadata xác nhận chưa hoàn tất.",
+      };
+      warnings.push("Final mix cần được render lại.");
+    }
+    if (
       job.state.separation?.status === "completed" &&
       !separationAligned
     ) {
@@ -709,6 +872,7 @@ export class VideoDubbingManager {
         instrumental,
         mixedAudio,
         exportedVideo,
+        finalMix: finalMixAudio,
       },
       warning: warnings.length ? [...new Set(warnings)].join(" ") : undefined,
     };
@@ -853,6 +1017,61 @@ export class VideoDubbingManager {
         }`,
       );
     }
+  }
+
+  private validateMixerSettings(
+    value: VideoDubbingMixerSettings,
+  ): VideoDubbingMixerSettings {
+    const tracks = ["vocals", "instrumental", "ttsMaster"] as const;
+    if (!value || typeof value !== "object") {
+      throw new Error("Mixer settings không hợp lệ.");
+    }
+    const result = {} as VideoDubbingMixerSettings;
+    for (const track of tracks) {
+      const setting = value[track];
+      if (
+        !setting ||
+        typeof setting.volumePercent !== "number" ||
+        !Number.isFinite(setting.volumePercent) ||
+        setting.volumePercent < 0 ||
+        setting.volumePercent > 200 ||
+        typeof setting.muted !== "boolean"
+      ) {
+        throw new Error(`Mixer settings của track ${track} không hợp lệ.`);
+      }
+      result[track] = {
+        volumePercent: setting.volumePercent,
+        muted: setting.muted,
+      };
+    }
+    return result;
+  }
+
+  private cloneMixerSettings(
+    settings: VideoDubbingMixerSettings,
+  ): VideoDubbingMixerSettings {
+    return {
+      vocals: { ...settings.vocals },
+      instrumental: { ...settings.instrumental },
+      ttsMaster: { ...settings.ttsMaster },
+    };
+  }
+
+  private invalidateFinalMix(job: InternalJob, reason: string): void {
+    if (!job.state.finalMix?.renderedSettings) return;
+    job.state.finalMix = {
+      ...job.state.finalMix,
+      status: "stale",
+      error: `${reason} Hãy render lại final mix.`,
+    };
+    if (job.state.videoExport?.status === "completed") {
+      job.state.videoExport = {
+        ...job.state.videoExport,
+        status: "stale",
+        error: `${reason} Hãy render lại final mix và xuất lại MP4.`,
+      };
+    }
+    job.state.mixSelection = "final";
   }
 
   private async processUpload(

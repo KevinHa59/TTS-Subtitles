@@ -30,12 +30,45 @@ export interface VideoDubbingJob {
   metadata?: VideoDubbingMetadata;
   masterGeneration?: VideoDubbingMasterGeneration;
   audioMix?: VideoDubbingMediaTask;
+  finalMix?: VideoDubbingFinalMixTask;
+  mixerSettings?: VideoDubbingMixerSettings;
+  mixSelection?: "legacy" | "final";
   videoExport?: VideoDubbingMediaTask;
   separation?: VideoDubbingSeparationTask;
   error?: string;
   warning?: string;
   createdAt: number;
   updatedAt: number;
+}
+
+export type VideoDubbingMixerTrack = "vocals" | "instrumental" | "ttsMaster";
+
+export interface VideoDubbingMixerTrackSettings {
+  volumePercent: number;
+  muted: boolean;
+}
+
+export type VideoDubbingMixerSettings = Record<
+  VideoDubbingMixerTrack,
+  VideoDubbingMixerTrackSettings
+>;
+
+export interface VideoDubbingFinalMixTask {
+  status:
+    | "idle"
+    | "running"
+    | "completed"
+    | "failed"
+    | "cancelled"
+    | "stale"
+    | "interrupted";
+  phase?: "rendering" | "validating";
+  progressPercent?: number;
+  durationSeconds?: number;
+  sizeBytes?: number;
+  renderedSettings?: VideoDubbingMixerSettings;
+  includedTracks?: VideoDubbingMixerTrack[];
+  error?: string;
 }
 
 export interface VideoDubbingJobHistoryItem {
@@ -47,6 +80,7 @@ export interface VideoDubbingJobHistoryItem {
     instrumental: boolean;
     mixedAudio: boolean;
     exportedVideo: boolean;
+    finalMix: boolean;
   };
   warning?: string;
 }
@@ -58,7 +92,8 @@ export interface VideoDubbingMasterGeneration {
     | "completed"
     | "failed"
     | "cancelled"
-    | "interrupted";
+    | "interrupted"
+    | "stale";
   progressPercent: number;
   completedSentences: number;
   totalSentences: number;
@@ -73,7 +108,8 @@ export type VideoDubbingMediaTaskStatus =
   | "completed"
   | "failed"
   | "cancelled"
-  | "interrupted";
+  | "interrupted"
+  | "stale";
 
 export interface VideoDubbingMediaTask {
   status: VideoDubbingMediaTaskStatus;
