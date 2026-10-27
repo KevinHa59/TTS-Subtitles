@@ -17,6 +17,13 @@ const PROBE_TIMEOUT_MS = 30_000;
 const PROCESS_OUTPUT_LIMIT = 64 * 1024;
 const DURATION_TOLERANCE_SECONDS = 0.1;
 
+interface DemucsProgressEvent {
+  type: "progress";
+  completedSegments: number;
+  totalSegments: number;
+  progressPercent: number;
+}
+
 const AVAILABILITY_SCRIPT = [
   "import importlib.util, json, sys",
   "result = {'demucs': False, 'torch': False, 'model': False, 'cuda': False}",
@@ -38,14 +45,55 @@ const AVAILABILITY_SCRIPT = [
 ].join("\n");
 
 const DEMUCS_ENTRY_SCRIPT = [
-  "import socket, sys",
+  "import json, math, socket, sys",
   "def deny_network(*args, **kwargs):",
   "  raise RuntimeError('Network access is disabled for local separation.')",
   "socket.socket.connect = deny_network",
   "socket.create_connection = deny_network",
-  "from demucs.separate import main",
-  "sys.argv = ['demucs', *sys.argv[1:]]",
-  "main()",
+  "from pathlib import Path",
+  "import torch",
+  "from demucs.api import Separator",
+  "from demucs.audio import save_audio",
+  "input_path, output_path, device = sys.argv[1:4]",
+  "def emit(value):",
+  "  print(json.dumps(value, separators=(',', ':')), flush=True)",
+  "emit({'type': 'phase', 'phase': 'loading_model'})",
+  "separator = Separator(model='htdemucs', device=device, shifts=1, split=True, overlap=0.25, jobs=1, progress=False)",
+  "emit({'type': 'phase', 'phase': 'separating'})",
+  "segment_models = getattr(separator.model, 'models', [separator.model])",
+  "def on_progress(event):",
+  "  if event.get('state') != 'end':",
+  "    return",
+  "  length = int(event.get('audio_length', 0))",
+  "  total = 0",
+  "  if length > 0:",
+  "    for sub_model in segment_models:",
+  "      segment = getattr(sub_model, 'segment', None)",
+  "      if segment is None:",
+  "        total += 1",
+  "      else:",
+  "        segment_length = int(separator.samplerate * float(segment))",
+  "        stride = int((1 - 0.25) * segment_length)",
+  "        total += math.ceil(length / stride) if stride > 0 else 0",
+  "    total *= 1",
+  "  key = (int(event.get('model_idx_in_bag', 0)), int(event.get('shift_idx', 0)), int(event.get('segment_offset', 0)))",
+  "  completed.add(key)",
+  "  if total > 0:",
+  "    emit({'type': 'progress', 'completedSegments': len(completed), 'totalSegments': total, 'progressPercent': min(99, int(len(completed) * 100 / total))})",
+  "completed = set()",
+  "separator.update_parameter(callback=on_progress)",
+  "origin, stems = separator.separate_audio_file(Path(input_path))",
+  "emit({'type': 'phase', 'phase': 'writing_outputs'})",
+  "output_directory = Path(output_path) / 'htdemucs' / 'input'",
+  "output_directory.mkdir(parents=True, exist_ok=True)",
+  "vocals = stems.pop('vocals')",
+  "instrumental = torch.zeros_like(next(iter(stems.values())))",
+  "for stem in stems.values():",
+  "  instrumental += stem",
+  "kwargs = {'samplerate': separator.samplerate, 'clip': 'rescale', 'as_float': False, 'bits_per_sample': 16}",
+  "save_audio(vocals, str(output_directory / 'vocals.wav'), **kwargs)",
+  "save_audio(instrumental, str(output_directory / 'no_vocals.wav'), **kwargs)",
+  "emit({'type': 'phase', 'phase': 'validating'})",
 ].join("\n");
 
 interface ActiveSeparation {
@@ -76,6 +124,7 @@ export interface VideoDubbingSeparationOptions {
     inputPath: string,
     outputDirectory: string,
     signal: AbortSignal,
+    onProgress?: (event: DemucsProgressEvent) => void,
   ) => Promise<void>;
 }
 
@@ -102,10 +151,6 @@ export class VideoDubbingSeparationCoordinator {
   }
 
   async start(jobId: string): Promise<VideoDubbingSeparationTask> {
-    const availability = await this.getAvailability();
-    if (availability.status !== "ready") {
-      throw new Error(availability.message);
-    }
     const job = this.requireReadyJob(jobId);
     if (!job.metadata?.audioCodec) {
       throw new Error("Video nguồn không có audio stream để tách.");
@@ -124,7 +169,7 @@ export class VideoDubbingSeparationCoordinator {
     const previous = job.separation;
     const state: VideoDubbingSeparationTask = {
       status: "processing",
-      phase: "extracting",
+      phase: "checking",
       durationSeconds: previous?.durationSeconds,
       sampleRate: previous?.sampleRate,
       channels: previous?.channels,
@@ -132,7 +177,6 @@ export class VideoDubbingSeparationCoordinator {
       instrumentalSizeBytes: previous?.instrumentalSizeBytes,
     };
     this.manager.setSeparationTask(jobId, state);
-
     const active: ActiveSeparation = {
       jobId,
       cancelled: false,
@@ -400,6 +444,7 @@ export class VideoDubbingSeparationCoordinator {
     args: string[],
     timeoutMs: number,
     failureMessage: string,
+    onStdoutLine?: (line: string) => void,
   ): Promise<{ stdout: string }> {
     this.assertNotCancelled(active);
     return new Promise((resolve, reject) => {
@@ -414,6 +459,8 @@ export class VideoDubbingSeparationCoordinator {
       let stderr = "";
       let timedOut = false;
       let outputTooLarge = false;
+      let callbackError: unknown;
+      let stdoutBuffer = "";
       const timeout = setTimeout(() => {
         timedOut = true;
         child.kill();
@@ -421,10 +468,34 @@ export class VideoDubbingSeparationCoordinator {
       child.stdout.setEncoding("utf8");
       child.stderr.setEncoding("utf8");
       child.stdout.on("data", (chunk: string) => {
-        stdout += chunk;
-        if (Buffer.byteLength(stdout) > PROCESS_OUTPUT_LIMIT) {
+        if (!onStdoutLine) {
+          stdout += chunk;
+          if (Buffer.byteLength(stdout) > PROCESS_OUTPUT_LIMIT) {
+            outputTooLarge = true;
+            child.kill();
+          }
+          return;
+        }
+        stdoutBuffer += chunk;
+        if (Buffer.byteLength(stdoutBuffer) > PROCESS_OUTPUT_LIMIT) {
           outputTooLarge = true;
           child.kill();
+          return;
+        }
+        let lineEnd = stdoutBuffer.indexOf("\n");
+        while (lineEnd >= 0) {
+          const line = stdoutBuffer.slice(0, lineEnd).trim();
+          stdoutBuffer = stdoutBuffer.slice(lineEnd + 1);
+          if (line) {
+            try {
+              onStdoutLine(line);
+            } catch (error) {
+              callbackError = error;
+              child.kill();
+              return;
+            }
+          }
+          lineEnd = stdoutBuffer.indexOf("\n");
         }
       });
       child.stderr.on("data", (chunk: string) => {
@@ -439,8 +510,17 @@ export class VideoDubbingSeparationCoordinator {
       child.once("close", (code) => {
         clearTimeout(timeout);
         if (active.child === child) active.child = undefined;
+        if (onStdoutLine && stdoutBuffer.trim()) {
+          try {
+            onStdoutLine(stdoutBuffer.trim());
+          } catch (error) {
+            callbackError = error;
+          }
+        }
         if (active.cancelled) {
           reject(new Error("Tác vụ tách audio đã bị hủy."));
+        } else if (callbackError) {
+          reject(callbackError);
         } else if (timedOut) {
           reject(new Error("Tác vụ tách audio vượt quá thời gian chờ."));
         } else if (outputTooLarge) {
@@ -528,15 +608,23 @@ export class VideoDubbingSeparationCoordinator {
     active: ActiveSeparation,
   ): Promise<void> {
     try {
+      const availability = await this.getAvailability();
+      this.assertNotCancelled(active);
+      if (availability.status !== "ready") {
+        throw new Error(availability.message);
+      }
+      this.updateTask(active, { phase: "extracting" });
       await this.processSeparation(job, active);
     } catch (error) {
       const previous = this.manager.getJob(active.jobId)?.separation;
       const message = error instanceof Error ? error.message : "Tách audio thất bại.";
-      this.manager.setSeparationTask(active.jobId, {
-        ...previous,
-        status: active.cancelled ? "cancelled" : "error",
-        error: active.cancelled ? undefined : message,
-      });
+      if (this.manager.getJob(active.jobId)) {
+        this.manager.setSeparationTask(active.jobId, {
+          ...previous,
+          status: active.cancelled ? "cancelled" : "error",
+          error: active.cancelled ? undefined : message,
+        });
+      }
       if (!active.cancelled) {
         console.error("[VideoDubbing] Separation failed:", error);
       }
@@ -573,6 +661,7 @@ export class VideoDubbingSeparationCoordinator {
         inputPath,
         outputDirectory,
         active.abortController.signal,
+        (event) => this.handleDemucsEvent(active, JSON.stringify(event)),
       );
     } else {
       const device = (await this.getAvailability()).device || "cpu";
@@ -582,23 +671,13 @@ export class VideoDubbingSeparationCoordinator {
         [
           "-c",
           DEMUCS_ENTRY_SCRIPT,
-          "-n",
-          MODEL_NAME,
-          "-d",
-          device,
-          "--two-stems=vocals",
-          "--other-method",
-          "add",
-          "--shifts",
-          "0",
-          "-j",
-          "1",
-          "-o",
-          outputDirectory,
           inputPath,
+          outputDirectory,
+          device,
         ],
         SEPARATION_TIMEOUT_MS,
         "Demucs không thể hoàn tất inference.",
+        (line) => this.handleDemucsEvent(active, line),
       );
     }
     this.assertNotCancelled(active);
@@ -709,6 +788,11 @@ export class VideoDubbingSeparationCoordinator {
     ).size;
     this.manager.setSeparationTask(active.jobId, {
       status: "completed",
+      progressPercent: 100,
+      completedSegments:
+        this.manager.getJob(active.jobId)?.separation?.completedSegments,
+      totalSegments:
+        this.manager.getJob(active.jobId)?.separation?.totalSegments,
       durationSeconds: expectedDuration,
       sampleRate: MODEL_SAMPLE_RATE,
       channels: 2,
@@ -726,6 +810,93 @@ export class VideoDubbingSeparationCoordinator {
     } catch (error) {
       console.error("[VideoDubbing] Could not clean separation temp files:", error);
     }
-    this.activeTasks.delete(active.jobId);
+    if (this.activeTasks.get(active.jobId) === active) {
+      this.activeTasks.delete(active.jobId);
+    }
+  }
+
+  private handleDemucsEvent(active: ActiveSeparation, line: string): void {
+    if (active.cancelled || !this.manager.getJob(active.jobId)) return;
+    let event:
+      | {
+          type?: string;
+          phase?: string;
+          progressPercent?: number;
+          completedSegments?: number;
+          totalSegments?: number;
+        }
+      | undefined;
+    try {
+      event = JSON.parse(line) as typeof event;
+    } catch {
+      return;
+    }
+    if (!event || event.type === "phase") {
+      if (event?.phase === "loading_model") {
+        this.updateTask(active, {
+          phase: "loading_model",
+          progressPercent: undefined,
+          completedSegments: undefined,
+          totalSegments: undefined,
+        });
+      } else if (event?.phase === "separating") {
+        this.updateTask(active, {
+          phase: "separating",
+          progressPercent: undefined,
+          completedSegments: undefined,
+          totalSegments: undefined,
+        });
+      } else if (event?.phase === "validating") {
+        this.updateTask(active, { phase: "validating" });
+      } else if (event?.phase === "writing_outputs") {
+        this.updateTask(active, { phase: "writing_outputs" });
+      }
+      return;
+    }
+    if (
+      event.type !== "progress" ||
+      !Number.isSafeInteger(event.completedSegments) ||
+      !Number.isSafeInteger(event.totalSegments) ||
+      !Number.isFinite(event.progressPercent) ||
+      !event.totalSegments ||
+      event.totalSegments <= 0
+    ) {
+      return;
+    }
+    const previous = this.manager.getJob(active.jobId)?.separation;
+    const progressPercent = Math.min(
+      99,
+      Math.max(previous?.progressPercent || 0, event.progressPercent!),
+    );
+    const completedSegments = Math.max(
+      previous?.completedSegments || 0,
+      Math.min(event.completedSegments!, event.totalSegments!),
+    );
+    if (
+      previous &&
+      previous.completedSegments === completedSegments &&
+      previous.totalSegments === event.totalSegments &&
+      previous.progressPercent === progressPercent
+    ) {
+      return;
+    }
+    this.updateTask(active, {
+      phase: "separating",
+      progressPercent,
+      completedSegments,
+      totalSegments: event.totalSegments,
+    });
+  }
+
+  private updateTask(
+    active: ActiveSeparation,
+    update: Partial<VideoDubbingSeparationTask>,
+  ): void {
+    const job = this.manager.getJob(active.jobId);
+    if (!job || job.separation?.status !== "processing") return;
+    this.manager.setSeparationTask(active.jobId, {
+      ...job.separation,
+      ...update,
+    });
   }
 }

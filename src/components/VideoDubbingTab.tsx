@@ -6,8 +6,11 @@ import {
   Clock3,
   FileText,
   Film,
+  FolderOpen,
   HardDrive,
+  History,
   LoaderCircle,
+  RefreshCw,
   Trash2,
   Upload,
   Volume2,
@@ -16,6 +19,7 @@ import {
 import {
   SrtAnalysis,
   VideoDubbingJob,
+  VideoDubbingJobHistoryItem,
   VideoDubbingMetadata,
   VideoDubbingSeparationAvailability,
 } from "../types/videoDubbing";
@@ -28,6 +32,7 @@ interface SelectedVideo {
   progress: number;
   job: VideoDubbingJob | null;
   error?: string;
+  warning?: string;
 }
 
 interface SelectedSrt {
@@ -88,6 +93,8 @@ function statusLabel(job: VideoDubbingJob | null): string {
       return "Kiểm tra thất bại";
     case "cancelled":
       return "Đã hủy";
+    case "interrupted":
+      return "Bị gián đoạn";
   }
 }
 
@@ -143,12 +150,97 @@ export default function VideoDubbingTab() {
   const [separationAvailability, setSeparationAvailability] =
     useState<VideoDubbingSeparationAvailability | null>(null);
   const [separationError, setSeparationError] = useState<string | null>(null);
+  const [jobHistory, setJobHistory] = useState<VideoDubbingJobHistoryItem[]>([]);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const videoInputRef = useRef<HTMLInputElement | null>(null);
   const srtInputRef = useRef<HTMLInputElement | null>(null);
   const uploadRef = useRef<XMLHttpRequest | null>(null);
   const videoGenerationRef = useRef(0);
   const srtGenerationRef = useRef(0);
   const activeJobIdRef = useRef<string | null>(null);
+
+  const loadJobHistory = async (): Promise<VideoDubbingJobHistoryItem[]> => {
+    setHistoryLoading(true);
+    setHistoryError(null);
+    try {
+      const response = await fetch("/api/video-dubbing/jobs");
+      const result = await response.json();
+      if (!response.ok || !Array.isArray(result.jobs)) {
+        throw new Error(result.error || "Không thể tải lịch sử Video Dubbing.");
+      }
+      const items = result.jobs as VideoDubbingJobHistoryItem[];
+      setJobHistory(items);
+      return items;
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Không thể tải lịch sử Video Dubbing.";
+      setHistoryError(message);
+      return [];
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  const openHistoryJob = (item: VideoDubbingJobHistoryItem) => {
+    videoGenerationRef.current++;
+    uploadRef.current?.abort();
+    uploadRef.current = null;
+    activeJobIdRef.current = item.job.id;
+    setVideo({
+      fileName: item.job.fileName,
+      sizeBytes: item.job.sizeBytes,
+      progress: 100,
+      job: item.job,
+      warning: item.warning,
+    });
+    setSrt(null);
+    setMasterError(null);
+    setMediaError(null);
+    setSeparationError(null);
+    if (srtInputRef.current) srtInputRef.current.value = "";
+  };
+
+  const deleteHistoryJob = async (item: VideoDubbingJobHistoryItem) => {
+    if (
+      !window.confirm(
+        `Xóa job "${item.job.fileName}" và toàn bộ file đầu ra của job này?`,
+      )
+    ) {
+      return;
+    }
+    try {
+      const response = await fetch(`/api/video-dubbing/jobs/${item.job.id}`, {
+        method: "DELETE",
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error || "Không thể xóa job Video Dubbing.");
+      }
+      setJobHistory((current) =>
+        current.filter((entry) => entry.job.id !== item.job.id),
+      );
+      if (activeJobIdRef.current === item.job.id) {
+        activeJobIdRef.current = null;
+        setVideo(null);
+      }
+    } catch (error) {
+      setHistoryError(
+        error instanceof Error ? error.message : "Không thể xóa job Video Dubbing.",
+      );
+    }
+  };
+
+  useEffect(() => {
+    let active = true;
+    void loadJobHistory().then((items) => {
+      if (!active || activeJobIdRef.current || items.length === 0) return;
+      openHistoryJob(items[0]);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -263,6 +355,39 @@ export default function VideoDubbingTab() {
     video?.job?.videoExport?.status,
   ]);
 
+  useEffect(() => {
+    const job = video?.job;
+    if (!job) return;
+    setJobHistory((current) =>
+      current.map((item) =>
+        item.job.id === job.id
+          ? {
+              ...item,
+              job,
+              outputs: {
+                ...item.outputs,
+                sourceVideo:
+                  job.status === "completed" && Boolean(job.metadata),
+                masterAudio:
+                  job.masterGeneration?.status === "completed" ||
+                  item.outputs.masterAudio,
+                vocals:
+                  Boolean(job.separation?.vocalsSizeBytes) || item.outputs.vocals,
+                instrumental:
+                  Boolean(job.separation?.instrumentalSizeBytes) ||
+                  item.outputs.instrumental,
+                mixedAudio:
+                  job.audioMix?.status === "completed" || item.outputs.mixedAudio,
+                exportedVideo:
+                  job.videoExport?.status === "completed" ||
+                  item.outputs.exportedVideo,
+              },
+            }
+          : item,
+      ),
+    );
+  }, [video?.job]);
+
   const removeServerJob = async (jobId: string) => {
     try {
       const response = await fetch(`/api/video-dubbing/jobs/${jobId}`, {
@@ -278,13 +403,11 @@ export default function VideoDubbingTab() {
 
   const clearVideo = () => {
     videoGenerationRef.current++;
-    const jobId = activeJobIdRef.current;
     activeJobIdRef.current = null;
     if (uploadRef.current) {
       uploadRef.current.abort();
       uploadRef.current = null;
     }
-    if (jobId) void removeServerJob(jobId);
     setVideo(null);
     if (videoInputRef.current) videoInputRef.current.value = "";
   };
@@ -368,6 +491,7 @@ export default function VideoDubbingTab() {
               ? { ...current, job: result.job, progress: 100 }
               : current,
           );
+          void loadJobHistory();
         } catch {
           setVideo((current) =>
             current?.job?.id === job.id
@@ -408,10 +532,18 @@ export default function VideoDubbingTab() {
     event.target.value = "";
     const generation = ++videoGenerationRef.current;
     const previousJobId = activeJobIdRef.current;
+    const previousJobStatus = video?.job?.status;
     activeJobIdRef.current = null;
     uploadRef.current?.abort();
     uploadRef.current = null;
-    if (previousJobId) void removeServerJob(previousJobId);
+    if (
+      previousJobId &&
+      (previousJobStatus === "uploading" || previousJobStatus === "probing")
+    ) {
+      void fetch(`/api/video-dubbing/jobs/${previousJobId}/cancel`, {
+        method: "POST",
+      });
+    }
 
     const extension = file.name.slice(file.name.lastIndexOf(".")).toLowerCase();
     if (!ACCEPTED_VIDEO_EXTENSIONS.has(extension)) {
@@ -426,7 +558,6 @@ export default function VideoDubbingTab() {
       return;
     }
     void (async () => {
-      if (previousJobId) await removeServerJob(previousJobId);
       if (generation === videoGenerationRef.current) {
         await uploadVideo(file);
       }
@@ -692,6 +823,21 @@ export default function VideoDubbingTab() {
   const startSeparation = async () => {
     if (!job) return;
     setSeparationError(null);
+    setVideo((current) =>
+      current?.job?.id === job.id
+        ? {
+            ...current,
+            job: {
+              ...current.job,
+              separation: {
+                ...current.job.separation,
+                status: "processing",
+                phase: "checking",
+              },
+            },
+          }
+        : current,
+    );
     try {
       const response = await fetch(
         `/api/video-dubbing/jobs/${job.id}/separation`,
@@ -713,6 +859,19 @@ export default function VideoDubbingTab() {
       setSeparationError(
         error instanceof Error ? error.message : "Không thể bắt đầu tách audio.",
       );
+      try {
+        const statusResponse = await fetch(`/api/video-dubbing/jobs/${job.id}`);
+        const statusResult = await statusResponse.json();
+        if (statusResponse.ok && statusResult.job) {
+          setVideo((current) =>
+            current?.job?.id === job.id
+              ? { ...current, job: statusResult.job }
+              : current,
+          );
+        }
+      } catch (statusError) {
+        console.error("Không thể tải trạng thái tách audio:", statusError);
+      }
     }
   };
   const cancelSeparation = async () => {
@@ -757,9 +916,120 @@ export default function VideoDubbingTab() {
           </div>
         </div>
         <span className="self-start sm:self-auto px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wide bg-slate-800 text-slate-300 border border-slate-700">
-          Giai đoạn 3A · Trộn & xuất video
+          Video Dubbing · Piper · Demucs cục bộ
         </span>
       </header>
+
+      <section className="rounded-2xl border border-slate-800 bg-slate-900/80 p-4 sm:p-5 space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <History className="w-4 h-4 text-amber-400" />
+            <h3 className="font-semibold text-white">Lịch sử job</h3>
+            <span className="text-xs text-slate-500">{jobHistory.length}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => void loadJobHistory()}
+            disabled={historyLoading}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-950/70 px-2.5 py-1.5 text-xs text-slate-300 hover:text-white disabled:opacity-50"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${historyLoading ? "animate-spin" : ""}`} />
+            Làm mới
+          </button>
+        </div>
+        {historyError && (
+          <p className="rounded-lg border border-rose-500/30 bg-rose-950/30 p-2.5 text-xs text-rose-200">
+            {historyError}
+          </p>
+        )}
+        {jobHistory.length === 0 ? (
+          <p className="rounded-xl border border-slate-800 bg-slate-950/50 p-3 text-xs text-slate-500">
+            {historyLoading ? "Đang tải lịch sử job…" : "Chưa có job Video Dubbing được lưu."}
+          </p>
+        ) : (
+          <ul className="space-y-2">
+            {jobHistory.map((item) => {
+              const isSelected = item.job.id === job?.id;
+              const outputs = [
+                ["Video", item.outputs.sourceVideo],
+                ["TTS Master", item.outputs.masterAudio],
+                ["Vocals", item.outputs.vocals],
+                ["Instrumental", item.outputs.instrumental],
+                ["Bản phối", item.outputs.mixedAudio],
+                ["MP4", item.outputs.exportedVideo],
+              ] as const;
+              return (
+                <li
+                  key={item.job.id}
+                  className={`rounded-xl border p-3 ${
+                    isSelected
+                      ? "border-amber-500/40 bg-amber-950/15"
+                      : "border-slate-800 bg-slate-950/50"
+                  }`}
+                >
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                        <span className="truncate text-sm font-semibold text-slate-100">
+                          {item.job.fileName}
+                        </span>
+                        <span className="rounded-full bg-slate-800 px-2 py-0.5 text-[10px] text-slate-300">
+                          {statusLabel(item.job)}
+                        </span>
+                        <code className="text-[10px] text-slate-500">
+                          {item.job.id.slice(-8)}
+                        </code>
+                        <span className="text-[10px] text-slate-500">
+                          {new Date(item.job.createdAt).toLocaleString()}
+                        </span>
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {outputs.map(([label, available]) => (
+                          <span
+                            key={label}
+                            className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] ${
+                              available
+                                ? "border-emerald-500/20 bg-emerald-950/20 text-emerald-300"
+                                : "border-slate-800 bg-slate-900/60 text-slate-500"
+                            }`}
+                          >
+                            {available && <CheckCircle2 className="h-3 w-3" />}
+                            {label}
+                          </span>
+                        ))}
+                      </div>
+                      {item.warning && (
+                        <p className="mt-2 text-[11px] leading-relaxed text-amber-300">
+                          {item.warning}
+                        </p>
+                      )}
+                    </div>
+                    <div className="flex shrink-0 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => openHistoryJob(item)}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/30 bg-amber-950/20 px-2.5 py-1.5 text-xs font-semibold text-amber-200 hover:bg-amber-950/40"
+                      >
+                        <FolderOpen className="h-3.5 w-3.5" />
+                        Mở job
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void deleteHistoryJob(item)}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-950/70 px-2.5 py-1.5 text-xs text-slate-300 hover:border-rose-500/40 hover:text-rose-200"
+                        aria-label={`Xóa job ${item.job.fileName}`}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                        Xóa
+                      </button>
+                    </div>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </section>
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
         <section className="rounded-2xl border border-slate-800 bg-slate-900/80 p-4 sm:p-5 space-y-4">
@@ -782,8 +1052,13 @@ export default function VideoDubbingTab() {
                 ) : (
                   <>
                     <Trash2 className="w-3.5 h-3.5" />
-                    Bỏ video
+                    Đóng job
                   </>
+                )}
+                {video.warning && (
+                  <p className="mt-3 rounded-lg border border-amber-500/25 bg-amber-950/20 p-3 text-xs text-amber-200">
+                    {video.warning}
+                  </p>
                 )}
               </button>
             )}
@@ -844,7 +1119,9 @@ export default function VideoDubbingTab() {
                 <div className="mt-3 flex items-center gap-2 text-xs">
                   {job.status === "completed" ? (
                     <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                  ) : job.status === "failed" || job.status === "cancelled" ? (
+                  ) : job.status === "failed" ||
+                    job.status === "cancelled" ||
+                    job.status === "interrupted" ? (
                     <AlertCircle className="w-4 h-4 text-rose-400" />
                   ) : (
                     <Clock3 className="w-4 h-4 text-amber-400" />
@@ -867,6 +1144,9 @@ export default function VideoDubbingTab() {
               )}
               {job?.status === "failed" && job.error && !video.error && (
                 <p className="mt-3 text-xs text-rose-300">{job.error}</p>
+              )}
+              {job?.status === "interrupted" && job.error && (
+                <p className="mt-3 text-xs text-amber-300">{job.error}</p>
               )}
 
               {!isBusy && (
@@ -971,6 +1251,11 @@ export default function VideoDubbingTab() {
           <p className="text-[11px] leading-relaxed text-slate-500">
             SRT được đọc ngay trong trình duyệt để thống kê sơ bộ; nội dung phụ đề không được tải lên máy chủ.
           </p>
+          {job && !srt && masterGeneration?.status !== "completed" && (
+            <p className="text-[11px] leading-relaxed text-amber-300">
+              File SRT không được lưu trong lịch sử job. Hãy chọn lại SRT nếu cần tạo TTS Master cho job này.
+            </p>
+          )}
         </section>
       </div>
 
@@ -1104,6 +1389,11 @@ export default function VideoDubbingTab() {
         {masterGeneration?.status === "cancelled" && !isMasterGenerating && (
           <p className="text-xs text-slate-400">Đã hủy quá trình tạo TTS Master.</p>
         )}
+        {masterGeneration?.status === "interrupted" && (
+          <p className="rounded-lg border border-amber-500/25 bg-amber-950/20 p-3 text-xs text-amber-200">
+            {masterGeneration.error || "Tác vụ TTS Master bị gián đoạn."}
+          </p>
+        )}
 
         <div className="flex flex-col sm:flex-row sm:items-center gap-3">
           <button
@@ -1166,7 +1456,9 @@ export default function VideoDubbingTab() {
         </p>
       </section>
 
-      {job?.status === "completed" && (
+      {job &&
+        (job.status === "completed" ||
+          Boolean(separation?.vocalsSizeBytes || separation?.instrumentalSizeBytes)) && (
         <section className="rounded-2xl border border-slate-800 bg-slate-900/80 p-4 sm:p-5 space-y-4">
           <div className="flex items-start gap-3">
             <div className="w-10 h-10 rounded-xl bg-violet-500/15 text-violet-300 border border-violet-500/25 flex items-center justify-center shrink-0">
@@ -1228,10 +1520,52 @@ export default function VideoDubbingTab() {
                 <LoaderCircle className="w-4 h-4 animate-spin" />
                 {separation.phase === "extracting"
                   ? "Đang trích và chuẩn hóa audio nguồn"
-                  : separation.phase === "validating"
-                    ? "Đang kiểm tra hai track"
-                    : "Demucs đang tách audio (tiến trình phần trăm không khả dụng)"}
+                  : separation.phase === "checking"
+                    ? "Đang kiểm tra môi trường tách audio"
+                    : separation.phase === "loading_model"
+                      ? "Đang tải model Demucs từ cache cục bộ"
+                      : separation.phase === "writing_outputs"
+                        ? "Đang ghi các track vocals và instrumental"
+                    : separation.phase === "validating"
+                      ? "Đang ghi và xác minh hai track"
+                      : "Demucs đang tách audio"}
               </span>
+              <span className="text-xs text-violet-100">
+                {separation.progressPercent === undefined
+                  ? "Đang xử lý…"
+                  : `${separation.progressPercent}%${
+                      separation.completedSegments !== undefined &&
+                      separation.totalSegments !== undefined
+                        ? ` · ${separation.completedSegments}/${separation.totalSegments} đoạn`
+                        : ""
+                    }`}
+              </span>
+              <div
+                className="h-2 w-full overflow-hidden rounded-full bg-slate-800"
+                role="progressbar"
+                aria-label="Tiến trình tách audio"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={separation.progressPercent}
+                aria-valuetext={
+                  separation.progressPercent === undefined
+                    ? "Đang xử lý, chưa xác định phần trăm"
+                    : `${separation.progressPercent}%`
+                }
+              >
+                <div
+                  className={`h-full rounded-full bg-violet-400 transition-all ${
+                    separation.progressPercent === undefined
+                      ? "w-1/3 animate-pulse"
+                      : ""
+                  }`}
+                  style={
+                    separation.progressPercent === undefined
+                      ? undefined
+                      : { width: `${separation.progressPercent}%` }
+                  }
+                />
+              </div>
               <button
                 type="button"
                 onClick={() => void cancelSeparation()}
@@ -1244,6 +1578,11 @@ export default function VideoDubbingTab() {
           )}
           {separation?.status === "cancelled" && (
             <p className="text-xs text-amber-300">Tác vụ tách audio đã bị hủy.</p>
+          )}
+          {separation?.status === "interrupted" && (
+            <p className="rounded-lg border border-amber-500/25 bg-amber-950/20 p-3 text-xs text-amber-200">
+              {separation.error || "Tác vụ tách audio bị gián đoạn; có thể chạy lại."}
+            </p>
           )}
 
           {separationAvailability?.status === "ready" &&
@@ -1303,7 +1642,7 @@ export default function VideoDubbingTab() {
         </section>
       )}
 
-      {hasMasterAudio && (
+      {(hasMasterAudio || hasMixedAudio || hasExportedVideo) && (
         <section className="rounded-2xl border border-slate-800 bg-slate-900/80 p-4 sm:p-5 space-y-5">
           <div className="flex items-start gap-3">
             <div className="w-10 h-10 rounded-xl bg-sky-500/15 text-sky-300 border border-sky-500/25 flex items-center justify-center shrink-0">
@@ -1380,6 +1719,16 @@ export default function VideoDubbingTab() {
               <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
               <span>{videoExport.error}</span>
             </div>
+          )}
+          {audioMix?.status === "interrupted" && audioMix.error && (
+            <p className="rounded-lg border border-amber-500/25 bg-amber-950/20 p-3 text-xs text-amber-200">
+              {audioMix.error}
+            </p>
+          )}
+          {videoExport?.status === "interrupted" && videoExport.error && (
+            <p className="rounded-lg border border-amber-500/25 bg-amber-950/20 p-3 text-xs text-amber-200">
+              {videoExport.error}
+            </p>
           )}
 
           {audioMix?.status === "running" && (

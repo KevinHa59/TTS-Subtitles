@@ -54,8 +54,11 @@ Bạn **không cần** mở VS Code, không cần gõ lệnh dòng lệnh phức
 - Nhấp đúp vào file **`Stop-App.bat`** (hoặc chỉ cần đóng cửa sổ máy chủ `Start-App.bat`).
 - Ứng dụng sẽ dừng đúng tiến trình và giải phóng cổng 3000 hoàn toàn.
 
-### Video Dubbing (Giai đoạn 1–3A)
+### Video Dubbing (Giai đoạn 1–3B-1)
 
+- Tab tải lịch sử từ ổ đĩa khi mở; có thể mở lại job sau refresh/khởi động lại, hoặc xóa riêng từng job sau xác nhận. Nút **Đóng job** chỉ bỏ job khỏi màn hình, không xóa dữ liệu.
+- Metadata được lưu atomically trong `video_dubbing_storage/<jobId>/job.json`. Khi khởi động, máy chủ khôi phục metadata, FFprobe xác minh video/đầu ra trước khi báo khả dụng và đánh dấu tác vụ đang chạy dở là bị gián đoạn; không tự chạy lại tác vụ.
+- API lịch sử: `GET /api/video-dubbing/jobs`. Mỗi mục trả trạng thái job, các file đầu ra đã được kiểm tra và cảnh báo nếu metadata/file bị thiếu hoặc không hợp lệ.
 - Mở tab **Video Dubbing**, chọn video MP4, MKV, MOV, AVI hoặc WebM và chọn tệp SRT theo thứ tự bất kỳ.
 - Video được gửi theo luồng tới máy chủ local để FFprobe đọc metadata. SRT được phân tích bằng parser hiện có; khi bấm **Tạo TTS Master**, các câu thoại và timestamp đã phân tích được gửi tới máy chủ local để dùng lại pipeline Đồng Bộ Phụ Đề.
 - Chọn một giọng Piper có mô hình cục bộ và thiết lập tốc độ. Master được tạo thành WAV PCM mono 22,050 Hz trong thư mục job tương ứng; có thể theo dõi tiến trình và nghe thử ngay trong tab.
@@ -64,7 +67,7 @@ Bạn **không cần** mở VS Code, không cần gõ lệnh dòng lệnh phức
 - Có thể xuất bản phối thành MP4 mới và tải xuống từ giao diện. Video được remux bằng stream copy, không mã hóa lại; nếu codec/container không tương thích, ứng dụng báo lỗi thay vì tự giảm chất lượng. MP4 và các file audio trung gian được giữ trong thư mục job cho đến khi chọn **Bỏ video**.
 - Nếu tạo lại TTS Master, thay đổi mức âm lượng hoặc tạo lại bản phối, các MP4/bản phối cũ vẫn được giữ lại để tải/nghe nhưng được đánh dấu là bản cũ; cần tạo lại bản phối/xuất để có kết quả khớp thiết lập hiện tại.
 - FFmpeg/FFprobe phải có trong `PATH` hoặc được cấu hình lần lượt qua `FFMPEG_PATH`/`FFPROBE_PATH`. Giới hạn upload mặc định là 4 GiB; có thể đặt `VIDEO_DUBBING_MAX_UPLOAD_BYTES` (đơn vị byte) trước khi chạy `Start-App.bat`.
-- Video nguồn, WAV Master và dữ liệu tạm được lưu trong thư mục riêng của job dưới `video_dubbing_storage`; chọn **Bỏ video** để dọn job. Các job hiện chỉ tồn tại trong bộ nhớ máy chủ; nếu máy chủ dừng trước khi dọn job, dữ liệu còn lại trong thư mục này không được khôi phục vào giao diện.
+- Video nguồn, WAV Master và dữ liệu tạm được lưu trong thư mục riêng của job dưới `video_dubbing_storage`; xóa job trong danh sách lịch sử để dọn dữ liệu tương ứng.
 - `Start-App.bat` chỉ bind máy chủ vào `127.0.0.1`. Khi chạy trực tiếp ngoài launcher, có thể đặt biến `HOST` phù hợp với môi trường triển khai.
 
 ### Tách giọng và nhạc nền (Giai đoạn 3B-1)
@@ -72,7 +75,8 @@ Bạn **không cần** mở VS Code, không cần gõ lệnh dòng lệnh phức
 - Video Dubbing có thể tách audio gốc bằng Demucs `htdemucs`, chạy cục bộ trên CPU hoặc CUDA khi PyTorch xác nhận CUDA dùng được. Kết quả được lưu trong thư mục job thành `vocals.wav` và `instrumental.wav`; hai file được FFprobe xác minh trước khi công bố.
 - Tác vụ chuẩn hóa audio đầu vào thành WAV stereo 44.1 kHz để phù hợp với model. Khi inference, mạng bị vô hiệu hóa và model chỉ dùng từ cache; ứng dụng không tự cài package hay tải model. Nếu chưa sẵn sàng, API/UI báo unavailable.
 - Mặc định dùng `python` trên PATH. Có thể trỏ riêng một Python environment bằng `VIDEO_DUBBING_SEPARATION_PYTHON` trước khi chạy ứng dụng; ứng dụng cũng nhận `BGM_PYTHON` hoặc `PYTHON` làm fallback. Để tránh ảnh hưởng môi trường Piper, nên tạo environment riêng, cài Demucs/PyTorch và tải model htdemucs riêng theo hướng dẫn chính thức rồi cấu hình biến này.
-- Model inference không cung cấp phần trăm tiến trình đáng tin cậy; giao diện chỉ hiển thị trạng thái xử lý. Nguồn tách không hoàn hảo: vocals có thể còn nhạc và instrumental có thể còn giọng. Kết quả không được tự động đưa vào bản phối hiện tại.
+- Với Demucs 4.1.0, dùng `demucs.api.Separator` callback và đếm segment hoàn tất duy nhất theo model/shift/offset. Thanh tiến trình chỉ hiển thị phần trăm trong giai đoạn inference; kiểm tra, tải model, trích xuất và ghi/xác minh đầu ra hiển thị trạng thái không xác định. Chỉ báo 100% sau khi cả hai track đã được xác minh và công bố.
+- Nếu máy chủ dừng trong khi tách, tác vụ được đánh dấu bị gián đoạn; không khôi phục tiến trình inference. Kết quả hoàn chỉnh trước đó vẫn được giữ. Nguồn tách không hoàn hảo: vocals có thể còn nhạc và instrumental có thể còn giọng. Kết quả không được tự động đưa vào bản phối hiện tại.
 - Mã nguồn Demucs được phát hành theo MIT ([LICENSE upstream](https://github.com/facebookresearch/demucs/blob/main/LICENSE)). Repository model HTDemucs hiện không công bố trường license trong metadata/model card đã kiểm tra; cần tự xác minh điều kiện sử dụng weights, đặc biệt trước khi phân phối hoặc dùng thương mại.
 - API: `GET /api/video-dubbing/separation/status`; `POST /api/video-dubbing/jobs/:jobId/separation`; `GET /api/video-dubbing/jobs/:jobId/separation`; `POST /api/video-dubbing/jobs/:jobId/separation/cancel`; nghe thử qua `GET /api/video-dubbing/jobs/:jobId/separation/vocals` và `/instrumental`.
 
@@ -110,15 +114,15 @@ Bạn **không cần** mở VS Code, không cần gõ lệnh dòng lệnh phức
 | `Start-App.bat`    | Script khởi chạy máy chủ production local và tự mở trình duyệt              |
 | `Stop-App.bat`     | Script dừng an toàn tiến trình ứng dụng trên cổng 3000                      |
 | `server.ts`                    | Máy chủ Express tích hợp PiperNativeTTS, FFmpeg spawning, timeline assembly |
-| `videoDubbingManager.ts`        | Quản lý upload, thư mục job và kiểm tra metadata video                       |
-| `videoDubbingRoutes.ts`         | API job Video Dubbing                                                        |
+| `videoDubbingManager.ts`        | Quản lý upload, metadata bền vững, khôi phục và lịch sử job                  |
+| `videoDubbingRoutes.ts`         | API job, history, task và đầu ra Video Dubbing                               |
 | `videoDubbingMaster.ts`         | Điều phối pipeline Đồng Bộ Phụ Đề hiện có cho TTS Master Video Dubbing       |
 | `videoDubbingMedia.ts`           | Điều phối trích audio, trộn, xác minh và xuất MP4 bằng FFmpeg/FFprobe        |
 | `videoDubbingSeparation.ts`      | Kiểm tra Demucs/model cục bộ, tách và xác minh hai track                       |
-| `src/components/VideoDubbingTab.tsx` | Giao diện chọn video/SRT, tạo Master, trộn và xuất MP4                   |
+| `src/components/VideoDubbingTab.tsx` | Giao diện lịch sử job, chọn video/SRT, tạo Master, tách, trộn và xuất MP4 |
 | `models/`                       | Thư mục chứa các mô hình giọng đọc Piper ONNX và file cấu hình              |
 | `jobs_storage/`                 | Thư mục tạm dùng trong lúc ghép nối timeline (tự xóa sau khi xong)          |
-| `video_dubbing_storage/`        | Thư mục riêng chứa video nguồn của các job Video Dubbing                    |
+| `video_dubbing_storage/`        | Thư mục job gồm metadata và các đầu ra Video Dubbing                        |
 | `dist/`                         | Bản build sản phẩm của frontend React + Vite                                |
 | `package.json`                  | Cấu hình phụ thuộc và lệnh chạy                                             |
 

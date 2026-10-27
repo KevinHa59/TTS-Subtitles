@@ -244,10 +244,32 @@ test("separates a fixture with the installed local model when available", async 
   const jobId = await createReadyJob(manager, fixtures, "real-inference");
   const started = await coordinator.start(jobId);
   assert.equal(started.status, "processing");
+  const observedProgress: number[] = [];
+  const deadline = Date.now() + 120_000;
+  while (Date.now() < deadline) {
+    const progress = manager.getJob(jobId)?.separation?.progressPercent;
+    if (progress !== undefined) observedProgress.push(progress);
+    if (
+      manager.getJob(jobId)?.separation?.status === "completed" ||
+      manager.getJob(jobId)?.separation?.status === "error"
+    ) {
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
   await waitForSeparation(manager, jobId, "completed");
 
   const state = manager.getJob(jobId)?.separation;
   assert.equal(state?.status, "completed");
+  assert.equal(state?.progressPercent, 100);
+  assert.ok((state?.totalSegments || 0) > 0);
+  assert.equal(state?.completedSegments, state?.totalSegments);
+  assert.ok(observedProgress.length > 0);
+  assert.ok(
+    observedProgress.every(
+      (progress, index) => index === 0 || progress >= observedProgress[index - 1],
+    ),
+  );
   assert.ok(state?.vocalsSizeBytes && state.vocalsSizeBytes > 44);
   assert.ok(state?.instrumentalSizeBytes && state.instrumentalSizeBytes > 44);
   const vocalsPath = coordinator.getTrackPath(jobId, "vocals");
@@ -373,6 +395,54 @@ test("pads or trims only a small model tail difference to the checked source dur
   assert.ok(instrumental);
   assert.ok(Math.abs(probeAudio(vocals).duration - 1.5) <= 0.1);
   assert.ok(Math.abs(probeAudio(instrumental).duration - 1.5) <= 0.1);
+});
+
+test("deduplicates callback updates and keeps segment counts and percentage monotonic", async () => {
+  const root = await createTemporaryDirectory();
+  const fixtures = path.join(root, "fixtures");
+  fs.mkdirSync(fixtures);
+  const manager = createManager(path.join(root, "jobs"));
+  const jobId = await createReadyJob(manager, fixtures, "progress-callback");
+  const snapshots: Array<{
+    progressPercent?: number;
+    completedSegments?: number;
+  }> = [];
+  const coordinator = createReadyCoordinator(
+    manager,
+    async (_input, output, _signal, onProgress) => {
+      const updates = [
+        { type: "progress" as const, completedSegments: 1, totalSegments: 4, progressPercent: 25 },
+        { type: "progress" as const, completedSegments: 1, totalSegments: 4, progressPercent: 25 },
+        { type: "progress" as const, completedSegments: 2, totalSegments: 4, progressPercent: 50 },
+        { type: "progress" as const, completedSegments: 1, totalSegments: 4, progressPercent: 25 },
+        { type: "progress" as const, completedSegments: 3, totalSegments: 4, progressPercent: 75 },
+        { type: "progress" as const, completedSegments: 4, totalSegments: 4, progressPercent: 100 },
+      ];
+      for (const update of updates) {
+        onProgress?.(update);
+        const state = manager.getJob(jobId)?.separation;
+        snapshots.push({
+          progressPercent: state?.progressPercent,
+          completedSegments: state?.completedSegments,
+        });
+      }
+      createOutputTracks(1.5, output);
+    },
+  );
+
+  await coordinator.start(jobId);
+  await waitForSeparation(manager, jobId, "completed");
+  assert.deepEqual(
+    snapshots.map((snapshot) => snapshot.progressPercent),
+    [25, 25, 50, 50, 75, 99],
+  );
+  assert.deepEqual(
+    snapshots.map((snapshot) => snapshot.completedSegments),
+    [1, 1, 2, 2, 3, 4],
+  );
+  const result = manager.getJob(jobId)?.separation;
+  assert.equal(result?.progressPercent, 100);
+  assert.equal(result?.completedSegments, result?.totalSegments);
 });
 
 test("keeps concurrent jobs' track files separate", async () => {

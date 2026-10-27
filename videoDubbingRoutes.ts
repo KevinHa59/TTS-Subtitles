@@ -12,6 +12,16 @@ export function createVideoDubbingRouter(
 ): Router {
   const router = Router();
 
+  router.use(async (_req: Request, res: Response, next) => {
+    try {
+      await videoDubbingManager.initialize();
+      next();
+    } catch (error) {
+      console.error("[VideoDubbing] Không thể khôi phục job:", error);
+      res.status(500).json({ error: "Không thể khôi phục dữ liệu Video Dubbing." });
+    }
+  });
+
   router.get("/separation/status", async (_req: Request, res: Response) => {
     if (!separationCoordinator) {
       return res.status(200).json({
@@ -21,6 +31,16 @@ export function createVideoDubbingRouter(
       });
     }
     return res.json(await separationCoordinator.getAvailability());
+  });
+
+  router.get("/jobs", async (_req: Request, res: Response) => {
+    try {
+      const jobs = await videoDubbingManager.listJobs();
+      return res.json({ success: true, jobs });
+    } catch (error) {
+      console.error("[VideoDubbing] Không thể liệt kê job:", error);
+      return res.status(500).json({ error: "Không thể tải lịch sử Video Dubbing." });
+    }
   });
 
   router.post("/jobs", (req: Request, res: Response) => {

@@ -18,7 +18,8 @@ export type VideoDubbingJobStatus =
   | "probing"
   | "completed"
   | "failed"
-  | "cancelled";
+  | "cancelled"
+  | "interrupted";
 
 export interface VideoDubbingJob {
   id: string;
@@ -32,12 +33,32 @@ export interface VideoDubbingJob {
   videoExport?: VideoDubbingMediaTask;
   separation?: VideoDubbingSeparationTask;
   error?: string;
+  warning?: string;
   createdAt: number;
   updatedAt: number;
 }
 
+export interface VideoDubbingJobHistoryItem {
+  job: VideoDubbingJob;
+  outputs: {
+    sourceVideo: boolean;
+    masterAudio: boolean;
+    vocals: boolean;
+    instrumental: boolean;
+    mixedAudio: boolean;
+    exportedVideo: boolean;
+  };
+  warning?: string;
+}
+
 export interface VideoDubbingMasterGeneration {
-  status: "idle" | "generating" | "completed" | "failed" | "cancelled";
+  status:
+    | "idle"
+    | "generating"
+    | "completed"
+    | "failed"
+    | "cancelled"
+    | "interrupted";
   progressPercent: number;
   completedSentences: number;
   totalSentences: number;
@@ -51,7 +72,8 @@ export type VideoDubbingMediaTaskStatus =
   | "running"
   | "completed"
   | "failed"
-  | "cancelled";
+  | "cancelled"
+  | "interrupted";
 
 export interface VideoDubbingMediaTask {
   status: VideoDubbingMediaTaskStatus;
@@ -70,7 +92,8 @@ export type VideoDubbingSeparationStatus =
   | "processing"
   | "completed"
   | "error"
-  | "cancelled";
+  | "cancelled"
+  | "interrupted";
 
 export interface VideoDubbingSeparationAvailability {
   status: "unavailable" | "ready";
@@ -81,7 +104,17 @@ export interface VideoDubbingSeparationAvailability {
 
 export interface VideoDubbingSeparationTask {
   status: Exclude<VideoDubbingSeparationStatus, "ready">;
-  phase?: "extracting" | "separating" | "validating";
+  phase?:
+    | "checking"
+    | "extracting"
+    | "loading_model"
+    | "separating"
+    | "writing_outputs"
+    | "validating"
+    | "interrupted";
+  progressPercent?: number;
+  completedSegments?: number;
+  totalSegments?: number;
   durationSeconds?: number;
   sampleRate?: number;
   channels?: number;
