@@ -157,14 +157,21 @@ export class VideoDubbingMediaCoordinator {
   startFinalMix(
     jobId: string,
     input: unknown,
+    originalAudioVolumePercent?: number,
+    includeSeparatedTracks = true,
   ): VideoDubbingFinalMixTask {
     const job = this.requireReadyJob(jobId);
     this.assertNoActiveTask(jobId);
     const settings = this.validateMixerSettings(input);
     this.requireMaster(jobId, job);
     const directory = this.requireDirectory(jobId);
+    const originalGain =
+      originalAudioVolumePercent === undefined
+        ? undefined
+        : this.validateGain(originalAudioVolumePercent, "Âm lượng audio gốc");
     const hasEnabledTrack =
       (!settings.ttsMaster.muted && settings.ttsMaster.volumePercent > 0) ||
+      (originalGain !== undefined && originalGain > 0) ||
       (["vocals", "instrumental"] as const).some(
         (track) => {
           const recordedSize =
@@ -197,8 +204,18 @@ export class VideoDubbingMediaCoordinator {
     };
     this.manager.setFinalMixTask(jobId, task);
     const active = this.registerTask(jobId, "finalMix");
-    active.operation = this.runFinalMix(job, active, savedSettings);
+    active.operation = this.runFinalMix(
+      job,
+      active,
+      savedSettings,
+      originalGain,
+      includeSeparatedTracks,
+    );
     return { ...task };
+  }
+
+  validateMixerSettings(input: unknown): VideoDubbingMixerSettings {
+    return this.validateMixerSettingsInput(input);
   }
 
   private requireReadyJob(jobId: string): VideoDubbingJob {
@@ -240,24 +257,16 @@ export class VideoDubbingMediaCoordinator {
     if (job.masterGeneration?.status === "generating") {
       throw new Error("Hãy đợi TTS Master hoàn tất trước khi xuất MP4.");
     }
-    if (job.mixSelection === "final") {
-      const currentFinalMix = this.isFinalMixCurrent(job);
-      if (!currentFinalMix) {
-        throw new Error(
-          "Mixer settings đã thay đổi hoặc final mix chưa được render; hãy render lại trước khi xuất MP4.",
-        );
-      }
-      const finalMixPath = this.getFinalMixPath(jobId);
-      if (!finalMixPath) {
-        throw new Error("File final mix chưa sẵn sàng.");
-      }
-      return finalMixPath;
+    if (!this.isFinalMixCurrent(job)) {
+      throw new Error(
+        "Final mix chưa được render và xác minh cho mixer settings hiện tại; hãy render lại trước khi xuất MP4.",
+      );
     }
-    const mixedAudioPath = this.getAudioMixPath(jobId);
-    if (!mixedAudioPath || job.audioMix?.status !== "completed") {
-      throw new Error("Hãy tạo bản phối âm thanh thành công trước khi xuất MP4.");
+    const finalMixPath = this.getFinalMixPath(jobId);
+    if (!finalMixPath) {
+      throw new Error("File final mix chưa sẵn sàng.");
     }
-    return mixedAudioPath;
+    return finalMixPath;
   }
 
   private isFinalMixCurrent(job: VideoDubbingJob): boolean {
@@ -300,7 +309,19 @@ export class VideoDubbingMediaCoordinator {
     };
   }
 
-  private validateMixerSettings(input: unknown): VideoDubbingMixerSettings {
+  private validateGain(value: unknown, label: string): number {
+    if (
+      typeof value !== "number" ||
+      !Number.isFinite(value) ||
+      value < 0 ||
+      value > MAX_GAIN_PERCENT
+    ) {
+      throw new Error(`${label} phải nằm trong khoảng 0–${MAX_GAIN_PERCENT}%.`);
+    }
+    return value;
+  }
+
+  private validateMixerSettingsInput(input: unknown): VideoDubbingMixerSettings {
     if (!input || typeof input !== "object") {
       throw new Error("Thiếu cấu hình mixer.");
     }
@@ -545,19 +566,104 @@ export class VideoDubbingMediaCoordinator {
     job: VideoDubbingJob,
     active: ActiveTask,
     settings: VideoDubbingMixerSettings,
+    originalAudioVolumePercent?: number,
+    includeSeparatedTracks = true,
+  ): Promise<void> {
+    try {
+      await this.runFinalMixBody(
+        job,
+        active,
+        settings,
+        originalAudioVolumePercent,
+        includeSeparatedTracks,
+      );
+    } catch (error) {
+      this.failOrCancel(active, error);
+      await this.cleanup(active);
+    }
+  }
+
+  private async runFinalMixBody(
+    job: VideoDubbingJob,
+    active: ActiveTask,
+    settings: VideoDubbingMixerSettings,
+    originalAudioVolumePercent?: number,
+    includeSeparatedTracks = true,
   ): Promise<void> {
     const directory = this.requireDirectory(active.jobId);
     const duration = job.metadata!.durationSeconds;
     const availableSources: Array<{
-      track: VideoDubbingMixerTrack;
+      track: VideoDubbingMixerTrack | "originalAudio";
       filePath: string;
+      volumePercent: number;
     }> = [
       {
         track: "ttsMaster",
         filePath: this.requireMaster(active.jobId, job),
+        volumePercent: settings.ttsMaster.volumePercent,
       },
     ];
-    for (const track of ["vocals", "instrumental"] as const) {
+    let originalAudioTemp: string | undefined;
+    if (originalAudioVolumePercent !== undefined) {
+      originalAudioTemp = path.join(
+        directory,
+        `.original-audio-${randomBytes(8).toString("hex")}.wav`,
+      );
+      active.temporaryFiles.add(originalAudioTemp);
+      if (job.metadata?.audioCodec) {
+        await this.runFfmpeg(
+          active,
+          [
+            "-i",
+            this.requireVideoPath(active.jobId),
+            "-map",
+            "0:a:0",
+            "-vn",
+            "-ar",
+            String(AUDIO_SAMPLE_RATE),
+            "-ac",
+            "2",
+            "-c:a",
+            "pcm_s16le",
+            originalAudioTemp,
+          ],
+          duration,
+          "extracting",
+          0,
+          10,
+        );
+      } else {
+        await this.runFfmpeg(
+          active,
+          [
+            "-f",
+            "lavfi",
+            "-i",
+            `anullsrc=channel_layout=stereo:sample_rate=${AUDIO_SAMPLE_RATE}`,
+            "-t",
+            String(duration),
+            "-c:a",
+            "pcm_s16le",
+            originalAudioTemp,
+          ],
+          duration,
+          "extracting",
+          0,
+          10,
+        );
+      }
+      this.assertNotCancelled(active);
+      this.assertOutputExists(originalAudioTemp, "Không thể trích xuất audio gốc.");
+      availableSources.push({
+        track: "originalAudio",
+        filePath: originalAudioTemp,
+        volumePercent: originalAudioVolumePercent,
+      });
+    }
+    for (const track of includeSeparatedTracks
+      ? (["vocals", "instrumental"] as const)
+      : ([])
+    ) {
       const filePath = path.join(directory, `${track}.wav`);
       const recordedSize =
         track === "vocals"
@@ -569,10 +675,18 @@ export class VideoDubbingMediaCoordinator {
         fs.existsSync(filePath) &&
         fs.statSync(filePath).size > 44
       ) {
-        availableSources.push({ track, filePath });
+        availableSources.push({
+          track,
+          filePath,
+          volumePercent: settings[track].volumePercent,
+        });
       }
     }
     const included = availableSources.filter(({ track }) => {
+      if (track === "originalAudio") {
+        return originalAudioVolumePercent !== undefined &&
+          originalAudioVolumePercent > 0;
+      }
       const setting = settings[track];
       return !setting.muted && setting.volumePercent > 0;
     });
@@ -610,8 +724,8 @@ export class VideoDubbingMediaCoordinator {
           );
         }
       }
-      const filters = included.map(({ track }, index) => {
-        const gain = settings[track].volumePercent / 100;
+      const filters = included.map(({ track, volumePercent }, index) => {
+        const gain = volumePercent / 100;
         return `[${index}:a:0]aresample=${AUDIO_SAMPLE_RATE},aformat=sample_fmts=fltp:channel_layouts=stereo,volume=${gain.toFixed(4)},apad,atrim=duration=${duration},asetpts=PTS-STARTPTS[${track}]`;
       });
       const inputs = included.map(({ track }) => `[${track}]`).join("");
@@ -634,7 +748,14 @@ export class VideoDubbingMediaCoordinator {
         "pcm_s16le",
         temporaryOutput,
       );
-      await this.runFfmpeg(active, ffmpegArgs, duration, "mixing", 0, 90);
+      await this.runFfmpeg(
+        active,
+        ffmpegArgs,
+        duration,
+        "mixing",
+        originalAudioVolumePercent === undefined ? 0 : 10,
+        originalAudioVolumePercent === undefined ? 90 : 80,
+      );
       this.assertNotCancelled(active);
       this.createTask(active.jobId, active.kind, {
         status: "running",

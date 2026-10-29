@@ -1428,6 +1428,11 @@ export default function App() {
   useEffect(() => {
     let dragCounter = 0;
     const handleWindowDragEnter = (e: DragEvent) => {
+      if (activeTab !== "subtitles") {
+        dragCounter = 0;
+        setIsWindowDragging(false);
+        return;
+      }
       e.preventDefault();
       dragCounter++;
       if (e.dataTransfer?.types?.includes("Files")) {
@@ -1435,12 +1440,17 @@ export default function App() {
       }
     };
     const handleWindowDragOver = (e: DragEvent) => {
+      if (activeTab !== "subtitles") {
+        if (activeTab === "video-dubbing") e.preventDefault();
+        return;
+      }
       e.preventDefault();
       if (e.dataTransfer) {
         e.dataTransfer.dropEffect = "copy";
       }
     };
     const handleWindowDragLeave = (e: DragEvent) => {
+      if (activeTab !== "subtitles") return;
       e.preventDefault();
       dragCounter--;
       if (dragCounter <= 0) {
@@ -1452,6 +1462,7 @@ export default function App() {
       e.preventDefault();
       dragCounter = 0;
       setIsWindowDragging(false);
+      if (activeTab !== "subtitles") return;
       const files = e.dataTransfer?.files;
       if (files && files.length > 0) {
         processSubtitleFile(files[0]);
@@ -1468,7 +1479,7 @@ export default function App() {
       window.removeEventListener("dragleave", handleWindowDragLeave);
       window.removeEventListener("drop", handleWindowDrop);
     };
-  }, []);
+  }, [activeTab]);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -5413,7 +5424,7 @@ const { audio, sampleRate } = await tts.synthesize("Xin chào! Đây là Piper T
       {/* FULL-SCREEN DRAG & DROP OVERLAY (Requirement 1)            */}
       {/* Kéo thả phụ đề vào bất kỳ đâu trên màn hình               */}
       {/* ========================================================= */}
-      {isWindowDragging && (
+      {activeTab === "subtitles" && isWindowDragging && (
         <div
           onDragOver={(e) => {
             e.preventDefault();

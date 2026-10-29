@@ -35,9 +35,60 @@ export interface VideoDubbingJob {
   mixSelection?: "legacy" | "final";
   videoExport?: VideoDubbingMediaTask;
   separation?: VideoDubbingSeparationTask;
+  autoPipeline?: VideoDubbingAutoPipelineState;
   error?: string;
   warning?: string;
   createdAt: number;
+  updatedAt: number;
+}
+
+export interface VideoDubbingAutoPipelineConfig {
+  enabled: boolean;
+  master: {
+    items: SubtitleItem[];
+    model: string;
+    speakerId?: number;
+    options: {
+      minSpeed: number;
+      maxSpeed: number;
+      speedPriority: "balanced" | "strict" | "natural";
+    };
+  };
+  demucsEnabled: boolean;
+  mixerSettings: VideoDubbingMixerSettings;
+  originalAudioVolumePercent: number;
+}
+
+export type VideoDubbingAutoPipelineStatus =
+  | "idle"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "interrupted";
+
+export type VideoDubbingAutoPipelineStage =
+  | "validating"
+  | "master"
+  | "separation"
+  | "finalMix"
+  | "export"
+  | "completed";
+
+export interface VideoDubbingAutoPipelineState {
+  status: VideoDubbingAutoPipelineStatus;
+  phase: VideoDubbingAutoPipelineStage;
+  progressPercent?: number;
+  completedStages: VideoDubbingAutoPipelineStage[];
+  reusedOutputs: Array<"master" | "separation" | "finalMix" | "export">;
+  artifacts: {
+    master?: string;
+    separation?: string;
+    finalMix?: string;
+    export?: string;
+  };
+  config?: VideoDubbingAutoPipelineConfig;
+  error?: string;
   updatedAt: number;
 }
 
@@ -67,7 +118,7 @@ export interface VideoDubbingFinalMixTask {
   durationSeconds?: number;
   sizeBytes?: number;
   renderedSettings?: VideoDubbingMixerSettings;
-  includedTracks?: VideoDubbingMixerTrack[];
+  includedTracks?: Array<VideoDubbingMixerTrack | "originalAudio">;
   error?: string;
 }
 

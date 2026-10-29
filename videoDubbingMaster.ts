@@ -53,6 +53,14 @@ export class VideoDubbingMasterCoordinator {
     private readonly timeline: TimelineAdapter,
   ) {}
 
+  isBusy(jobId: string): boolean {
+    return this.activeJobs.has(jobId);
+  }
+
+  isVoiceAvailable(model: string): boolean {
+    return this.timeline.isPiperVoiceAvailable(model);
+  }
+
   start(jobId: string, input: unknown): VideoDubbingMasterGeneration {
     const videoJob = this.manager.getJob(jobId);
     if (!videoJob) throw new Error("Không tìm thấy job Video Dubbing.");
@@ -142,7 +150,7 @@ export class VideoDubbingMasterCoordinator {
     await active.operation;
   }
 
-  private validateRequest(input: unknown): VideoDubbingMasterRequest {
+  validateRequest(input: unknown): VideoDubbingMasterRequest {
     if (!input || typeof input !== "object") {
       throw new Error("Thiếu cấu hình tạo TTS Master.");
     }

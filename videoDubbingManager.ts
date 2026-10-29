@@ -14,6 +14,8 @@ import {
   VideoDubbingFinalMixTask,
   VideoDubbingMixerSettings,
   VideoDubbingSeparationTask,
+  VideoDubbingAutoPipelineConfig,
+  VideoDubbingAutoPipelineState,
 } from "./src/types/videoDubbing";
 
 const DEFAULT_MAX_UPLOAD_BYTES = 4 * 1024 * 1024 * 1024;
@@ -63,6 +65,22 @@ const FINAL_MIX_STATUSES = new Set([
   "cancelled",
   "stale",
   "interrupted",
+]);
+const AUTO_PIPELINE_STATUSES = new Set([
+  "idle",
+  "running",
+  "completed",
+  "failed",
+  "cancelled",
+  "interrupted",
+]);
+const AUTO_PIPELINE_STAGES = new Set([
+  "validating",
+  "master",
+  "separation",
+  "finalMix",
+  "export",
+  "completed",
 ]);
 
 function isCancelled(job: InternalJob): boolean {
@@ -166,6 +184,7 @@ export class VideoDubbingManager {
       storageDirectory: string;
       ffprobePath: string;
       maxUploadBytes?: number;
+      renameMetadataFile?: typeof fs.renameSync;
     },
   ) {
     this.maxUploadBytes =
@@ -273,8 +292,68 @@ export class VideoDubbingManager {
           separation: job.state.separation
             ? { ...job.state.separation }
             : undefined,
+          autoPipeline: job.state.autoPipeline
+            ? this.cloneAutoPipelineState(job.state.autoPipeline)
+            : undefined,
         }
       : null;
+  }
+
+  setAutoPipelineConfig(
+    jobId: string,
+    config: VideoDubbingAutoPipelineConfig,
+  ): void {
+    const job = this.findJob(jobId);
+    if (!job) throw new Error("Không tìm thấy job Video Dubbing.");
+    const current = job.state.autoPipeline;
+    const configChanged = current?.config
+      ? JSON.stringify({ ...current.config, enabled: false }) !==
+        JSON.stringify({ ...config, enabled: false })
+      : Boolean(job.state.finalMix?.sizeBytes || job.state.videoExport?.sizeBytes);
+    if (configChanged) {
+      if (job.state.finalMix?.renderedSettings) {
+        this.invalidateFinalMix(
+          job,
+          "Cấu hình nguồn âm thanh của Auto Pipeline đã thay đổi.",
+        );
+      }
+      if (job.state.videoExport?.sizeBytes) {
+        job.state.videoExport = {
+          ...job.state.videoExport,
+          status: "stale",
+          error: "Cấu hình Auto Pipeline đã thay đổi; hãy render và xuất lại.",
+        };
+      }
+    }
+    job.state.autoPipeline = {
+      status: current?.status || "idle",
+      phase: current?.phase || "validating",
+      completedStages: current?.completedStages || [],
+      reusedOutputs: current?.reusedOutputs || [],
+      ...current,
+      config: this.cloneAutoPipelineConfig(config),
+      artifacts: configChanged
+        ? {
+            ...(current?.artifacts || {}),
+            finalMix: undefined,
+            export: undefined,
+          }
+        : current?.artifacts || {},
+      updatedAt: Date.now(),
+    };
+    job.state.updatedAt = Date.now();
+    this.persistJob(job);
+  }
+
+  setAutoPipelineState(
+    jobId: string,
+    state: VideoDubbingAutoPipelineState,
+  ): void {
+    const job = this.findJob(jobId);
+    if (!job) throw new Error("Không tìm thấy job Video Dubbing.");
+    job.state.autoPipeline = this.cloneAutoPipelineState(state);
+    job.state.updatedAt = Date.now();
+    this.persistJob(job);
   }
 
   setMediaTask(
@@ -286,6 +365,9 @@ export class VideoDubbingManager {
     if (!job) throw new Error("Không tìm thấy job Video Dubbing.");
     job.state[task] = { ...state };
     if (task === "audioMix") job.state.mixSelection = "legacy";
+    if (task === "videoExport" && job.state.autoPipeline) {
+      job.state.autoPipeline.artifacts.export = undefined;
+    }
     job.state.updatedAt = Date.now();
     this.persistJob(job);
   }
@@ -302,6 +384,10 @@ export class VideoDubbingManager {
         ? [...state.includedTracks]
         : undefined,
     };
+    if (state.status === "running" && job.state.autoPipeline) {
+      job.state.autoPipeline.artifacts.finalMix = undefined;
+      job.state.autoPipeline.artifacts.export = undefined;
+    }
     job.state.mixSelection = "final";
     job.state.updatedAt = Date.now();
     this.persistJob(job);
@@ -373,6 +459,11 @@ export class VideoDubbingManager {
     ) {
       this.invalidateFinalMix(job, "Các track tách audio đã được thay đổi.");
     }
+    if (state.status === "processing" && job.state.autoPipeline) {
+      job.state.autoPipeline.artifacts.separation = undefined;
+      job.state.autoPipeline.artifacts.finalMix = undefined;
+      job.state.autoPipeline.artifacts.export = undefined;
+    }
     job.state.separation = { ...state };
     job.state.updatedAt = Date.now();
     this.persistJob(job);
@@ -380,6 +471,32 @@ export class VideoDubbingManager {
 
   getJobDirectory(jobId: string): string | null {
     return this.findJob(jobId)?.directory || null;
+  }
+
+  getSourceVideoPath(jobId: string): string | null {
+    const job = this.findJob(jobId);
+    if (!job || job.state.status !== "completed" || !job.state.metadata) {
+      return null;
+    }
+    const videoPath = path.resolve(job.videoPath);
+    const directory = path.resolve(job.directory);
+    if (!videoPath.startsWith(`${directory}${path.sep}`)) {
+      throw new Error("Đường dẫn video nguồn nằm ngoài thư mục job.");
+    }
+    try {
+      const stats = fs.statSync(videoPath);
+      return stats.isFile() && stats.size > 0 ? videoPath : null;
+    } catch (error) {
+      if (
+        error &&
+        typeof error === "object" &&
+        "code" in error &&
+        error.code === "ENOENT"
+      ) {
+        return null;
+      }
+      throw error;
+    }
   }
 
   getMasterAudioPath(jobId: string): string | null {
@@ -403,6 +520,11 @@ export class VideoDubbingManager {
       job.state.finalMix?.renderedSettings
     ) {
       this.invalidateFinalMix(job, "TTS Master đang được tạo lại.");
+    }
+    if (generation.status === "generating" && job.state.autoPipeline) {
+      job.state.autoPipeline.artifacts.master = undefined;
+      job.state.autoPipeline.artifacts.finalMix = undefined;
+      job.state.autoPipeline.artifacts.export = undefined;
     }
     job.state.masterGeneration = { ...generation };
     job.state.updatedAt = Date.now();
@@ -449,6 +571,11 @@ export class VideoDubbingManager {
     };
     if (job.state.finalMix?.renderedSettings) {
       this.invalidateFinalMix(job, "TTS Master đã thay đổi.");
+    }
+    if (job.state.autoPipeline) {
+      job.state.autoPipeline.artifacts.master = undefined;
+      job.state.autoPipeline.artifacts.finalMix = undefined;
+      job.state.autoPipeline.artifacts.export = undefined;
     }
     job.state.masterGeneration = generation;
     job.state.updatedAt = Date.now();
@@ -530,48 +657,90 @@ export class VideoDubbingManager {
       let state: VideoDubbingJob | null = null;
       let metadataWasInvalid = false;
 
+      let metadataCandidates: string[] = [];
       try {
-        const parsed = JSON.parse(await fs.promises.readFile(metadataPath, "utf8"));
-        if (
-          parsed?.id !== entry.name ||
-          typeof parsed.fileName !== "string" ||
-          !Number.isSafeInteger(parsed.sizeBytes) ||
-          parsed.sizeBytes <= 0 ||
-          !Number.isFinite(parsed.createdAt) ||
-          !JOB_STATUSES.has(parsed.status) ||
-          (parsed.masterGeneration &&
-            !MASTER_STATUSES.has(parsed.masterGeneration.status)) ||
-          (parsed.audioMix && !MEDIA_STATUSES.has(parsed.audioMix.status)) ||
-          (parsed.videoExport &&
-            !MEDIA_STATUSES.has(parsed.videoExport.status)) ||
-          (parsed.finalMix &&
-            !FINAL_MIX_STATUSES.has(parsed.finalMix.status)) ||
-          (parsed.separation &&
-            !SEPARATION_STATUSES.has(parsed.separation.status))
-        ) {
-          throw new Error("Invalid Video Dubbing metadata.");
-        }
-        state = {
-          ...parsed,
-          fileName: safeDisplayName(parsed.fileName),
-          uploadedBytes: Number.isSafeInteger(parsed.uploadedBytes)
-            ? parsed.uploadedBytes
-            : 0,
-          updatedAt: Number.isFinite(parsed.updatedAt)
-            ? parsed.updatedAt
-            : parsed.createdAt,
-        } as VideoDubbingJob;
-        if (state.mixerSettings) {
-          try {
-            state.mixerSettings = this.validateMixerSettings(state.mixerSettings);
-          } catch {
-            state.mixerSettings = undefined;
-            state.warning =
-              "Mixer settings cũ không hợp lệ; đã quay về mặc định khi mở mixer.";
-          }
-        }
+        const names = await fs.promises.readdir(directory);
+        metadataCandidates = names
+          .filter(
+            (name) =>
+              name === "job.json" ||
+              /^job\.json\.[0-9a-f]{12}\.tmp$/i.test(name),
+          )
+          .map((name) => path.join(directory, name));
+        const candidateStats = await Promise.all(
+          metadataCandidates.map(async (candidate) => ({
+            path: candidate,
+            modifiedAt: (await fs.promises.stat(candidate)).mtimeMs,
+          })),
+        );
+        candidateStats.sort((left, right) => right.modifiedAt - left.modifiedAt);
+        metadataCandidates = candidateStats.map((candidate) => candidate.path);
       } catch {
-        metadataWasInvalid = true;
+        metadataCandidates = [metadataPath];
+      }
+
+      for (const candidatePath of metadataCandidates) {
+        try {
+          const parsed = JSON.parse(
+            await fs.promises.readFile(candidatePath, "utf8"),
+          );
+          if (
+            parsed?.id !== entry.name ||
+            typeof parsed.fileName !== "string" ||
+            !Number.isSafeInteger(parsed.sizeBytes) ||
+            parsed.sizeBytes <= 0 ||
+            !Number.isFinite(parsed.createdAt) ||
+            !JOB_STATUSES.has(parsed.status) ||
+            (parsed.masterGeneration &&
+              !MASTER_STATUSES.has(parsed.masterGeneration.status)) ||
+            (parsed.audioMix && !MEDIA_STATUSES.has(parsed.audioMix.status)) ||
+            (parsed.videoExport &&
+              !MEDIA_STATUSES.has(parsed.videoExport.status)) ||
+            (parsed.finalMix &&
+              !FINAL_MIX_STATUSES.has(parsed.finalMix.status)) ||
+            (parsed.autoPipeline &&
+              !AUTO_PIPELINE_STATUSES.has(parsed.autoPipeline.status)) ||
+            (parsed.separation &&
+              !SEPARATION_STATUSES.has(parsed.separation.status))
+          ) {
+            throw new Error("Invalid Video Dubbing metadata.");
+          }
+          state = {
+            ...parsed,
+            fileName: safeDisplayName(parsed.fileName),
+            uploadedBytes: Number.isSafeInteger(parsed.uploadedBytes)
+              ? parsed.uploadedBytes
+              : 0,
+            updatedAt: Number.isFinite(parsed.updatedAt)
+              ? parsed.updatedAt
+              : parsed.createdAt,
+          } as VideoDubbingJob;
+          if (state.mixerSettings) {
+            try {
+              state.mixerSettings = this.validateMixerSettings(
+                state.mixerSettings,
+              );
+            } catch {
+              state.mixerSettings = undefined;
+              state.warning =
+                "Mixer settings cũ không hợp lệ; đã quay về mặc định khi mở mixer.";
+            }
+          }
+          if (state.autoPipeline) {
+            state.autoPipeline = this.normalizeAutoPipelineState(
+              state.autoPipeline,
+            );
+          }
+          if (candidatePath !== metadataPath) {
+            state.warning =
+              "Metadata job được khôi phục từ bản ghi tạm sau lỗi thay thế file trên Windows.";
+          }
+          metadataWasInvalid = false;
+          break;
+        } catch {
+          metadataWasInvalid = true;
+          state = null;
+        }
       }
 
       if (!state) {
@@ -1004,7 +1173,40 @@ export class VideoDubbingManager {
         encoding: "utf8",
         flag: "wx",
       });
-      fs.renameSync(temporaryPath, metadataPath);
+      const fileDescriptor = fs.openSync(temporaryPath, "r+");
+      try {
+        fs.fsyncSync(fileDescriptor);
+      } finally {
+        fs.closeSync(fileDescriptor);
+      }
+
+      let renameError: unknown;
+      for (const delayMs of [0, 25, 75, 150]) {
+        if (delayMs > 0) {
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
+        }
+        try {
+          (this.options.renameMetadataFile || fs.renameSync)(
+            temporaryPath,
+            metadataPath,
+          );
+          renameError = undefined;
+          break;
+        } catch (error) {
+          renameError = error;
+          if (!this.isReplaceLockError(error)) throw error;
+        }
+      }
+
+      if (renameError) {
+        if (!this.isReplaceLockError(renameError)) throw renameError;
+        this.removeStaleMetadataTemps(job.directory, temporaryPath);
+        console.warn(
+          `[VideoDubbing] Không thể thay thế job.json do file bị khóa; giữ metadata mới trong bản ghi tạm để khôi phục khi khởi động lại (${job.state.id}).`,
+        );
+        return;
+      }
+      this.removeStaleMetadataTemps(job.directory);
     } catch (error) {
       try {
         fs.rmSync(temporaryPath, { force: true });
@@ -1016,6 +1218,38 @@ export class VideoDubbingManager {
           error instanceof Error ? error.message : "lỗi không xác định"
         }`,
       );
+    }
+  }
+
+  private isReplaceLockError(error: unknown): boolean {
+    return Boolean(
+      error &&
+        typeof error === "object" &&
+        "code" in error &&
+        (error.code === "EPERM" || error.code === "EBUSY" || error.code === "EACCES"),
+    );
+  }
+
+  private removeStaleMetadataTemps(
+    directory: string,
+    keepPath?: string,
+  ): void {
+    let names: string[];
+    try {
+      names = fs.readdirSync(directory);
+    } catch (error) {
+      console.warn("[VideoDubbing] Không thể liệt kê metadata tạm cũ:", error);
+      return;
+    }
+    for (const name of names) {
+      if (!/^job\.json\.[0-9a-f]{12}\.tmp$/i.test(name)) continue;
+      const candidate = path.join(directory, name);
+      if (candidate === keepPath) continue;
+      try {
+        fs.rmSync(candidate, { force: true });
+      } catch (error) {
+        console.warn("[VideoDubbing] Không thể dọn metadata tạm cũ:", error);
+      }
     }
   }
 
@@ -1054,6 +1288,148 @@ export class VideoDubbingManager {
       vocals: { ...settings.vocals },
       instrumental: { ...settings.instrumental },
       ttsMaster: { ...settings.ttsMaster },
+    };
+  }
+
+  private normalizeAutoPipelineState(
+    input: VideoDubbingAutoPipelineState,
+  ): VideoDubbingAutoPipelineState {
+    const config = this.normalizeAutoPipelineConfig(input.config);
+    const progress =
+      typeof input.progressPercent === "number" &&
+      Number.isFinite(input.progressPercent)
+        ? Math.max(0, Math.min(100, input.progressPercent))
+        : undefined;
+    const artifacts = input.artifacts && typeof input.artifacts === "object"
+      ? Object.fromEntries(
+          (["master", "separation", "finalMix", "export"] as const)
+            .filter((key) => typeof input.artifacts[key] === "string")
+            .map((key) => [key, input.artifacts[key]]),
+        )
+      : {};
+    const wasRunning = input.status === "running";
+    return {
+      status: wasRunning ? "interrupted" : input.status,
+      phase: AUTO_PIPELINE_STAGES.has(input.phase) ? input.phase : "validating",
+      progressPercent: wasRunning ? undefined : progress,
+      completedStages: Array.isArray(input.completedStages)
+        ? input.completedStages.filter((stage) =>
+            AUTO_PIPELINE_STAGES.has(stage),
+          )
+        : [],
+      reusedOutputs: Array.isArray(input.reusedOutputs)
+        ? input.reusedOutputs.filter((stage) =>
+            ["master", "separation", "finalMix", "export"].includes(stage),
+          )
+        : [],
+      artifacts,
+      config,
+      error: wasRunning
+        ? "Auto Pipeline bị gián đoạn khi máy chủ dừng; không tự chạy lại."
+        : config || !input.config
+          ? input.error
+          : "Cấu hình Auto Pipeline đã lưu không hợp lệ; hãy cấu hình lại trước khi chạy.",
+      updatedAt: Number.isFinite(input.updatedAt) ? input.updatedAt : Date.now(),
+    };
+  }
+
+  private normalizeAutoPipelineConfig(
+    input: VideoDubbingAutoPipelineConfig | undefined,
+  ): VideoDubbingAutoPipelineConfig | undefined {
+    if (!input || typeof input !== "object") return undefined;
+    try {
+      const master = input.master as unknown as Record<string, unknown>;
+      const options = master.options as Record<string, unknown>;
+      if (
+        typeof master.model !== "string" ||
+        !master.model.trim() ||
+        !Array.isArray(master.items) ||
+        master.items.length === 0 ||
+        !options ||
+        typeof options !== "object" ||
+        typeof options.minSpeed !== "number" ||
+        typeof options.maxSpeed !== "number" ||
+        !Number.isFinite(options.minSpeed) ||
+        !Number.isFinite(options.maxSpeed) ||
+        !["balanced", "strict", "natural"].includes(
+          String(options.speedPriority),
+        ) ||
+        typeof input.demucsEnabled !== "boolean" ||
+        typeof input.originalAudioVolumePercent !== "number" ||
+        !Number.isFinite(input.originalAudioVolumePercent) ||
+        input.originalAudioVolumePercent < 0 ||
+        input.originalAudioVolumePercent > 200
+      ) {
+        return undefined;
+      }
+      const items = master.items.map((item) => {
+        if (
+          !item ||
+          typeof item !== "object" ||
+          typeof item.text !== "string" ||
+          !Number.isFinite(item.startTime) ||
+          !Number.isFinite(item.endTime) ||
+          Number(item.startTime) < 0 ||
+          Number(item.endTime) <= Number(item.startTime)
+        ) {
+          throw new Error("Invalid subtitle item.");
+        }
+        return { ...item };
+      });
+      return {
+        enabled: input.enabled === true,
+        master: {
+          items: items as VideoDubbingAutoPipelineConfig["master"]["items"],
+          model: master.model,
+          speakerId:
+            Number.isInteger(master.speakerId) && Number(master.speakerId) >= 0
+              ? Number(master.speakerId)
+              : undefined,
+          options: {
+            minSpeed: options.minSpeed,
+            maxSpeed: options.maxSpeed,
+            speedPriority: options.speedPriority as
+              | "balanced"
+              | "strict"
+              | "natural",
+          },
+        },
+        demucsEnabled: input.demucsEnabled,
+        mixerSettings: this.validateMixerSettings(input.mixerSettings),
+        originalAudioVolumePercent: input.originalAudioVolumePercent,
+      };
+    } catch {
+      return undefined;
+    }
+  }
+
+  private cloneAutoPipelineConfig(
+    config: VideoDubbingAutoPipelineConfig,
+  ): VideoDubbingAutoPipelineConfig {
+    return {
+      enabled: config.enabled,
+      master: {
+        ...config.master,
+        items: config.master.items.map((item) => ({ ...item })),
+        options: { ...config.master.options },
+      },
+      demucsEnabled: config.demucsEnabled,
+      mixerSettings: this.cloneMixerSettings(config.mixerSettings),
+      originalAudioVolumePercent: config.originalAudioVolumePercent,
+    };
+  }
+
+  private cloneAutoPipelineState(
+    state: VideoDubbingAutoPipelineState,
+  ): VideoDubbingAutoPipelineState {
+    return {
+      ...state,
+      completedStages: [...state.completedStages],
+      reusedOutputs: [...state.reusedOutputs],
+      artifacts: { ...state.artifacts },
+      config: state.config
+        ? this.cloneAutoPipelineConfig(state.config)
+        : undefined,
     };
   }
 

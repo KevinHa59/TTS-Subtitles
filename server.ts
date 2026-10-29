@@ -67,6 +67,7 @@ import {
 } from "./systemToolsManager";
 import { VideoDubbingManager } from "./videoDubbingManager";
 import { createVideoDubbingRouter } from "./videoDubbingRoutes";
+import { VideoDubbingPipelineCoordinator } from "./videoDubbingPipeline";
 import { VideoDubbingMediaCoordinator } from "./videoDubbingMedia";
 import { VideoDubbingSeparationCoordinator } from "./videoDubbingSeparation";
 import {
@@ -365,6 +366,12 @@ const videoDubbingMasterCoordinator = new VideoDubbingMasterCoordinator(
     ffmpegPath: resolveFfmpegPath(),
   },
 );
+const videoDubbingPipelineCoordinator = new VideoDubbingPipelineCoordinator(
+  videoDubbingManager,
+  videoDubbingMasterCoordinator,
+  videoDubbingSeparationCoordinator,
+  videoDubbingMediaCoordinator,
+);
 app.use(
   "/api/video-dubbing",
   createVideoDubbingRouter(
@@ -372,6 +379,7 @@ app.use(
     videoDubbingMasterCoordinator,
     videoDubbingMediaCoordinator,
     videoDubbingSeparationCoordinator,
+    videoDubbingPipelineCoordinator,
   ),
 );
 

@@ -688,12 +688,21 @@ test("exports an MP4, verifies it with FFprobe, and serves the real download", a
   });
   const coordinator = createCoordinator(manager);
   const job = await createReadyJob(manager, fixtureDirectory, "export", 1.4, true, 0.8);
+  const settings = {
+    vocals: { volumePercent: 0, muted: false },
+    instrumental: { volumePercent: 0, muted: false },
+    ttsMaster: { volumePercent: 100, muted: false },
+  };
   coordinator.startMix(job.id, {
     ttsVolumePercent: 100,
     originalVolumePercent: 60,
   });
   await waitForTask(manager, job.id, "audioMix");
   assert.equal(manager.getJob(job.id)?.audioMix?.status, "completed");
+  assert.throws(() => coordinator.startExport(job.id), /final mix/i);
+  coordinator.startFinalMix(job.id, settings);
+  await waitForTask(manager, job.id, "finalMix");
+  assert.equal(manager.getJob(job.id)?.finalMix?.status, "completed");
 
   coordinator.startExport(job.id);
   await waitForTask(manager, job.id, "videoExport");
@@ -720,6 +729,41 @@ test("exports an MP4, verifies it with FFprobe, and serves the real download", a
   const address = server.address();
   assert.ok(address && typeof address !== "string");
   try {
+    const sourceResponse = await fetch(
+      `http://127.0.0.1:${address.port}/api/video-dubbing/jobs/${job.id}/source-video`,
+    );
+    assert.equal(sourceResponse.status, 200);
+    assert.match(sourceResponse.headers.get("content-type") || "", /video\/mp4/i);
+    assert.deepEqual(Buffer.from(await sourceResponse.arrayBuffer()), job.source);
+    const sourceRangeResponse = await fetch(
+      `http://127.0.0.1:${address.port}/api/video-dubbing/jobs/${job.id}/source-video`,
+      { headers: { Range: "bytes=0-31" } },
+    );
+    assert.equal(sourceRangeResponse.status, 206);
+    assert.deepEqual(
+      Buffer.from(await sourceRangeResponse.arrayBuffer()),
+      job.source.subarray(0, 32),
+    );
+
+    const previewResponse = await fetch(
+      `http://127.0.0.1:${address.port}/api/video-dubbing/jobs/${job.id}/exported-video`,
+    );
+    assert.equal(previewResponse.status, 200);
+    assert.match(previewResponse.headers.get("content-type") || "", /video\/mp4/i);
+    assert.deepEqual(
+      Buffer.from(await previewResponse.arrayBuffer()),
+      fs.readFileSync(outputPath),
+    );
+    const previewRangeResponse = await fetch(
+      `http://127.0.0.1:${address.port}/api/video-dubbing/jobs/${job.id}/exported-video`,
+      { headers: { Range: "bytes=0-31" } },
+    );
+    assert.equal(previewRangeResponse.status, 206);
+    assert.deepEqual(
+      Buffer.from(await previewRangeResponse.arrayBuffer()),
+      fs.readFileSync(outputPath).subarray(0, 32),
+    );
+
     const response = await fetch(
       `http://127.0.0.1:${address.port}/api/video-dubbing/jobs/${job.id}/download`,
     );

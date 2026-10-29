@@ -1,16 +1,21 @@
 import { Request, Response, Router } from "express";
+import path from "node:path";
 import { VideoDubbingMasterCoordinator } from "./videoDubbingMaster";
 import { VideoDubbingMediaCoordinator } from "./videoDubbingMedia";
 import { VideoDubbingManager } from "./videoDubbingManager";
 import { VideoDubbingSeparationCoordinator } from "./videoDubbingSeparation";
+import { VideoDubbingPipelineCoordinator } from "./videoDubbingPipeline";
 
 export function createVideoDubbingRouter(
   videoDubbingManager: VideoDubbingManager,
   masterCoordinator?: VideoDubbingMasterCoordinator,
   mediaCoordinator?: VideoDubbingMediaCoordinator,
   separationCoordinator?: VideoDubbingSeparationCoordinator,
+  pipelineCoordinator?: VideoDubbingPipelineCoordinator,
 ): Router {
   const router = Router();
+  const pipelineIsBusy = (jobId: string) =>
+    pipelineCoordinator?.isBusy(jobId) === true;
 
   router.use(async (_req: Request, res: Response, next) => {
     try {
@@ -102,6 +107,144 @@ export function createVideoDubbingRouter(
     }
     masterCoordinator?.refresh(req.params.jobId);
     res.json({ success: true, job: videoDubbingManager.getJob(req.params.jobId) });
+  });
+
+  router.get("/jobs/:jobId/auto-pipeline", (req: Request, res: Response) => {
+    if (!videoDubbingManager.isValidJobId(req.params.jobId)) {
+      return res.status(400).json({ error: "ID job video không hợp lệ." });
+    }
+    const job = videoDubbingManager.getJob(req.params.jobId);
+    if (!job) {
+      return res.status(404).json({ error: "Không tìm thấy job Video Dubbing." });
+    }
+    return res.json({
+      success: true,
+      config: job.autoPipeline?.config || null,
+      state: job.autoPipeline || null,
+    });
+  });
+
+  router.put("/jobs/:jobId/auto-pipeline/config", (req: Request, res: Response) => {
+    if (!pipelineCoordinator) {
+      return res.status(501).json({ error: "Auto Pipeline chưa được cấu hình." });
+    }
+    if (!videoDubbingManager.isValidJobId(req.params.jobId)) {
+      return res.status(400).json({ error: "ID job video không hợp lệ." });
+    }
+    if (!videoDubbingManager.getJob(req.params.jobId)) {
+      return res.status(404).json({ error: "Không tìm thấy job Video Dubbing." });
+    }
+    try {
+      const config = pipelineCoordinator.configure(req.params.jobId, req.body);
+      return res.json({ success: true, config });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Không thể lưu cấu hình Auto Pipeline.";
+      return res.status(400).json({ error: message });
+    }
+  });
+
+  router.post("/jobs/:jobId/auto-pipeline", async (req: Request, res: Response) => {
+    if (!pipelineCoordinator) {
+      return res.status(501).json({ error: "Auto Pipeline chưa được cấu hình." });
+    }
+    if (!videoDubbingManager.isValidJobId(req.params.jobId)) {
+      return res.status(400).json({ error: "ID job video không hợp lệ." });
+    }
+    if (!videoDubbingManager.getJob(req.params.jobId)) {
+      return res.status(404).json({ error: "Không tìm thấy job Video Dubbing." });
+    }
+    try {
+      const state = await pipelineCoordinator.start(req.params.jobId, req.body);
+      return res.status(202).json({ success: true, state });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Không thể bắt đầu Auto Pipeline.";
+      const unavailable =
+        message.includes("chưa sẵn sàng") ||
+        message.includes("chưa được cấu hình") ||
+        message.includes("không khả dụng");
+      return res.status(unavailable ? 503 : 400).json({ error: message });
+    }
+  });
+
+  router.post(
+    "/jobs/:jobId/auto-pipeline/cancel",
+    async (req: Request, res: Response) => {
+      if (!pipelineCoordinator) {
+        return res.status(501).json({ error: "Auto Pipeline chưa được cấu hình." });
+      }
+      if (!videoDubbingManager.isValidJobId(req.params.jobId)) {
+        return res.status(400).json({ error: "ID job video không hợp lệ." });
+      }
+      if (!videoDubbingManager.getJob(req.params.jobId)) {
+        return res.status(404).json({ error: "Không tìm thấy job Video Dubbing." });
+      }
+      try {
+        await pipelineCoordinator.cancel(req.params.jobId);
+        return res.json({
+          success: true,
+          state: videoDubbingManager.getJob(req.params.jobId)?.autoPipeline || null,
+        });
+      } catch (error) {
+        console.error("[VideoDubbing] Lỗi khi hủy Auto Pipeline:", error);
+        return res.status(500).json({ error: "Không thể hủy Auto Pipeline." });
+      }
+    },
+  );
+
+  router.use("/jobs/:jobId", (req: Request, res: Response, next) => {
+    const jobId = req.params.jobId;
+    const mutating = req.method === "POST" || req.method === "PUT" ||
+      req.method === "PATCH" || req.method === "DELETE";
+    const autoPipelineRoute = req.path.startsWith("/auto-pipeline");
+    const jobLifecycleRoute = req.path === "/cancel" || req.method === "DELETE";
+    if (
+      mutating &&
+      !autoPipelineRoute &&
+      !jobLifecycleRoute &&
+      pipelineIsBusy(jobId)
+    ) {
+      return res.status(409).json({
+        error: "Auto Pipeline đang chạy. Hãy hủy pipeline trước khi chạy thao tác thủ công.",
+      });
+    }
+    return next();
+  });
+
+  router.get("/jobs/:jobId/source-video", (req: Request, res: Response) => {
+    const { jobId } = req.params;
+    if (!videoDubbingManager.isValidJobId(jobId)) {
+      return res.status(400).json({ error: "ID job video không hợp lệ." });
+    }
+    const job = videoDubbingManager.getJob(jobId);
+    let filePath: string | null;
+    try {
+      filePath = videoDubbingManager.getSourceVideoPath(jobId);
+    } catch (error) {
+      console.error("[VideoDubbing] Không thể xác minh video nguồn:", error);
+      return res.status(500).json({ error: "Không thể tải video nguồn." });
+    }
+    if (!job || !filePath) {
+      return res.status(404).json({ error: "Video nguồn chưa sẵn sàng." });
+    }
+    const mediaTypes: Record<string, string> = {
+      ".avi": "video/x-msvideo",
+      ".mkv": "video/x-matroska",
+      ".mov": "video/quicktime",
+      ".mp4": "video/mp4",
+      ".webm": "video/webm",
+    };
+    res.type(
+      mediaTypes[path.extname(job.fileName).toLowerCase()] ||
+        "application/octet-stream",
+    );
+    return res.sendFile(filePath, (error) => {
+      if (error && !res.headersSent) {
+        console.error("[VideoDubbing] Lỗi gửi video xem trước:", error);
+        res.status(500).end();
+      }
+    });
   });
 
   router.post("/jobs/:jobId/master", (req: Request, res: Response) => {
@@ -508,11 +651,32 @@ export function createVideoDubbingRouter(
     },
   );
 
+  router.get(
+    "/jobs/:jobId/exported-video",
+    (req: Request, res: Response) => {
+      if (!videoDubbingManager.isValidJobId(req.params.jobId)) {
+        return res.status(400).json({ error: "ID job video không hợp lệ." });
+      }
+      const filePath = mediaCoordinator?.getVideoExportPath(req.params.jobId);
+      if (!filePath) {
+        return res.status(404).json({ error: "MP4 đầu ra chưa sẵn sàng." });
+      }
+      res.type("video/mp4");
+      return res.sendFile(filePath, (error) => {
+        if (error && !res.headersSent) {
+          console.error("[VideoDubbing] Lỗi phát MP4 đầu ra:", error);
+          res.status(500).end();
+        }
+      });
+    },
+  );
+
   router.post("/jobs/:jobId/cancel", async (req: Request, res: Response) => {
     if (!videoDubbingManager.isValidJobId(req.params.jobId)) {
       return res.status(400).json({ error: "ID job video không hợp lệ." });
     }
     try {
+      await pipelineCoordinator?.cancel(req.params.jobId);
       await separationCoordinator?.cancel(req.params.jobId);
       await mediaCoordinator?.cancel(req.params.jobId);
       await masterCoordinator?.cancel(req.params.jobId);
@@ -532,6 +696,7 @@ export function createVideoDubbingRouter(
       return res.status(400).json({ error: "ID job video không hợp lệ." });
     }
     try {
+      await pipelineCoordinator?.cancel(req.params.jobId);
       await separationCoordinator?.cancel(req.params.jobId);
       await mediaCoordinator?.cancel(req.params.jobId);
       await masterCoordinator?.cancel(req.params.jobId);
