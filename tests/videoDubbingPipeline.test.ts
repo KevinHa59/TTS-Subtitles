@@ -98,7 +98,7 @@ function createPipeline(
   processDelayMs = 0,
 ): VideoDubbingPipelineCoordinator {
   const master = new VideoDubbingMasterCoordinator(manager, {
-    isPiperVoiceAvailable: () => true,
+    isVoiceAvailable: () => true,
     createJob: (request, workingDirectory) => {
       const items = request.items.map((item) => ({
         ...item,

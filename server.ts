@@ -76,6 +76,7 @@ import {
   VideoDubbingMasterCoordinator,
   VideoDubbingMasterRequest,
 } from "./videoDubbingMaster";
+import { normalizeVieNeuAudioForTimeline } from "./videoDubbingAudio";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -314,14 +315,16 @@ const videoDubbingSeparationCoordinator =
 const videoDubbingMasterCoordinator = new VideoDubbingMasterCoordinator(
   videoDubbingManager,
   {
-    isPiperVoiceAvailable: (model) =>
-      (AVAILABLE_MODELS.some(
-        (voice) =>
-          voice.modelId === model &&
-          voice.engine !== "vieneu" &&
-          !voice.id.startsWith("vieneu:"),
-      ) ||
-        scanCustomModelsOnDisk().some((voice) => voice.modelId === model)),
+    isVoiceAvailable: (model) => {
+      const voice = AVAILABLE_MODELS.find((item) => item.modelId === model);
+      if (voice?.engine === "vieneu" || voice?.id.startsWith("vieneu:")) {
+        return checkVieNeuModelAvailable().available;
+      }
+      return (
+        Boolean(voice) ||
+        scanCustomModelsOnDisk().some((item) => item.modelId === model)
+      );
+    },
     isMediaBusy: (jobId) =>
       videoDubbingMediaCoordinator.isBusy(jobId) ||
       videoDubbingSeparationCoordinator.isBusy(jobId),
@@ -617,21 +620,37 @@ async function getOrLoadModel(modelId: string) {
           JOBS_DIR,
           `vn_${Date.now()}_${Math.random().toString(36).substring(2, 6)}.wav`,
         );
+        const normalizedWav = tempWav.replace(/\.wav$/, "_22050.wav");
         const speed = options.lengthScale ? 1.0 / options.lengthScale : 1.0;
         await synthesizeVieNeuVoice(modelId, text, tempWav, speed);
 
+        try {
+          normalizeVieNeuAudioForTimeline(
+            tempWav,
+            normalizedWav,
+            resolveFfmpegPath(),
+          );
+        } catch (error) {
+          try {
+            fs.rmSync(tempWav, { force: true });
+            fs.rmSync(normalizedWav, { force: true });
+          } catch {}
+          throw error;
+        }
+
         if (options.outputFormat === "mp3") {
-          const tempMp3 = tempWav.replace(/\.wav$/, ".mp3");
+          const tempMp3 = normalizedWav.replace(/\.wav$/, ".mp3");
           const ffmpegBin = resolveFfmpegPath();
           const proc = await runChildProcess(
             ffmpegBin,
-            ["-y", "-i", tempWav, "-codec:a", "libmp3lame", "-b:a", "192k", tempMp3],
+            ["-y", "-i", normalizedWav, "-codec:a", "libmp3lame", "-b:a", "192k", tempMp3],
             {},
           );
           if (proc.exitCode === 0 && fs.existsSync(tempMp3)) {
             const mp3Buf = fs.readFileSync(tempMp3);
             try {
               fs.unlinkSync(tempWav);
+              fs.unlinkSync(normalizedWav);
               fs.unlinkSync(tempMp3);
             } catch {}
             return {
@@ -641,9 +660,10 @@ async function getOrLoadModel(modelId: string) {
           }
         }
 
-        const audioBuf = fs.readFileSync(tempWav);
+        const audioBuf = fs.readFileSync(normalizedWav);
         try {
           fs.unlinkSync(tempWav);
+          fs.unlinkSync(normalizedWav);
         } catch {}
         return {
           audio: audioBuf,

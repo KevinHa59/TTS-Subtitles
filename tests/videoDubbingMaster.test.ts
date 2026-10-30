@@ -191,7 +191,7 @@ after(async () => {
   );
 });
 
-test("trims a long SRT timeline at video end and preserves cue order", async () => {
+test("supports VieNeu Turbo and trims a long SRT timeline at video end", async () => {
   const directory = await createTemporaryDirectory();
   const manager = new VideoDubbingManager({
     storageDirectory: path.join(directory, "video_jobs"),
@@ -201,7 +201,8 @@ test("trims a long SRT timeline at video end and preserves cue order", async () 
   const createdJobs: TimelineJob[] = [];
   const maxDurations: number[] = [];
   const coordinator = new VideoDubbingMasterCoordinator(manager, {
-    isPiperVoiceAvailable: (model) => model === "local:piper-a",
+    isVoiceAvailable: (model) =>
+      model === "local:piper-a" || model === "vieneu:minh_quan_pro",
     createJob: (request, _workingDirectory, maxDuration) => {
       maxDurations.push(maxDuration);
       const job = makeTimelineJob("timeline-trim-test", request);
@@ -244,13 +245,14 @@ test("trims a long SRT timeline at video end and preserves cue order", async () 
   ];
   coordinator.start(readyVideo.id, {
     items,
-    model: "local:piper-a",
+    model: "vieneu:minh_quan_pro",
     options: { minSpeed: 0.8, maxSpeed: 1.5, speedPriority: "balanced" },
   });
   await waitForMaster(manager, readyVideo.id, "completed");
 
   const job = manager.getJob(readyVideo.id);
   assert.equal(job?.masterGeneration?.status, "completed");
+  assert.equal(createdJobs[0].model, "vieneu:minh_quan_pro");
   assert.ok((job?.masterGeneration?.durationSeconds || 0) <= 1 + 1 / 22050 + 0.001);
   assert.equal(maxDurations[0], 1);
   assert.deepEqual(
@@ -280,7 +282,7 @@ test("keeps a short master short and isolates concurrent jobs with different Pip
   const createdJobs: TimelineJob[] = [];
   const requestedVoices: string[] = [];
   const coordinator = new VideoDubbingMasterCoordinator(manager, {
-    isPiperVoiceAvailable: (model) =>
+    isVoiceAvailable: (model) =>
       model === "local:piper-a" || model === "local:piper-b",
     createJob: (request) => {
       requestedVoices.push(request.model);
@@ -383,7 +385,7 @@ test("reports failure, cancels cleanly, and keeps an earlier completed master", 
   let shouldWaitForCancel = false;
   let timelineIndex = 0;
   const coordinator = new VideoDubbingMasterCoordinator(manager, {
-    isPiperVoiceAvailable: () => true,
+    isVoiceAvailable: () => true,
     createJob: (masterRequest) =>
       makeTimelineJob(`timeline-${++timelineIndex}`, masterRequest),
     processJob: async (job, workingDirectory) => {
@@ -447,7 +449,7 @@ test("master HTTP API starts a job, reports progress, and streams WAV", async ()
   });
   const readyVideo = await createReadyVideo(manager, directory, "source.mp4", 3);
   const coordinator = new VideoDubbingMasterCoordinator(manager, {
-    isPiperVoiceAvailable: (model) => model === "local:piper-a",
+    isVoiceAvailable: (model) => model === "local:piper-a",
     createJob: (request) => makeTimelineJob("timeline-api", request),
     processJob: async (job, workingDirectory) => {
       job.items.forEach((item) => {

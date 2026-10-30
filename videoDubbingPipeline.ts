@@ -57,7 +57,7 @@ export class VideoDubbingPipelineCoordinator {
     const config = this.validateConfig(input);
     const masterRequest = this.master.validateRequest(config.master);
     if (!this.master.isVoiceAvailable(masterRequest.model)) {
-      throw new Error("Giọng Piper đã chọn không khả dụng.");
+      throw new Error("Giọng đọc đã chọn không khả dụng.");
     }
     if (config.demucsEnabled && !job.metadata?.audioCodec) {
       throw new Error("Video nguồn không có audio để Demucs tách.");

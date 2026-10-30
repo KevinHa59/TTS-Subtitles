@@ -21,7 +21,7 @@ export interface VideoDubbingMasterRequest {
 }
 
 interface TimelineAdapter {
-  isPiperVoiceAvailable(model: string): boolean;
+  isVoiceAvailable(model: string): boolean;
   isMediaBusy?(jobId: string): boolean;
   onMasterUpdated?(jobId: string): void;
   createJob(
@@ -58,7 +58,7 @@ export class VideoDubbingMasterCoordinator {
   }
 
   isVoiceAvailable(model: string): boolean {
-    return this.timeline.isPiperVoiceAvailable(model);
+    return this.timeline.isVoiceAvailable(model);
   }
 
   start(jobId: string, input: unknown): VideoDubbingMasterGeneration {
@@ -75,8 +75,8 @@ export class VideoDubbingMasterCoordinator {
     }
 
     const request = this.validateRequest(input);
-    if (!this.timeline.isPiperVoiceAvailable(request.model)) {
-      throw new Error("Giọng Piper đã chọn không khả dụng.");
+    if (!this.timeline.isVoiceAvailable(request.model)) {
+      throw new Error("Giọng đọc đã chọn không khả dụng.");
     }
     const jobDirectory = this.manager.getJobDirectory(jobId);
     if (!jobDirectory) throw new Error("Không tìm thấy thư mục job Video Dubbing.");
@@ -156,7 +156,7 @@ export class VideoDubbingMasterCoordinator {
     }
     const data = input as Record<string, unknown>;
     if (typeof data.model !== "string" || !data.model.trim()) {
-      throw new Error("Hãy chọn một giọng Piper.");
+      throw new Error("Hãy chọn một giọng đọc.");
     }
     if (!Array.isArray(data.items) || data.items.length === 0) {
       throw new Error("Không có câu phụ đề hợp lệ để tạo TTS Master.");

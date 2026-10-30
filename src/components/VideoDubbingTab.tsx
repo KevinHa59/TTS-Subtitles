@@ -37,6 +37,7 @@ import {
   hasMatchedVideoDubbingQueueInputs,
   pairVideoDubbingQueueRows,
 } from "../utils/videoDubbingQueue";
+import { getAvailableVideoDubbingVoices } from "../utils/videoDubbingVoices";
 
 interface SelectedVideo {
   fileName: string;
@@ -73,7 +74,7 @@ interface QueueItemState {
   error?: string;
 }
 
-interface PiperVoice {
+interface VideoDubbingVoice {
   id: string;
   modelId: string;
   speakerId?: number;
@@ -179,7 +180,7 @@ function MetadataGrid({ metadata }: { metadata: VideoDubbingMetadata }) {
 export default function VideoDubbingTab() {
   const [video, setVideo] = useState<SelectedVideo | null>(null);
   const [srt, setSrt] = useState<SelectedSrt | null>(null);
-  const [voices, setVoices] = useState<PiperVoice[]>([]);
+  const [voices, setVoices] = useState<VideoDubbingVoice[]>([]);
   const [selectedVoiceId, setSelectedVoiceId] = useState("");
   const [voicesError, setVoicesError] = useState<string | null>(null);
   const [speedPriority, setSpeedPriority] = useState<
@@ -551,30 +552,27 @@ export default function VideoDubbingTab() {
         const result = await response.json();
         if (!response.ok || !Array.isArray(result.voices)) {
           throw new Error(
-            result.error || "Không thể tải danh sách giọng Piper.",
+            result.error || "Không thể tải danh sách giọng.",
           );
         }
-        const piperVoices = (result.voices as PiperVoice[]).filter(
-          (voice) =>
-            voice.engine === "piper" &&
-            voice.hasLocalFile !== false &&
-            Boolean(voice.modelId),
+        const availableVoices = getAvailableVideoDubbingVoices(
+          result.voices as VideoDubbingVoice[],
         );
         if (!active) return;
-        setVoices(piperVoices);
-        const defaultVoice = piperVoices.find(
+        setVoices(availableVoices);
+        const defaultVoice = availableVoices.find(
           (voice) => voice.modelId === result.defaultModel,
         );
-        setSelectedVoiceId(defaultVoice?.id || piperVoices[0]?.id || "");
-        if (piperVoices.length === 0) {
-          setVoicesError("Không tìm thấy mô hình Piper đã có sẵn trên máy.");
+        setSelectedVoiceId(defaultVoice?.id || availableVoices[0]?.id || "");
+        if (availableVoices.length === 0) {
+          setVoicesError("Không tìm thấy mô hình giọng đọc khả dụng trên máy.");
         }
       } catch (error) {
         if (!active) return;
         setVoicesError(
           error instanceof Error
             ? error.message
-            : "Không thể tải danh sách giọng Piper.",
+            : "Không thể tải danh sách giọng.",
         );
       }
     };
@@ -2100,7 +2098,7 @@ export default function VideoDubbingTab() {
           </div>
         </div>
         <span className="self-start sm:self-auto px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wide bg-slate-800 text-slate-300 border border-slate-700">
-          Video Dubbing · Piper · Demucs cục bộ
+          Video Dubbing · Piper & VieNeu Turbo · Demucs cục bộ
         </span>
       </header>
 
@@ -3106,13 +3104,13 @@ export default function VideoDubbingTab() {
                     TTS Master
                   </h4>
                   <p className="mt-1 text-xs text-slate-400">
-                    Dùng Piper và căn cue phụ đề theo timestamp video.
+                    Dùng Piper hoặc VieNeu Turbo và căn cue phụ đề theo timestamp.
                   </p>
                 </div>
                 <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
                   <label className="space-y-1.5">
                     <span className="text-xs font-medium text-slate-300">
-                      Giọng Piper
+                      Giọng đọc
                     </span>
                     <select
                       value={selectedVoiceId}
@@ -3123,13 +3121,28 @@ export default function VideoDubbingTab() {
                       className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-white focus:border-indigo-400 focus:outline-none disabled:opacity-50"
                     >
                       {voices.length === 0 ? (
-                        <option value="">Không có giọng Piper khả dụng</option>
+                        <option value="">Không có giọng đọc khả dụng</option>
                       ) : (
-                        voices.map((voice) => (
-                          <option key={voice.id} value={voice.id}>
-                            {voice.name}
-                          </option>
-                        ))
+                        <>
+                          <optgroup label="Piper">
+                            {voices
+                              .filter((voice) => voice.engine === "piper")
+                              .map((voice) => (
+                                <option key={voice.id} value={voice.id}>
+                                  {voice.name}
+                                </option>
+                              ))}
+                          </optgroup>
+                          <optgroup label="VieNeu Turbo">
+                            {voices
+                              .filter((voice) => voice.engine === "vieneu")
+                              .map((voice) => (
+                                <option key={voice.id} value={voice.id}>
+                                  {voice.name}
+                                </option>
+                              ))}
+                          </optgroup>
+                        </>
                       )}
                     </select>
                   </label>
@@ -3479,7 +3492,7 @@ export default function VideoDubbingTab() {
               </div>
               {!autoPipelineConfig && (
                 <p className="text-[11px] leading-relaxed text-amber-300">
-                  Chọn SRT có cue hợp lệ và giọng Piper để cấu hình Auto
+                  Chọn SRT có cue hợp lệ và giọng đọc để cấu hình Auto
                   Pipeline.
                 </p>
               )}
@@ -3502,7 +3515,7 @@ export default function VideoDubbingTab() {
           <div className="min-w-0 flex-1">
             <h3 className="font-semibold text-white">Tạo TTS Master</h3>
             <p className="mt-1 text-xs leading-relaxed text-slate-400">
-              Dùng pipeline Đồng Bộ Phụ Đề hiện có: Piper tạo từng câu, căn theo
+              Dùng pipeline Đồng Bộ Phụ Đề hiện có: mô hình giọng đọc tạo từng câu, căn theo
               timestamp rồi ghép WAV mono 22,050 Hz. Nếu timeline vượt video,
               phần dư cuối track sẽ được trim.
             </p>
@@ -3589,7 +3602,7 @@ export default function VideoDubbingTab() {
               {!canGenerateMaster && !isMasterGenerating && (
                 <p className="text-xs text-slate-500">
                   Cần video đã kiểm tra thành công, SRT có cue hợp lệ và một
-                  giọng Piper.
+                  giọng đọc khả dụng.
                 </p>
               )}
             </div>
