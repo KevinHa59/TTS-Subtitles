@@ -69,6 +69,8 @@ export const LOCAL_MODEL_FILES: Record<string, string | string[]> = {
   "local:news_flash_tr14_1793116546118": "news_flash_tr14_1793116546118.onnx",
   "local:news_flash_tr15_1793133826064": "news_flash_tr15_1793133826064.onnx",
   "local:news_flash_tr18_1793152319943": "news_flash_tr18_1793152319943.onnx",
+  "local:news-flash-tr19_1793233631816": "news-flash-tr19_1793233631816.onnx",
+  "local:news-flash-tr21_1793237189054": "news-flash-tr21_1793237189054.onnx",
   [CSA_VOICE_MODEL_ID]: "vi_VN-csa-voice-piper-v3-medium.onnx",
 };
 
@@ -340,6 +342,26 @@ export const AVAILABLE_MODELS: VoiceDefinition[] = [
     gender: "male",
     description: "Giọng nam News Flash được huấn luyện riêng.",
     sampleText: "Ta là Tề Thiên Đại Thánh, Tôn Ngộ Không. Cẩn tuân tông chủ chi lệnh.",
+    recommended: false,
+  },
+  {
+    id: "local:news-flash-tr19_1793233631816",
+    modelId: "local:news-flash-tr19_1793233631816",
+    name: "News Flash v19",
+    tag: "Nam · Miền Nam · Giọng tùy chỉnh (Offline)",
+    gender: "male",
+    description: "Giọng nam News Flash được huấn luyện riêng.",
+    sampleText: "Ta là tông chủ Thanh Vân Tiên Tông, Phong Thanh Dương. Cẩn tuân tông chủ chi lệnh.",
+    recommended: false,
+  },
+  {
+    id: "local:news-flash-tr21_1793237189054",
+    modelId: "local:news-flash-tr21_1793237189054",
+    name: "News Flash v21",
+    tag: "Nam · Miền Nam · Giọng tùy chỉnh (Offline)",
+    gender: "male",
+    description: "Giọng nam News Flash được huấn luyện riêng.",
+    sampleText: "Ta là tông chủ Thanh Vân Tiên Tông, Phong Thanh Dương. Cẩn tuân tông chủ chi lệnh.",
     recommended: false,
   },
   {

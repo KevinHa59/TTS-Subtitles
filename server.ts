@@ -67,6 +67,8 @@ import {
 } from "./systemToolsManager";
 import { VideoDubbingManager } from "./videoDubbingManager";
 import { createVideoDubbingRouter } from "./videoDubbingRoutes";
+import { JoinAudioManager } from "./joinAudioManager";
+import { createJoinAudioRouter } from "./joinAudioRoutes";
 import { VideoDubbingPipelineCoordinator } from "./videoDubbingPipeline";
 import { VideoDubbingMediaCoordinator } from "./videoDubbingMedia";
 import { VideoDubbingSeparationCoordinator } from "./videoDubbingSeparation";
@@ -280,6 +282,13 @@ if (!fs.existsSync(STORIES_DIR)) {
 }
 
 const VIDEO_DUBBING_DIR = path.resolve(__dirname, "video_dubbing_storage");
+const joinAudioManager = new JoinAudioManager({
+  ffmpegPath: resolveFfmpegPath(),
+  ffprobePath: resolveFfprobePath(),
+  storageDirectory: path.resolve(__dirname, "join_audio_storage"),
+});
+app.use("/api/join-audio", createJoinAudioRouter(joinAudioManager));
+
 const videoDubbingManager = new VideoDubbingManager({
   storageDirectory: VIDEO_DUBBING_DIR,
   ffprobePath: resolveFfprobePath(),
@@ -3692,6 +3701,53 @@ function startDatasetPreparation(
 
   return job;
 }
+
+app.post("/api/dataset/prepare-joined-audio", (req: Request, res: Response) => {
+  const joinAudioJobId = req.body?.joinAudioJobId;
+  const audioPath =
+    typeof joinAudioJobId === "string"
+      ? joinAudioManager.getOutputPath(joinAudioJobId)
+      : undefined;
+  if (!audioPath) {
+    return res.status(404).json({
+      success: false,
+      error: "Không tìm thấy tệp ghép đã xác minh để đưa sang Whisper.",
+    });
+  }
+
+  const minDuration = Number(req.body?.minDuration ?? 1);
+  const maxDuration = Number(req.body?.maxDuration ?? 12);
+  const concurrency = Number(req.body?.concurrency ?? 2);
+  if (
+    !Number.isFinite(minDuration) ||
+    !Number.isFinite(maxDuration) ||
+    !Number.isFinite(concurrency)
+  ) {
+    return res.status(400).json({ success: false, error: "Cài đặt xử lý Whisper không hợp lệ." });
+  }
+
+  try {
+    const job = startDatasetPreparation(
+      audioPath,
+      "joined-audio.wav",
+      String(req.body?.voiceName || "giong_moi"),
+      String(req.body?.whisperModel || "small"),
+      minDuration,
+      maxDuration,
+      undefined,
+      typeof req.body?.extendDatasetId === "string"
+        ? req.body.extendDatasetId
+        : undefined,
+      Math.max(1, Math.min(8, Math.floor(concurrency))),
+    );
+    return res.status(202).json({ success: true, jobId: job.id });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+});
 
 // Get available Whisper models
 app.get("/api/dataset/models", (_req: Request, res: Response) => {

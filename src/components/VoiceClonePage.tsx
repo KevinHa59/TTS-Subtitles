@@ -32,9 +32,11 @@ import {
   X,
   Plus,
   Clock,
+  Music,
 } from "lucide-react";
 
 import { copyAudioToClipboard } from "../utils/clipboardAudio";
+import JoinAudioTab from "./JoinAudioTab";
 
 interface SystemModelItem {
   id: string;
@@ -126,7 +128,7 @@ interface VoiceClonePageProps {
 }
 
 export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps) {
-  const [activeTab, setActiveTab] = useState<"dataset" | "tools" | "guide" | "upload" | "manage">("dataset");
+  const [activeTab, setActiveTab] = useState<"dataset" | "join-audio" | "tools" | "guide" | "upload" | "manage">("dataset");
 
   // === SYSTEM TOOLS & MODELS STATE ===
   const [systemStatus, setSystemStatus] = useState<SystemToolsStatus | null>(null);
@@ -138,6 +140,11 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
 
   // === TAB 1: DATASET PREPARATION STATE ===
   const [audioFiles, setAudioFiles] = useState<File[]>([]);
+  const [joinedAudioInput, setJoinedAudioInput] = useState<{
+    jobId: string;
+    name: string;
+    size: number;
+  } | null>(null);
   const [concurrency, setConcurrency] = useState<number>(2);
   const [extendDatasetId, setExtendDatasetId] = useState<string>("");
   const [datasetVoiceName, setDatasetVoiceName] = useState<string>("giong_moi");
@@ -158,6 +165,10 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
     type: "success" | "error" | "info";
     message: string;
   } | null>(null);
+  const selectedAudioCount = audioFiles.length + (joinedAudioInput ? 1 : 0);
+  const selectedAudioBytes =
+    audioFiles.reduce((total, file) => total + file.size, 0) +
+    (joinedAudioInput?.size || 0);
 
   // Active dataset inspecting/editing
   const [currentDataset, setCurrentDataset] = useState<DatasetInfo | null>(null);
@@ -292,6 +303,13 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
   const handleDatasetAudiosChosen = (files: FileList | File[]) => {
     const list = Array.from(files);
     if (list.length === 0) return;
+    if (joinedAudioInput) {
+      setJoinedAudioInput(null);
+      setDatasetFeedback({
+        type: "info",
+        message: "Tệp ghép từ Join Audio đã được thay bằng các tệp vừa chọn.",
+      });
+    }
     setAudioFiles((prev) => [...prev, ...list]);
     const first = list[0];
     const rawName = first.name.replace(/\.[^/.]+$/, "").replace(/[^a-zA-Z0-9]/g, "_").toLowerCase();
@@ -306,6 +324,7 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
 
   const handleClearAudioFiles = () => {
     setAudioFiles([]);
+    setJoinedAudioInput(null);
     if (audioInputRef.current) audioInputRef.current.value = "";
   };
 
@@ -416,7 +435,7 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
   // Submit audio for offline slicing & transcribing (Supports 1 or multiple audio files + concurrency)
   const handleStartPrepareDataset = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (audioFiles.length === 0) {
+    if (selectedAudioCount === 0) {
       setDatasetFeedback({
         type: "error",
         message: "Vui lòng chọn ít nhất một file âm thanh thu âm giọng đọc trước.",
@@ -433,15 +452,34 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
     setIsChunkDashboardCollapsed(false);
     setDatasetFeedback({
       type: "info",
-      message: audioFiles.length > 1
-        ? `Đang chuẩn bị tải lên ${audioFiles.length} file âm thanh và kích hoạt ${concurrency} tiến trình đồng thời...`
+      message: selectedAudioCount > 1
+        ? `Đang chuẩn bị tải lên ${selectedAudioCount} file âm thanh và kích hoạt ${concurrency} tiến trình đồng thời...`
         : `Đang tải file âm thanh lên và xử lý với ${concurrency} tiến trình đồng thời...`,
     });
 
     try {
       let jobId: string;
 
-      if (audioFiles.length === 1) {
+      if (joinedAudioInput) {
+        const res = await fetch("/api/dataset/prepare-joined-audio", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            joinAudioJobId: joinedAudioInput.jobId,
+            voiceName: datasetVoiceName.trim(),
+            whisperModel,
+            minDuration,
+            maxDuration,
+            concurrency,
+            extendDatasetId: extendDatasetId || undefined,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.success) {
+          throw new Error(data.error || "Không thể gửi tệp ghép sang Whisper.cpp.");
+        }
+        jobId = data.jobId;
+      } else if (audioFiles.length === 1) {
         const singleFile = audioFiles[0];
         const uploadParams = new URLSearchParams({
           originalFilename: singleFile.name,
@@ -924,6 +962,19 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
 
         <button
           type="button"
+          onClick={() => setActiveTab("join-audio")}
+          className={`py-2.5 px-4 rounded-xl text-xs font-bold flex items-center gap-2 whitespace-nowrap transition-all cursor-pointer ${
+            activeTab === "join-audio"
+              ? "bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20"
+              : "text-slate-400 hover:text-white hover:bg-slate-900/60"
+          }`}
+        >
+          <Music className="w-4 h-4" />
+          <span>Join Audio</span>
+        </button>
+
+        <button
+          type="button"
           onClick={() => {
             setActiveTab("tools");
             fetchSystemToolsStatus();
@@ -1135,13 +1186,13 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
                     <label className="text-xs font-bold text-white flex items-center gap-1.5">
                       <Mic className="w-4 h-4 text-amber-400" />
                       <span>File Âm Thanh Thu Âm</span>
-                      {audioFiles.length > 0 && (
+                      {selectedAudioCount > 0 && (
                         <span className="text-[10px] font-mono font-bold px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                          {audioFiles.length} tệp
+                          {selectedAudioCount} tệp
                         </span>
                       )}
                     </label>
-                    {audioFiles.length > 0 && (
+                    {selectedAudioCount > 0 && (
                       <button
                         type="button"
                         onClick={handleClearAudioFiles}
@@ -1181,15 +1232,15 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
                         }
                       }}
                     />
-                    {audioFiles.length > 0 ? (
+                    {selectedAudioCount > 0 ? (
                       <div className="space-y-2 text-center w-full">
                         <CheckCircle2 className="w-7 h-7 text-emerald-400 mx-auto" />
                         <div>
                           <p className="text-xs font-bold text-white">
-                            Đã chọn {audioFiles.length} tệp âm thanh
+                            Đã chọn {selectedAudioCount} tệp âm thanh
                           </p>
                           <p className="text-[11px] text-amber-300 font-mono">
-                            Tổng: {(audioFiles.reduce((s, f) => s + f.size, 0) / (1024 * 1024)).toFixed(2)} MB • Sẵn sàng
+                            Tổng: {(selectedAudioBytes / (1024 * 1024)).toFixed(2)} MB • Sẵn sàng
                           </p>
                         </div>
 
@@ -1221,6 +1272,26 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
                               </div>
                             </div>
                           ))}
+                          {joinedAudioInput && (
+                            <div className="flex items-center justify-between rounded px-1.5 py-0.5 text-left text-[11px] text-slate-300">
+                              <span className="truncate" title={joinedAudioInput.name}>
+                                {audioFiles.length + 1}. {joinedAudioInput.name} · Join Audio
+                              </span>
+                              <div className="flex items-center gap-1.5 pl-2">
+                                <span className="font-mono text-[10px] text-slate-400">
+                                  {(joinedAudioInput.size / (1024 * 1024)).toFixed(1)}MB
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => setJoinedAudioInput(null)}
+                                  className="cursor-pointer p-0.5 text-slate-500 hover:text-rose-400"
+                                  title="Bỏ tệp ghép"
+                                >
+                                  <X className="h-3 w-3" />
+                                </button>
+                              </div>
+                            </div>
+                          )}
                         </div>
 
                         <span className="text-[10px] text-amber-400 underline block pt-0.5">
@@ -1449,7 +1520,7 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
                 <div className="p-4 rounded-2xl bg-slate-950/70 border border-slate-800 space-y-3 shadow-md">
                   <button
                     type="submit"
-                    disabled={isProcessingDataset || audioFiles.length === 0}
+                    disabled={isProcessingDataset || selectedAudioCount === 0}
                     className="w-full py-3 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 disabled:opacity-40 disabled:cursor-not-allowed text-slate-950 text-xs font-black transition-all shadow-lg shadow-amber-500/20 flex items-center justify-center gap-2 cursor-pointer"
                   >
                     {isProcessingDataset ? (
@@ -2089,6 +2160,24 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
             </div>
           </div>
         </div>
+      )}
+
+      {activeTab === "join-audio" && (
+        <JoinAudioTab
+          onUseForWhisper={(jobId, output) => {
+            setAudioFiles([]);
+            setJoinedAudioInput({
+              jobId,
+              name: "joined-audio.wav",
+              size: output.sizeBytes,
+            });
+            setDatasetFeedback({
+              type: "success",
+              message: "Đã chọn joined-audio.wav. Bấm Bắt Đầu Cắt & Phiên Âm để tiếp tục bằng Whisper.cpp.",
+            });
+            setActiveTab("dataset");
+          }}
+        />
       )}
 
       {/* ============================================================== */}

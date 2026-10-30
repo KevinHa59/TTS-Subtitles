@@ -119,7 +119,9 @@ function formatDuration(seconds: number): string {
 }
 
 function formatFrameRate(frameRate: number | null): string {
-  return frameRate ? `${frameRate.toFixed(3).replace(/0+$/, "").replace(/\.$/, "")} fps` : "Không xác định";
+  return frameRate
+    ? `${frameRate.toFixed(3).replace(/0+$/, "").replace(/\.$/, "")} fps`
+    : "Không xác định";
 }
 
 function statusLabel(job: VideoDubbingJob | null): string {
@@ -186,8 +188,9 @@ export default function VideoDubbingTab() {
   const [minSpeed, setMinSpeed] = useState(0.8);
   const [maxSpeed, setMaxSpeed] = useState(1.5);
   const [masterError, setMasterError] = useState<string | null>(null);
-  const [mixerSettings, setMixerSettings] =
-    useState<VideoDubbingMixerSettings>(DEFAULT_MIXER_SETTINGS);
+  const [mixerSettings, setMixerSettings] = useState<VideoDubbingMixerSettings>(
+    DEFAULT_MIXER_SETTINGS,
+  );
   const [mixerSettingsSaved, setMixerSettingsSaved] = useState(false);
   const [mixerError, setMixerError] = useState<string | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
@@ -200,7 +203,9 @@ export default function VideoDubbingTab() {
   const [separationAvailability, setSeparationAvailability] =
     useState<VideoDubbingSeparationAvailability | null>(null);
   const [separationError, setSeparationError] = useState<string | null>(null);
-  const [jobHistory, setJobHistory] = useState<VideoDubbingJobHistoryItem[]>([]);
+  const [jobHistory, setJobHistory] = useState<VideoDubbingJobHistoryItem[]>(
+    [],
+  );
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyExpanded, setHistoryExpanded] = useState(false);
@@ -208,7 +213,9 @@ export default function VideoDubbingTab() {
   const [detailRowIndex, setDetailRowIndex] = useState<number | null>(null);
   const [videoFiles, setVideoFiles] = useState<File[]>([]);
   const [subtitleFiles, setSubtitleFiles] = useState<QueuedSubtitle[]>([]);
-  const [queueStates, setQueueStates] = useState<Record<number, QueueItemState>>({});
+  const [queueStates, setQueueStates] = useState<
+    Record<number, QueueItemState>
+  >({});
   const [queueRunning, setQueueRunning] = useState(false);
   const [autoPipelineEnabled, setAutoPipelineEnabled] = useState(false);
   const [autoPipelineExpanded, setAutoPipelineExpanded] = useState(false);
@@ -219,7 +226,9 @@ export default function VideoDubbingTab() {
     useState(false);
   const [originalAudioVolumePercent, setOriginalAudioVolumePercent] =
     useState(100);
-  const [autoPipelineError, setAutoPipelineError] = useState<string | null>(null);
+  const [autoPipelineError, setAutoPipelineError] = useState<string | null>(
+    null,
+  );
   const [autoPipelineSaving, setAutoPipelineSaving] = useState(false);
   const autoPipelineConfigJobRef = useRef<string | null>(null);
   const autoPipelineSavedConfigKeyRef = useRef<string | null>(null);
@@ -240,7 +249,9 @@ export default function VideoDubbingTab() {
   const previewNodesRef = useRef<Map<VideoDubbingMixerTrack, PreviewTrackNode>>(
     new Map(),
   );
-  const previewControllerRef = useRef<VideoDubbingPreviewController | null>(null);
+  const previewControllerRef = useRef<VideoDubbingPreviewController | null>(
+    null,
+  );
   const previewJobIdRef = useRef<string | null>(null);
   const previewTrackKeyRef = useRef<string | null>(null);
 
@@ -303,7 +314,9 @@ export default function VideoDubbingTab() {
     } catch (error) {
       setPreviewStatus("paused");
       setPreviewError(
-        error instanceof Error ? error.message : "Không thể khởi động lại preview.",
+        error instanceof Error
+          ? error.message
+          : "Không thể khởi động lại preview.",
       );
     }
   };
@@ -355,8 +368,7 @@ export default function VideoDubbingTab() {
     }
     const included = availableTracks.filter(
       ({ track }) =>
-        !mixerSettings[track].muted &&
-        mixerSettings[track].volumePercent > 0,
+        !mixerSettings[track].muted && mixerSettings[track].volumePercent > 0,
     );
     if (included.length === 0 || !videoPreviewReady) {
       if (!videoPreviewReady) {
@@ -438,7 +450,9 @@ export default function VideoDubbingTab() {
       previewControllerRef.current?.pause();
       previewVideoRef.current?.pause();
       setPreviewError(
-        error instanceof Error ? error.message : "Không thể phát mixer preview.",
+        error instanceof Error
+          ? error.message
+          : "Không thể phát mixer preview.",
       );
     }
   };
@@ -457,7 +471,9 @@ export default function VideoDubbingTab() {
       return items;
     } catch (error) {
       const message =
-        error instanceof Error ? error.message : "Không thể tải lịch sử Video Dubbing.";
+        error instanceof Error
+          ? error.message
+          : "Không thể tải lịch sử Video Dubbing.";
       setHistoryError(message);
       return [];
     } finally {
@@ -509,7 +525,9 @@ export default function VideoDubbingTab() {
       }
     } catch (error) {
       setHistoryError(
-        error instanceof Error ? error.message : "Không thể xóa job Video Dubbing.",
+        error instanceof Error
+          ? error.message
+          : "Không thể xóa job Video Dubbing.",
       );
     }
   };
@@ -532,7 +550,9 @@ export default function VideoDubbingTab() {
         const response = await fetch("/api/voices");
         const result = await response.json();
         if (!response.ok || !Array.isArray(result.voices)) {
-          throw new Error(result.error || "Không thể tải danh sách giọng Piper.");
+          throw new Error(
+            result.error || "Không thể tải danh sách giọng Piper.",
+          );
         }
         const piperVoices = (result.voices as PiperVoice[]).filter(
           (voice) =>
@@ -569,7 +589,8 @@ export default function VideoDubbingTab() {
     const loadSeparationAvailability = async () => {
       try {
         const response = await fetch("/api/video-dubbing/separation/status");
-        const result = (await response.json()) as VideoDubbingSeparationAvailability;
+        const result =
+          (await response.json()) as VideoDubbingSeparationAvailability;
         if (!response.ok) {
           throw new Error("Không thể kiểm tra công cụ tách audio.");
         }
@@ -671,11 +692,7 @@ export default function VideoDubbingTab() {
 
   useEffect(() => {
     const job = video?.job;
-    if (
-      !job ||
-      queueRunning ||
-      autoPipelineConfigJobRef.current === job.id
-    ) {
+    if (!job || queueRunning || autoPipelineConfigJobRef.current === job.id) {
       return;
     }
     autoPipelineConfigJobRef.current = job.id;
@@ -776,11 +793,7 @@ export default function VideoDubbingTab() {
         mixerSettingsTimerRef.current = null;
       }
     };
-  }, [
-    video?.job?.id,
-    video?.job?.status,
-    localMixerSettingsKey,
-  ]);
+  }, [video?.job?.id, video?.job?.status, localMixerSettingsKey]);
 
   useEffect(() => {
     const context = audioContextRef.current;
@@ -822,12 +835,14 @@ export default function VideoDubbingTab() {
                   job.masterGeneration?.status === "completed" ||
                   item.outputs.masterAudio,
                 vocals:
-                  Boolean(job.separation?.vocalsSizeBytes) || item.outputs.vocals,
+                  Boolean(job.separation?.vocalsSizeBytes) ||
+                  item.outputs.vocals,
                 instrumental:
                   Boolean(job.separation?.instrumentalSizeBytes) ||
                   item.outputs.instrumental,
                 mixedAudio:
-                  job.audioMix?.status === "completed" || item.outputs.mixedAudio,
+                  job.audioMix?.status === "completed" ||
+                  item.outputs.mixedAudio,
                 exportedVideo:
                   job.videoExport?.status === "completed" ||
                   item.outputs.exportedVideo,
@@ -891,9 +906,7 @@ export default function VideoDubbingTab() {
       }
       activeJobIdRef.current = job.id;
       setVideo((current) =>
-        current?.fileName === file.name
-          ? { ...current, job }
-          : current,
+        current?.fileName === file.name ? { ...current, job } : current,
       );
 
       const request = new XMLHttpRequest();
@@ -901,7 +914,10 @@ export default function VideoDubbingTab() {
       request.open("PUT", `/api/video-dubbing/jobs/${job.id}/video`);
       request.setRequestHeader("Content-Type", "application/octet-stream");
       request.upload.onprogress = (event) => {
-        if (!event.lengthComputable || generation !== videoGenerationRef.current) {
+        if (
+          !event.lengthComputable ||
+          generation !== videoGenerationRef.current
+        ) {
           return;
         }
         setVideo((current) =>
@@ -917,7 +933,11 @@ export default function VideoDubbingTab() {
         if (generation !== videoGenerationRef.current) return;
         setVideo((current) =>
           current?.job?.id === job.id
-            ? { ...current, progress: 100, job: { ...current.job!, status: "probing" } }
+            ? {
+                ...current,
+                progress: 100,
+                job: { ...current.job!, status: "probing" },
+              }
             : current,
         );
       };
@@ -973,7 +993,9 @@ export default function VideoDubbingTab() {
       const message =
         error instanceof Error ? error.message : "Không thể tải video lên.";
       setVideo((current) =>
-        current?.fileName === file.name ? { ...current, error: message } : current,
+        current?.fileName === file.name
+          ? { ...current, error: message }
+          : current,
       );
     }
   };
@@ -1002,7 +1024,8 @@ export default function VideoDubbingTab() {
         sizeBytes: file.size,
         progress: 0,
         job: null,
-        error: "Định dạng video không được hỗ trợ. Hãy chọn MP4, MKV, MOV, AVI hoặc WebM.",
+        error:
+          "Định dạng video không được hỗ trợ. Hãy chọn MP4, MKV, MOV, AVI hoặc WebM.",
       });
       return;
     }
@@ -1074,16 +1097,19 @@ export default function VideoDubbingTab() {
             item.id === entry.id ? { ...item, analysis } : item,
           ),
         );
-        setSrt((current) =>
-          current || {
-            fileName: entry.fileName,
-            sizeBytes: entry.sizeBytes,
-            analysis,
-          },
+        setSrt(
+          (current) =>
+            current || {
+              fileName: entry.fileName,
+              sizeBytes: entry.sizeBytes,
+              analysis,
+            },
         );
       } catch (error) {
         const message =
-          error instanceof Error ? error.message : "Không thể đọc nội dung tệp SRT.";
+          error instanceof Error
+            ? error.message
+            : "Không thể đọc nội dung tệp SRT.";
         setSubtitleFiles((current) =>
           current.map((item) =>
             item.id === entry.id ? { ...item, error: message } : item,
@@ -1145,7 +1171,9 @@ export default function VideoDubbingTab() {
       }
     }
     setVideo((current) =>
-      current ? { ...current, error: "Đã hủy quá trình tải/kiểm tra." } : current,
+      current
+        ? { ...current, error: "Đã hủy quá trình tải/kiểm tra." }
+        : current,
     );
   };
 
@@ -1161,7 +1189,9 @@ export default function VideoDubbingTab() {
   const isAutoPipelineRunning = autoPipeline?.status === "running";
   const isSeparationProcessing = separation?.status === "processing";
   const hasFinalMix = Boolean(finalMix?.sizeBytes && finalMix.sizeBytes > 44);
-  const hasExportedVideo = Boolean(videoExport?.sizeBytes && videoExport.sizeBytes > 0);
+  const hasExportedVideo = Boolean(
+    videoExport?.sizeBytes && videoExport.sizeBytes > 0,
+  );
   const isMediaProcessing =
     audioMix?.status === "running" ||
     finalMix?.status === "running" ||
@@ -1170,20 +1200,18 @@ export default function VideoDubbingTab() {
     isAutoPipelineRunning;
   const hasMasterAudio = Boolean(
     masterGeneration?.durationSeconds !== undefined &&
-      masterGeneration.sizeBytes !== undefined,
+    masterGeneration.sizeBytes !== undefined,
   );
   const isFinalMixCurrent = Boolean(
     finalMix &&
-      finalMix.status !== "stale" &&
-      finalMix.status !== "idle" &&
-      finalMix.sizeBytes &&
-      JSON.stringify(finalMix.renderedSettings) === localMixerSettingsKey,
+    finalMix.status !== "stale" &&
+    finalMix.status !== "idle" &&
+    finalMix.sizeBytes &&
+    JSON.stringify(finalMix.renderedSettings) === localMixerSettingsKey,
   );
   const mixerTrackAvailability: Record<VideoDubbingMixerTrack, boolean> = {
     vocals: Boolean(separation?.vocalsSizeBytes),
-    instrumental: Boolean(
-      separation?.instrumentalSizeBytes,
-    ),
+    instrumental: Boolean(separation?.instrumentalSizeBytes),
     ttsMaster: hasMasterAudio,
   };
   const hasPreviewTrack = Object.entries(mixerTrackAvailability).some(
@@ -1194,41 +1222,41 @@ export default function VideoDubbingTab() {
   );
   const canRenderFinalMix = Boolean(
     job?.status === "completed" &&
-      hasMasterAudio &&
-      hasPreviewTrack &&
-      !isMasterGenerating &&
-      !isMediaProcessing,
+    hasMasterAudio &&
+    hasPreviewTrack &&
+    !isMasterGenerating &&
+    !isMediaProcessing,
   );
   const canStartSeparation = Boolean(
     job?.status === "completed" &&
-      !isSeparationProcessing &&
-      separationAvailability?.status === "ready" &&
-      Boolean(job.metadata?.audioCodec) &&
-      !isMasterGenerating &&
-      !isMediaProcessing,
+    !isSeparationProcessing &&
+    separationAvailability?.status === "ready" &&
+    Boolean(job.metadata?.audioCodec) &&
+    !isMasterGenerating &&
+    !isMediaProcessing,
   );
   const canGenerateMaster = Boolean(
     job?.status === "completed" &&
     srt?.analysis?.items.length &&
     selectedVoice &&
-      !isMasterGenerating &&
-      !isMediaProcessing,
+    !isMasterGenerating &&
+    !isMediaProcessing,
   );
   const autoPipelineConfig: VideoDubbingAutoPipelineConfig | null = useMemo(
     () =>
       srt?.analysis?.items.length && selectedVoice
         ? {
-          enabled: autoPipelineEnabled,
-          master: {
-            items: srt.analysis.items,
-            model: selectedVoice.modelId,
-            speakerId: selectedVoice.speakerId,
-            options: { minSpeed, maxSpeed, speedPriority },
-          },
-          demucsEnabled: autoPipelineDemucsEnabled,
-          mixerSettings,
-          originalAudioVolumePercent,
-        }
+            enabled: autoPipelineEnabled,
+            master: {
+              items: srt.analysis.items,
+              model: selectedVoice.modelId,
+              speakerId: selectedVoice.speakerId,
+              options: { minSpeed, maxSpeed, speedPriority },
+            },
+            demucsEnabled: autoPipelineDemucsEnabled,
+            mixerSettings,
+            originalAudioVolumePercent,
+          }
         : null,
     [
       autoPipelineEnabled,
@@ -1246,11 +1274,11 @@ export default function VideoDubbingTab() {
     job?.status === "completed" &&
     autoPipelineEnabled &&
     autoPipelineConfig &&
-      !isAutoPipelineRunning &&
-      !isMediaProcessing &&
-      (!autoPipelineDemucsEnabled ||
-        (separationAvailability?.status === "ready" &&
-          Boolean(job.metadata?.audioCodec))),
+    !isAutoPipelineRunning &&
+    !isMediaProcessing &&
+    (!autoPipelineDemucsEnabled ||
+      (separationAvailability?.status === "ready" &&
+        Boolean(job.metadata?.audioCodec))),
   );
   const queueRows = pairVideoDubbingQueueRows(videoFiles, subtitleFiles);
   const queueRowCount = queueRows.length;
@@ -1261,20 +1289,20 @@ export default function VideoDubbingTab() {
       ({ video: file, subtitle: entry }) =>
         Boolean(
           file &&
-            ACCEPTED_VIDEO_EXTENSIONS.has(
-              file.name.slice(file.name.lastIndexOf(".")).toLowerCase(),
-            ),
+          ACCEPTED_VIDEO_EXTENSIONS.has(
+            file.name.slice(file.name.lastIndexOf(".")).toLowerCase(),
+          ),
         ) &&
         Boolean(entry?.analysis?.items.length) &&
         !entry?.error,
     );
   const canStartQueue = Boolean(
     queueInputsValid &&
-      autoPipelineEnabled &&
-      selectedVoice &&
-      !queueRunning &&
-      !isAutoPipelineRunning &&
-      (!autoPipelineDemucsEnabled || separationAvailability?.status === "ready"),
+    autoPipelineEnabled &&
+    selectedVoice &&
+    !queueRunning &&
+    !isAutoPipelineRunning &&
+    (!autoPipelineDemucsEnabled || separationAvailability?.status === "ready"),
   );
 
   const uploadQueuedVideo = async (
@@ -1317,7 +1345,10 @@ export default function VideoDubbingTab() {
       request.setRequestHeader("Content-Type", "application/octet-stream");
       request.upload.onprogress = (event) => {
         if (!event.lengthComputable) return;
-        const progressPercent = Math.min(100, (event.loaded / event.total) * 100);
+        const progressPercent = Math.min(
+          100,
+          (event.loaded / event.total) * 100,
+        );
         setQueueStates((current) => ({
           ...current,
           [rowIndex]: {
@@ -1376,10 +1407,7 @@ export default function VideoDubbingTab() {
     setAutoPipelineError(null);
     setQueueStates(
       Object.fromEntries(
-        queueRows.map(({ index }) => [
-          index,
-          { status: "queued" as const },
-        ]),
+        queueRows.map(({ index }) => [index, { status: "queued" as const }]),
       ),
     );
 
@@ -1413,7 +1441,9 @@ export default function VideoDubbingTab() {
             throw new Error("Đã hủy hàng đợi.");
           }
           if (uploadedJob.status !== "completed") {
-            throw new Error(uploadedJob.error || "Video chưa vượt qua bước kiểm tra.");
+            throw new Error(
+              uploadedJob.error || "Video chưa vượt qua bước kiểm tra.",
+            );
           }
           setVideo({
             fileName: file.name,
@@ -1444,7 +1474,9 @@ export default function VideoDubbingTab() {
           );
           const startResult = await startResponse.json();
           if (!startResponse.ok) {
-            throw new Error(startResult.error || "Không thể bắt đầu Auto Pipeline.");
+            throw new Error(
+              startResult.error || "Không thể bắt đầu Auto Pipeline.",
+            );
           }
 
           setQueueStates((current) => ({
@@ -1586,7 +1618,9 @@ export default function VideoDubbingTab() {
         );
         const statusResult = await statusResponse.json();
         if (!statusResponse.ok) {
-          throw new Error(statusResult.error || "Không thể đọc trạng thái job.");
+          throw new Error(
+            statusResult.error || "Không thể đọc trạng thái job.",
+          );
         }
         if (statusResult.job?.autoPipeline?.status === "running") {
           const response = await fetch(
@@ -1600,7 +1634,9 @@ export default function VideoDubbingTab() {
         }
       } catch (error) {
         setAutoPipelineError(
-          error instanceof Error ? error.message : "Không thể hủy Auto Pipeline.",
+          error instanceof Error
+            ? error.message
+            : "Không thể hủy Auto Pipeline.",
         );
       }
     }
@@ -1616,19 +1652,16 @@ export default function VideoDubbingTab() {
     if (!job || !srt?.analysis?.items.length || !selectedVoice) return;
     setMasterError(null);
     try {
-      const response = await fetch(
-        `/api/video-dubbing/jobs/${job.id}/master`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            items: srt.analysis.items,
-            model: selectedVoice.modelId,
-            speakerId: selectedVoice.speakerId,
-            options: { minSpeed, maxSpeed, speedPriority },
-          }),
-        },
-      );
+      const response = await fetch(`/api/video-dubbing/jobs/${job.id}/master`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          items: srt.analysis.items,
+          model: selectedVoice.modelId,
+          speakerId: selectedVoice.speakerId,
+          options: { minSpeed, maxSpeed, speedPriority },
+        }),
+      });
       const result = await response.json();
       if (!response.ok) {
         throw new Error(result.error || "Không thể bắt đầu tạo TTS Master.");
@@ -1637,7 +1670,10 @@ export default function VideoDubbingTab() {
         current?.job?.id === job.id
           ? {
               ...current,
-              job: { ...current.job, masterGeneration: result.masterGeneration },
+              job: {
+                ...current.job,
+                masterGeneration: result.masterGeneration,
+              },
             }
           : current,
       );
@@ -1649,9 +1685,7 @@ export default function VideoDubbingTab() {
       );
     }
   };
-  const saveAutoPipelineConfig = async (
-    config = autoPipelineConfig,
-  ) => {
+  const saveAutoPipelineConfig = async (config = autoPipelineConfig) => {
     if (!job || !config) return;
     const configKey = JSON.stringify(config);
     setAutoPipelineError(null);
@@ -1667,7 +1701,9 @@ export default function VideoDubbingTab() {
       );
       const result = await response.json();
       if (!response.ok) {
-        throw new Error(result.error || "Không thể lưu cấu hình Auto Pipeline.");
+        throw new Error(
+          result.error || "Không thể lưu cấu hình Auto Pipeline.",
+        );
       }
       autoPipelineSavedConfigKeyRef.current = configKey;
       mixerTouchedRef.current = false;
@@ -1730,7 +1766,9 @@ export default function VideoDubbingTab() {
       );
     } catch (error) {
       setAutoPipelineError(
-        error instanceof Error ? error.message : "Không thể bắt đầu Auto Pipeline.",
+        error instanceof Error
+          ? error.message
+          : "Không thể bắt đầu Auto Pipeline.",
       );
     }
   };
@@ -1814,7 +1852,9 @@ export default function VideoDubbingTab() {
       }
       if (result.job) {
         setVideo((current) =>
-          current?.job?.id === job.id ? { ...current, job: result.job } : current,
+          current?.job?.id === job.id
+            ? { ...current, job: result.job }
+            : current,
         );
       }
     } catch (error) {
@@ -1836,7 +1876,9 @@ export default function VideoDubbingTab() {
       }
       if (result.job) {
         setVideo((current) =>
-          current?.job?.id === job.id ? { ...current, job: result.job } : current,
+          current?.job?.id === job.id
+            ? { ...current, job: result.job }
+            : current,
         );
       }
     } catch (error) {
@@ -1874,17 +1916,19 @@ export default function VideoDubbingTab() {
     if (!job) return;
     setMediaError(null);
     try {
-      const response = await fetch(
-        `/api/video-dubbing/jobs/${job.id}/export`,
-        { method: "POST" },
-      );
+      const response = await fetch(`/api/video-dubbing/jobs/${job.id}/export`, {
+        method: "POST",
+      });
       const result = await response.json();
       if (!response.ok) {
         throw new Error(result.error || "Không thể bắt đầu xuất MP4.");
       }
       setVideo((current) =>
         current?.job?.id === job.id
-          ? { ...current, job: { ...current.job, videoExport: result.videoExport } }
+          ? {
+              ...current,
+              job: { ...current.job, videoExport: result.videoExport },
+            }
           : current,
       );
     } catch (error) {
@@ -1893,9 +1937,7 @@ export default function VideoDubbingTab() {
       );
     }
   };
-  const cancelMediaTask = async (
-    task: "audio-mix" | "export",
-  ) => {
+  const cancelMediaTask = async (task: "audio-mix" | "export") => {
     if (!job) return;
     setMediaError(null);
     try {
@@ -1909,7 +1951,9 @@ export default function VideoDubbingTab() {
       }
       if (result.job) {
         setVideo((current) =>
-          current?.job?.id === job.id ? { ...current, job: result.job } : current,
+          current?.job?.id === job.id
+            ? { ...current, job: result.job }
+            : current,
         );
       }
     } catch (error) {
@@ -1955,7 +1999,9 @@ export default function VideoDubbingTab() {
       );
     } catch (error) {
       setSeparationError(
-        error instanceof Error ? error.message : "Không thể bắt đầu tách audio.",
+        error instanceof Error
+          ? error.message
+          : "Không thể bắt đầu tách audio.",
       );
       try {
         const statusResponse = await fetch(`/api/video-dubbing/jobs/${job.id}`);
@@ -1986,12 +2032,16 @@ export default function VideoDubbingTab() {
       }
       if (result.job) {
         setVideo((current) =>
-          current?.job?.id === job.id ? { ...current, job: result.job } : current,
+          current?.job?.id === job.id
+            ? { ...current, job: result.job }
+            : current,
         );
       }
     } catch (error) {
       setSeparationError(
-        error instanceof Error ? error.message : "Không thể hủy tác vụ tách audio.",
+        error instanceof Error
+          ? error.message
+          : "Không thể hủy tác vụ tách audio.",
       );
     }
   };
@@ -2020,9 +2070,7 @@ export default function VideoDubbingTab() {
     !video?.error &&
     (!job || job.status === "uploading" || job.status === "probing");
   const detailVideoFile =
-    detailRowIndex === null
-      ? null
-      : queueRows[detailRowIndex]?.video || null;
+    detailRowIndex === null ? null : queueRows[detailRowIndex]?.video || null;
   const detailSubtitle =
     detailRowIndex === null
       ? null
@@ -2046,7 +2094,8 @@ export default function VideoDubbingTab() {
           <div>
             <h2 className="text-xl font-bold text-white">Video Dubbing</h2>
             <p className="text-xs sm:text-sm text-slate-400">
-              Tạo TTS Master theo timestamp bằng pipeline Đồng Bộ Phụ Đề hiện có.
+              Tạo TTS Master theo timestamp bằng pipeline Đồng Bộ Phụ Đề hiện
+              có.
             </p>
           </div>
         </div>
@@ -2079,7 +2128,9 @@ export default function VideoDubbingTab() {
             disabled={historyLoading}
             className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-950/70 px-2.5 py-1.5 text-xs text-slate-300 hover:text-white disabled:opacity-50"
           >
-            <RefreshCw className={`w-3.5 h-3.5 ${historyLoading ? "animate-spin" : ""}`} />
+            <RefreshCw
+              className={`w-3.5 h-3.5 ${historyLoading ? "animate-spin" : ""}`}
+            />
             Làm mới
           </button>
         </div>
@@ -2144,7 +2195,9 @@ export default function VideoDubbingTab() {
                                     : "border-slate-800 bg-slate-900/60 text-slate-500"
                                 }`}
                               >
-                                {available && <CheckCircle2 className="h-3 w-3" />}
+                                {available && (
+                                  <CheckCircle2 className="h-3 w-3" />
+                                )}
                                 {label}
                               </span>
                             ))}
@@ -2201,213 +2254,221 @@ export default function VideoDubbingTab() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800/80">
-              {Array.from({ length: Math.max(queueRowCount, 1) }, (_, index) => {
-                const { video: file, subtitle } = queueRows[index] || {};
-                const rowState = queueStates[index];
-                const validVideo = Boolean(
-                  file &&
+              {Array.from(
+                { length: Math.max(queueRowCount, 1) },
+                (_, index) => {
+                  const { video: file, subtitle } = queueRows[index] || {};
+                  const rowState = queueStates[index];
+                  const validVideo = Boolean(
+                    file &&
                     ACCEPTED_VIDEO_EXTENSIONS.has(
                       file.name.slice(file.name.lastIndexOf(".")).toLowerCase(),
                     ),
-                );
-                return (
-                  <tr
-                    key={`${file?.name || "no-video"}-${file?.size || 0}-${file?.lastModified || 0}-${subtitle?.id || "no-srt"}-${index}`}
-                  >
-                    <td className="p-3">
-                      <div
-                        onDragEnter={(event) => {
-                          event.preventDefault();
-                          event.stopPropagation();
-                        }}
-                        onDragOver={(event) => {
-                          event.preventDefault();
-                          event.stopPropagation();
-                          event.dataTransfer.dropEffect = "copy";
-                        }}
-                        onDrop={(event) => {
-                          event.preventDefault();
-                          event.stopPropagation();
-                          if (!queueRunning) {
-                            const droppedFiles = Array.from(
-                              event.dataTransfer.files,
-                            ).filter((droppedFile) =>
-                              ACCEPTED_VIDEO_EXTENSIONS.has(
-                                droppedFile.name
-                                  .slice(droppedFile.name.lastIndexOf("."))
-                                  .toLowerCase(),
-                              ),
-                            );
-                            if (droppedFiles.length > 0) {
-                              setVideoFiles((current) => [
-                                ...current,
-                                ...droppedFiles,
-                              ]);
-                            }
-                          }
-                        }}
-                        className="min-h-14"
-                      >
-                        <button
-                          type="button"
-                          disabled={queueRunning}
-                          onClick={() => videoInputRef.current?.click()}
-                          className="flex min-h-14 w-full items-center gap-2 rounded-lg border border-dashed border-slate-700 bg-slate-950/50 px-3 py-2 text-left hover:border-amber-500/50 disabled:cursor-wait disabled:opacity-60"
-                        >
-                          <Film className="h-4 w-4 shrink-0 text-amber-400" />
-                          <span className="min-w-0 flex-1 truncate text-sm text-slate-200">
-                            {file?.name || "Chọn hoặc thả video"}
-                          </span>
-                          {file && !validVideo && (
-                            <span className="text-[11px] text-rose-300">
-                              Định dạng không hỗ trợ
-                            </span>
-                          )}
-                          {rowState?.status === "uploading" && (
-                            <span className="shrink-0 text-[11px] text-amber-300">
-                              {rowState.progressPercent === undefined
-                                ? rowState.phase
-                                : `${Math.round(rowState.progressPercent)}%`}
-                            </span>
-                          )}
-                        </button>
-                      </div>
-                    </td>
-                    <td className="p-3">
-                      <div
-                        onDragEnter={(event) => {
-                          event.preventDefault();
-                          event.stopPropagation();
-                        }}
-                        onDragOver={(event) => {
-                          event.preventDefault();
-                          event.stopPropagation();
-                          event.dataTransfer.dropEffect = "copy";
-                        }}
-                        onDrop={(event) => {
-                          event.preventDefault();
-                          event.stopPropagation();
-                          if (!queueRunning) {
-                            const droppedFiles = Array.from(
-                              event.dataTransfer.files,
-                            ).filter((droppedFile) =>
-                              droppedFile.name.toLowerCase().endsWith(".srt"),
-                            );
-                            void handleSrtFiles(droppedFiles);
-                          }
-                        }}
-                        className="min-h-14"
-                      >
-                        <button
-                          type="button"
-                          disabled={queueRunning}
-                          onClick={() => srtInputRef.current?.click()}
-                          className="flex min-h-14 w-full items-center gap-2 rounded-lg border border-dashed border-slate-700 bg-slate-950/50 px-3 py-2 text-left hover:border-amber-500/50 disabled:cursor-wait disabled:opacity-60"
-                        >
-                          <FileText className="h-4 w-4 shrink-0 text-amber-400" />
-                          <span className="min-w-0 flex-1 truncate text-sm text-slate-200">
-                            {subtitle?.fileName || "Chọn hoặc thả phụ đề"}
-                          </span>
-                          {subtitle?.analysis && (
-                            <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />
-                          )}
-                          {subtitle?.error && (
-                            <span className="text-[11px] text-rose-300">
-                              Lỗi SRT
-                            </span>
-                          )}
-                        </button>
-                      </div>
-                    </td>
-                    <td className="p-3">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setDetailRowIndex(index);
-                            setFileDetailsOpen(true);
+                  );
+                  return (
+                    <tr
+                      key={`${file?.name || "no-video"}-${file?.size || 0}-${file?.lastModified || 0}-${subtitle?.id || "no-srt"}-${index}`}
+                    >
+                      <td className="p-3">
+                        <div
+                          onDragEnter={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
                           }}
-                          disabled={!file && !subtitle}
-                          className="rounded-lg border border-slate-700 bg-slate-950/70 px-2.5 py-1.5 text-xs font-semibold text-slate-200 hover:border-amber-500/40 disabled:cursor-not-allowed disabled:opacity-40"
+                          onDragOver={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            event.dataTransfer.dropEffect = "copy";
+                          }}
+                          onDrop={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            if (!queueRunning) {
+                              const droppedFiles = Array.from(
+                                event.dataTransfer.files,
+                              ).filter((droppedFile) =>
+                                ACCEPTED_VIDEO_EXTENSIONS.has(
+                                  droppedFile.name
+                                    .slice(droppedFile.name.lastIndexOf("."))
+                                    .toLowerCase(),
+                                ),
+                              );
+                              if (droppedFiles.length > 0) {
+                                setVideoFiles((current) => [
+                                  ...current,
+                                  ...droppedFiles,
+                                ]);
+                              }
+                            }
+                          }}
+                          className="min-h-14"
                         >
-                          Details
-                        </button>
-                        {rowState?.status === "completed" && rowState.jobId && (
-                          <a
-                            href={`/api/video-dubbing/jobs/${rowState.jobId}/download`}
-                            download
-                            className="rounded-lg border border-emerald-500/30 bg-emerald-950/20 px-2.5 py-1.5 text-xs font-semibold text-emerald-200 hover:bg-emerald-950/40"
-                          >
-                            Tải
-                          </a>
-                        )}
-                        {(file || subtitle) && (
                           <button
                             type="button"
                             disabled={queueRunning}
-                            onClick={() => {
-                              if (file) {
-                                setVideoFiles((current) =>
-                                  current.filter((item) => item !== file),
-                                );
-                              }
-                              if (subtitle) {
-                                setSubtitleFiles((current) =>
-                                  current.filter((item) => item.id !== subtitle.id),
-                                );
-                              }
-                              setQueueStates((current) =>
-                                Object.fromEntries(
-                                  Object.entries(current)
-                                    .filter(([key]) => Number(key) !== index)
-                                    .map(([key, value]) => [
-                                      Number(key) > index ? Number(key) - 1 : Number(key),
-                                      value,
-                                    ]),
-                                ),
-                              );
-                              setDetailRowIndex((current) =>
-                                current === index
-                                  ? null
-                                  : current !== null && current > index
-                                    ? current - 1
-                                    : current,
-                              );
-                            }}
-                            className="rounded-lg border border-rose-500/25 bg-rose-950/20 px-2.5 py-1.5 text-xs font-semibold text-rose-200 hover:border-rose-400/50 disabled:cursor-not-allowed disabled:opacity-40"
+                            onClick={() => videoInputRef.current?.click()}
+                            className="flex min-h-14 w-full items-center gap-2 rounded-lg border border-dashed border-slate-700 bg-slate-950/50 px-3 py-2 text-left hover:border-amber-500/50 disabled:cursor-wait disabled:opacity-60"
                           >
-                            Xóa
+                            <Film className="h-4 w-4 shrink-0 text-amber-400" />
+                            <span className="min-w-0 flex-1 truncate text-sm text-slate-200">
+                              {file?.name || "Chọn hoặc thả video"}
+                            </span>
+                            {file && !validVideo && (
+                              <span className="text-[11px] text-rose-300">
+                                Định dạng không hỗ trợ
+                              </span>
+                            )}
+                            {rowState?.status === "uploading" && (
+                              <span className="shrink-0 text-[11px] text-amber-300">
+                                {rowState.progressPercent === undefined
+                                  ? rowState.phase
+                                  : `${Math.round(rowState.progressPercent)}%`}
+                              </span>
+                            )}
                           </button>
-                        )}
-                      </div>
-                      {rowState && (
-                        <p
-                          className={`mt-1.5 text-[11px] ${
-                            rowState.status === "failed"
-                              ? "text-rose-300"
-                              : rowState.status === "completed"
-                                ? "text-emerald-300"
-                                : "text-slate-400"
-                          }`}
+                        </div>
+                      </td>
+                      <td className="p-3">
+                        <div
+                          onDragEnter={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                          }}
+                          onDragOver={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            event.dataTransfer.dropEffect = "copy";
+                          }}
+                          onDrop={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            if (!queueRunning) {
+                              const droppedFiles = Array.from(
+                                event.dataTransfer.files,
+                              ).filter((droppedFile) =>
+                                droppedFile.name.toLowerCase().endsWith(".srt"),
+                              );
+                              void handleSrtFiles(droppedFiles);
+                            }
+                          }}
+                          className="min-h-14"
                         >
-                          {rowState.status === "completed"
-                            ? "Hoàn tất"
-                            : rowState.status === "failed"
-                              ? rowState.error || "Thất bại"
-                              : rowState.status === "cancelled"
-                                ? "Đã hủy"
-                                : rowState.status === "queued"
-                                  ? "Trong hàng đợi"
-                                  : rowState.phase || "Đang xử lý"}
-                          {rowState.status === "processing" &&
-                            rowState.progressPercent !== undefined &&
-                            ` · ${Math.round(rowState.progressPercent)}%`}
-                        </p>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
+                          <button
+                            type="button"
+                            disabled={queueRunning}
+                            onClick={() => srtInputRef.current?.click()}
+                            className="flex min-h-14 w-full items-center gap-2 rounded-lg border border-dashed border-slate-700 bg-slate-950/50 px-3 py-2 text-left hover:border-amber-500/50 disabled:cursor-wait disabled:opacity-60"
+                          >
+                            <FileText className="h-4 w-4 shrink-0 text-amber-400" />
+                            <span className="min-w-0 flex-1 truncate text-sm text-slate-200">
+                              {subtitle?.fileName || "Chọn hoặc thả phụ đề"}
+                            </span>
+                            {subtitle?.analysis && (
+                              <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />
+                            )}
+                            {subtitle?.error && (
+                              <span className="text-[11px] text-rose-300">
+                                Lỗi SRT
+                              </span>
+                            )}
+                          </button>
+                        </div>
+                      </td>
+                      <td className="p-3">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setDetailRowIndex(index);
+                              setFileDetailsOpen(true);
+                            }}
+                            disabled={!file && !subtitle}
+                            className="rounded-lg border border-slate-700 bg-slate-950/70 px-2.5 py-1.5 text-xs font-semibold text-slate-200 hover:border-amber-500/40 disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            Details
+                          </button>
+                          {rowState?.status === "completed" &&
+                            rowState.jobId && (
+                              <a
+                                href={`/api/video-dubbing/jobs/${rowState.jobId}/download`}
+                                download
+                                className="rounded-lg border border-emerald-500/30 bg-emerald-950/20 px-2.5 py-1.5 text-xs font-semibold text-emerald-200 hover:bg-emerald-950/40"
+                              >
+                                Tải
+                              </a>
+                            )}
+                          {(file || subtitle) && (
+                            <button
+                              type="button"
+                              disabled={queueRunning}
+                              onClick={() => {
+                                if (file) {
+                                  setVideoFiles((current) =>
+                                    current.filter((item) => item !== file),
+                                  );
+                                }
+                                if (subtitle) {
+                                  setSubtitleFiles((current) =>
+                                    current.filter(
+                                      (item) => item.id !== subtitle.id,
+                                    ),
+                                  );
+                                }
+                                setQueueStates((current) =>
+                                  Object.fromEntries(
+                                    Object.entries(current)
+                                      .filter(([key]) => Number(key) !== index)
+                                      .map(([key, value]) => [
+                                        Number(key) > index
+                                          ? Number(key) - 1
+                                          : Number(key),
+                                        value,
+                                      ]),
+                                  ),
+                                );
+                                setDetailRowIndex((current) =>
+                                  current === index
+                                    ? null
+                                    : current !== null && current > index
+                                      ? current - 1
+                                      : current,
+                                );
+                              }}
+                              className="rounded-lg border border-rose-500/25 bg-rose-950/20 px-2.5 py-1.5 text-xs font-semibold text-rose-200 hover:border-rose-400/50 disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              Xóa
+                            </button>
+                          )}
+                        </div>
+                        {rowState && (
+                          <p
+                            className={`mt-1.5 text-[11px] ${
+                              rowState.status === "failed"
+                                ? "text-rose-300"
+                                : rowState.status === "completed"
+                                  ? "text-emerald-300"
+                                  : "text-slate-400"
+                            }`}
+                          >
+                            {rowState.status === "completed"
+                              ? "Hoàn tất"
+                              : rowState.status === "failed"
+                                ? rowState.error || "Thất bại"
+                                : rowState.status === "cancelled"
+                                  ? "Đã hủy"
+                                  : rowState.status === "queued"
+                                    ? "Trong hàng đợi"
+                                    : rowState.phase || "Đang xử lý"}
+                            {rowState.status === "processing" &&
+                              rowState.progressPercent !== undefined &&
+                              ` · ${Math.round(rowState.progressPercent)}%`}
+                          </p>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                },
+              )}
             </tbody>
           </table>
         </div>
@@ -2431,7 +2492,8 @@ export default function VideoDubbingTab() {
         />
         <div className="flex flex-col gap-3 border-t border-slate-800 p-3 sm:flex-row sm:items-center sm:justify-between">
           <p className="text-xs text-slate-400">
-            Ghép video và SRT theo cùng số thứ tự của hàng. Hàng đợi chạy tuần tự.
+            Ghép video và SRT theo cùng số thứ tự của hàng. Hàng đợi chạy tuần
+            tự.
             {videoFiles.length !== subtitleFiles.length && (
               <span className="ml-1 text-amber-300">
                 Cần số lượng video và SRT bằng nhau ({videoFiles.length} video,{" "}
@@ -2480,10 +2542,7 @@ export default function VideoDubbingTab() {
           tabIndex={0}
           onClick={() => !isBusy && videoInputRef.current?.click()}
           onKeyDown={(event) => {
-            if (
-              !isBusy &&
-              (event.key === "Enter" || event.key === " ")
-            ) {
+            if (!isBusy && (event.key === "Enter" || event.key === " ")) {
               event.preventDefault();
               videoInputRef.current?.click();
             }
@@ -2627,8 +2686,12 @@ export default function VideoDubbingTab() {
               className="w-full min-h-40 flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-slate-700 bg-slate-950/50 text-slate-300 hover:border-amber-500/50 hover:bg-slate-950 transition-colors"
             >
               <Upload className="w-6 h-6 text-amber-400" />
-              <span className="text-sm font-semibold">Chọn video từ máy tính</span>
-              <span className="text-xs text-slate-500">MP4 · MKV · MOV · AVI · WebM</span>
+              <span className="text-sm font-semibold">
+                Chọn video từ máy tính
+              </span>
+              <span className="text-xs text-slate-500">
+                MP4 · MKV · MOV · AVI · WebM
+              </span>
             </button>
           ) : (
             <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3.5">
@@ -2637,8 +2700,12 @@ export default function VideoDubbingTab() {
                   <HardDrive className="w-4 h-4" />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold text-white break-all">{video.fileName}</p>
-                  <p className="text-xs text-slate-400 mt-1">{formatFileSize(video.sizeBytes)}</p>
+                  <p className="text-sm font-semibold text-white break-all">
+                    {video.fileName}
+                  </p>
+                  <p className="text-xs text-slate-400 mt-1">
+                    {formatFileSize(video.sizeBytes)}
+                  </p>
                 </div>
               </div>
 
@@ -2658,7 +2725,9 @@ export default function VideoDubbingTab() {
                   <div className="h-2 rounded-full bg-slate-800 overflow-hidden">
                     <div
                       className={`h-full rounded-full bg-amber-400 transition-all ${job?.status === "probing" ? "animate-pulse" : ""}`}
-                      style={{ width: `${job?.status === "probing" ? 100 : video.progress}%` }}
+                      style={{
+                        width: `${job?.status === "probing" ? 100 : video.progress}%`,
+                      }}
                     />
                   </div>
                 </div>
@@ -2675,7 +2744,13 @@ export default function VideoDubbingTab() {
                   ) : (
                     <Clock3 className="w-4 h-4 text-amber-400" />
                   )}
-                  <span className={job.status === "completed" ? "text-emerald-300" : "text-slate-300"}>
+                  <span
+                    className={
+                      job.status === "completed"
+                        ? "text-emerald-300"
+                        : "text-slate-300"
+                    }
+                  >
                     {statusLabel(job)}
                   </span>
                 </div>
@@ -2711,7 +2786,8 @@ export default function VideoDubbingTab() {
             </div>
           )}
           <p className="text-[11px] leading-relaxed text-slate-500">
-            Video được gửi đến backend cục bộ để kiểm tra bằng FFprobe; tệp nguồn trên máy không bị chỉnh sửa.
+            Video được gửi đến backend cục bộ để kiểm tra bằng FFprobe; tệp
+            nguồn trên máy không bị chỉnh sửa.
           </p>
         </section>
 
@@ -2747,7 +2823,9 @@ export default function VideoDubbingTab() {
             >
               <Upload className="w-6 h-6 text-amber-400" />
               <span className="text-sm font-semibold">Chọn tệp phụ đề</span>
-              <span className="text-xs text-slate-500">Chỉ hỗ trợ định dạng .SRT</span>
+              <span className="text-xs text-slate-500">
+                Chỉ hỗ trợ định dạng .SRT
+              </span>
             </button>
           ) : (
             <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3.5">
@@ -2756,8 +2834,12 @@ export default function VideoDubbingTab() {
                   <FileText className="w-4 h-4" />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold text-white break-all">{srt.fileName}</p>
-                  <p className="text-xs text-slate-400 mt-1">{formatFileSize(srt.sizeBytes)}</p>
+                  <p className="text-sm font-semibold text-white break-all">
+                    {srt.fileName}
+                  </p>
+                  <p className="text-xs text-slate-400 mt-1">
+                    {formatFileSize(srt.sizeBytes)}
+                  </p>
                 </div>
               </div>
 
@@ -2769,17 +2851,25 @@ export default function VideoDubbingTab() {
               ) : srt.analysis ? (
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-4">
                   <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-3">
-                    <p className="text-[11px] text-slate-400">Subtitle hợp lệ</p>
-                    <p className="mt-1 text-sm font-bold text-emerald-300">{srt.analysis.subtitleCount}</p>
+                    <p className="text-[11px] text-slate-400">
+                      Subtitle hợp lệ
+                    </p>
+                    <p className="mt-1 text-sm font-bold text-emerald-300">
+                      {srt.analysis.subtitleCount}
+                    </p>
                   </div>
                   <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-3">
-                    <p className="text-[11px] text-slate-400">Bắt đầu sớm nhất</p>
+                    <p className="text-[11px] text-slate-400">
+                      Bắt đầu sớm nhất
+                    </p>
                     <p className="mt-1 text-sm font-bold text-white">
                       {formatSecondsToSrtTime(srt.analysis.earliestStart)}
                     </p>
                   </div>
                   <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-3">
-                    <p className="text-[11px] text-slate-400">Kết thúc muộn nhất</p>
+                    <p className="text-[11px] text-slate-400">
+                      Kết thúc muộn nhất
+                    </p>
                     <p className="mt-1 text-sm font-bold text-white">
                       {formatSecondsToSrtTime(srt.analysis.latestEnd)}
                     </p>
@@ -2788,7 +2878,8 @@ export default function VideoDubbingTab() {
                     <div className="sm:col-span-3 flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-950/30 p-3 text-xs text-amber-200">
                       <AlertCircle className="w-4 h-4 shrink-0 text-amber-400" />
                       <span>
-                        Bỏ qua {srt.analysis.invalidBlockCount} block không hợp lệ trong phần thống kê. Nội dung tệp không bị thay đổi.
+                        Bỏ qua {srt.analysis.invalidBlockCount} block không hợp
+                        lệ trong phần thống kê. Nội dung tệp không bị thay đổi.
                       </span>
                     </div>
                   )}
@@ -2804,7 +2895,8 @@ export default function VideoDubbingTab() {
           </p>
           {job && !srt && masterGeneration?.status !== "completed" && (
             <p className="text-[11px] leading-relaxed text-amber-300">
-              File SRT không được lưu trong lịch sử job. Hãy chọn lại SRT nếu cần tạo TTS Master cho job này.
+              File SRT không được lưu trong lịch sử job. Hãy chọn lại SRT nếu
+              cần tạo TTS Master cho job này.
             </p>
           )}
         </section>
@@ -2849,13 +2941,18 @@ export default function VideoDubbingTab() {
 
             <div className="mt-4 space-y-4">
               <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3">
-                <h4 className="text-sm font-semibold text-white">Video nguồn</h4>
+                <h4 className="text-sm font-semibold text-white">
+                  Video nguồn
+                </h4>
                 {!detailVideoFile ? (
-                  <p className="mt-2 text-xs text-slate-500">Chưa chọn video.</p>
+                  <p className="mt-2 text-xs text-slate-500">
+                    Chưa chọn video.
+                  </p>
                 ) : (
                   <>
                     <p className="mt-2 break-all text-xs text-slate-300">
-                      {detailVideoFile.name} · {formatFileSize(detailVideoFile.size)}
+                      {detailVideoFile.name} ·{" "}
+                      {formatFileSize(detailVideoFile.size)}
                     </p>
                     <p className="mt-1 text-xs text-slate-400">
                       {detailState?.phase ||
@@ -2864,11 +2961,14 @@ export default function VideoDubbingTab() {
                         ` · ${Math.round(detailState.progressPercent)}%`}
                     </p>
                     {detailState?.error && (
-                      <p className="mt-2 text-xs text-rose-300">{detailState.error}</p>
+                      <p className="mt-2 text-xs text-rose-300">
+                        {detailState.error}
+                      </p>
                     )}
-                    {detailJob?.status === "completed" && detailJob.metadata && (
-                      <MetadataGrid metadata={detailJob.metadata} />
-                    )}
+                    {detailJob?.status === "completed" &&
+                      detailJob.metadata && (
+                        <MetadataGrid metadata={detailJob.metadata} />
+                      )}
                   </>
                 )}
               </div>
@@ -2880,14 +2980,19 @@ export default function VideoDubbingTab() {
                 ) : (
                   <>
                     <p className="mt-2 break-all text-xs text-slate-300">
-                      {detailSubtitle.fileName} · {formatFileSize(detailSubtitle.sizeBytes)}
+                      {detailSubtitle.fileName} ·{" "}
+                      {formatFileSize(detailSubtitle.sizeBytes)}
                     </p>
                     {detailSubtitle.error ? (
-                      <p className="mt-2 text-xs text-rose-300">{detailSubtitle.error}</p>
+                      <p className="mt-2 text-xs text-rose-300">
+                        {detailSubtitle.error}
+                      </p>
                     ) : detailSubtitle.analysis ? (
                       <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
                         <div className="rounded-lg border border-slate-800 p-2">
-                          <p className="text-[11px] text-slate-400">Cue hợp lệ</p>
+                          <p className="text-[11px] text-slate-400">
+                            Cue hợp lệ
+                          </p>
                           <p className="mt-1 text-sm font-bold text-emerald-300">
                             {detailSubtitle.analysis.subtitleCount}
                           </p>
@@ -2895,18 +3000,23 @@ export default function VideoDubbingTab() {
                         <div className="rounded-lg border border-slate-800 p-2">
                           <p className="text-[11px] text-slate-400">Bắt đầu</p>
                           <p className="mt-1 text-sm font-bold text-white">
-                            {formatSecondsToSrtTime(detailSubtitle.analysis.earliestStart)}
+                            {formatSecondsToSrtTime(
+                              detailSubtitle.analysis.earliestStart,
+                            )}
                           </p>
                         </div>
                         <div className="rounded-lg border border-slate-800 p-2">
                           <p className="text-[11px] text-slate-400">Kết thúc</p>
                           <p className="mt-1 text-sm font-bold text-white">
-                            {formatSecondsToSrtTime(detailSubtitle.analysis.latestEnd)}
+                            {formatSecondsToSrtTime(
+                              detailSubtitle.analysis.latestEnd,
+                            )}
                           </p>
                         </div>
                         {detailSubtitle.analysis.invalidBlockCount > 0 && (
                           <p className="text-xs text-amber-300 sm:col-span-3">
-                            Bỏ qua {detailSubtitle.analysis.invalidBlockCount} block không hợp lệ.
+                            Bỏ qua {detailSubtitle.analysis.invalidBlockCount}{" "}
+                            block không hợp lệ.
                           </p>
                         )}
                       </div>
@@ -2949,7 +3059,9 @@ export default function VideoDubbingTab() {
                 <RefreshCw className="h-5 w-5" />
               </span>
               <span>
-                <span className="block font-semibold text-white">Auto Pipeline</span>
+                <span className="block font-semibold text-white">
+                  Auto Pipeline
+                </span>
                 <span className="mt-1 block text-xs text-slate-400">
                   Cấu hình TTS, Demucs, Mixer và xuất MP4 theo một luồng.
                 </span>
@@ -2990,17 +3102,23 @@ export default function VideoDubbingTab() {
                 className="space-y-4 disabled:opacity-55"
               >
                 <div>
-                  <h4 className="text-sm font-semibold text-white">TTS Master</h4>
+                  <h4 className="text-sm font-semibold text-white">
+                    TTS Master
+                  </h4>
                   <p className="mt-1 text-xs text-slate-400">
                     Dùng Piper và căn cue phụ đề theo timestamp video.
                   </p>
                 </div>
                 <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
                   <label className="space-y-1.5">
-                    <span className="text-xs font-medium text-slate-300">Giọng Piper</span>
+                    <span className="text-xs font-medium text-slate-300">
+                      Giọng Piper
+                    </span>
                     <select
                       value={selectedVoiceId}
-                      onChange={(event) => setSelectedVoiceId(event.target.value)}
+                      onChange={(event) =>
+                        setSelectedVoiceId(event.target.value)
+                      }
                       disabled={voices.length === 0}
                       className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-white focus:border-indigo-400 focus:outline-none disabled:opacity-50"
                     >
@@ -3016,12 +3134,17 @@ export default function VideoDubbingTab() {
                     </select>
                   </label>
                   <label className="space-y-1.5">
-                    <span className="text-xs font-medium text-slate-300">Ưu tiên tốc độ</span>
+                    <span className="text-xs font-medium text-slate-300">
+                      Ưu tiên tốc độ
+                    </span>
                     <select
                       value={speedPriority}
                       onChange={(event) =>
                         setSpeedPriority(
-                          event.target.value as "balanced" | "strict" | "natural",
+                          event.target.value as
+                            | "balanced"
+                            | "strict"
+                            | "natural",
                         )
                       }
                       className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-white focus:border-indigo-400 focus:outline-none"
@@ -3032,27 +3155,43 @@ export default function VideoDubbingTab() {
                     </select>
                   </label>
                   <label className="space-y-1.5">
-                    <span className="text-xs font-medium text-slate-300">Tốc độ tối thiểu</span>
+                    <span className="text-xs font-medium text-slate-300">
+                      Tốc độ tối thiểu
+                    </span>
                     <select
                       value={minSpeed}
-                      onChange={(event) => setMinSpeed(Number(event.target.value))}
+                      onChange={(event) =>
+                        setMinSpeed(Number(event.target.value))
+                      }
                       className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-white focus:border-indigo-400 focus:outline-none"
                     >
-                      {[0.5, 0.6, 0.7, 0.8, 0.9, 1].map((speed) => (
-                        <option key={speed} value={speed}>{speed.toFixed(1)}×</option>
-                      ))}
+                      {[0.5, 0.6, 0.7, 0.8, 0.9, 1, 1.1, 1.2, 1.3].map(
+                        (speed) => (
+                          <option key={speed} value={speed}>
+                            {speed.toFixed(1)}×
+                          </option>
+                        ),
+                      )}
                     </select>
                   </label>
                   <label className="space-y-1.5">
-                    <span className="text-xs font-medium text-slate-300">Tốc độ tối đa</span>
+                    <span className="text-xs font-medium text-slate-300">
+                      Tốc độ tối đa
+                    </span>
                     <select
                       value={maxSpeed}
-                      onChange={(event) => setMaxSpeed(Number(event.target.value))}
+                      onChange={(event) =>
+                        setMaxSpeed(Number(event.target.value))
+                      }
                       className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-white focus:border-indigo-400 focus:outline-none"
                     >
                       {[1.1, 1.25, 1.5, 1.75, 2, 2.5, 3].map((speed) => (
                         <option key={speed} value={speed}>
-                          {speed.toFixed(2).replace(/0+$/, "").replace(/\.$/, "")}×
+                          {speed
+                            .toFixed(2)
+                            .replace(/0+$/, "")
+                            .replace(/\.$/, "")}
+                          ×
                         </option>
                       ))}
                     </select>
@@ -3088,13 +3227,16 @@ export default function VideoDubbingTab() {
                   </label>
                   {autoPipelineDemucsEnabled ? (
                     <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
-                      Khi bật, pipeline chỉ tiếp tục sau khi cả hai track được tạo và xác minh.
+                      Khi bật, pipeline chỉ tiếp tục sau khi cả hai track được
+                      tạo và xác minh.
                     </p>
                   ) : (
                     <label className="mt-3 block max-w-xl space-y-2 rounded-xl border border-slate-800 bg-slate-950/60 p-3 text-xs">
                       <span className="flex justify-between gap-2 text-slate-300">
                         <span>Audio gốc (giọng nói và nhạc chung)</span>
-                        <span className="font-semibold text-white">{originalAudioVolumePercent}%</span>
+                        <span className="font-semibold text-white">
+                          {originalAudioVolumePercent}%
+                        </span>
                       </span>
                       <input
                         type="range"
@@ -3102,9 +3244,13 @@ export default function VideoDubbingTab() {
                         max={200}
                         step={1}
                         value={originalAudioVolumePercent}
-                        disabled={!job?.metadata?.audioCodec && videoFiles.length === 0}
+                        disabled={
+                          !job?.metadata?.audioCodec && videoFiles.length === 0
+                        }
                         onChange={(event) =>
-                          setOriginalAudioVolumePercent(Number(event.target.value))
+                          setOriginalAudioVolumePercent(
+                            Number(event.target.value),
+                          )
                         }
                         className="w-full accent-indigo-400 disabled:opacity-40"
                         aria-label="Âm lượng audio gốc"
@@ -3121,7 +3267,9 @@ export default function VideoDubbingTab() {
                 </div>
 
                 <div className="border-t border-slate-800 pt-4">
-                  <h4 className="text-sm font-semibold text-white">Mixer Preview · 3 track</h4>
+                  <h4 className="text-sm font-semibold text-white">
+                    Mixer Preview · 3 track
+                  </h4>
                   <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-3">
                     {(
                       [
@@ -3138,15 +3286,21 @@ export default function VideoDubbingTab() {
                           className="space-y-3 rounded-xl border border-slate-800 bg-slate-950/60 p-3"
                         >
                           <div className="flex items-center justify-between gap-2">
-                            <span className="text-xs font-semibold text-slate-200">{label}</span>
+                            <span className="text-xs font-semibold text-slate-200">
+                              {label}
+                            </span>
                             <span className="text-[10px] text-slate-500">
-                              {available ? "Đã có track" : "Sẽ dùng khi có đầu ra"}
+                              {available
+                                ? "Đã có track"
+                                : "Sẽ dùng khi có đầu ra"}
                             </span>
                           </div>
                           <label className="block space-y-2">
                             <span className="flex justify-between text-[11px] text-slate-400">
                               <span>Âm lượng</span>
-                              <span className="font-semibold text-slate-200">{setting.volumePercent}%</span>
+                              <span className="font-semibold text-slate-200">
+                                {setting.volumePercent}%
+                              </span>
                             </span>
                             <input
                               type="range"
@@ -3181,144 +3335,154 @@ export default function VideoDubbingTab() {
                     })}
                   </div>
                   <p className="mt-2 text-[11px] text-slate-500">
-                    Có thể lưu mức âm lượng/mute trước khi các file track tồn tại; các giá trị này chỉ áp dụng khi pipeline được chạy.
+                    Có thể lưu mức âm lượng/mute trước khi các file track tồn
+                    tại; các giá trị này chỉ áp dụng khi pipeline được chạy.
                   </p>
                 </div>
 
                 <div className="border-t border-slate-800 pt-4">
-                  <h4 className="text-sm font-semibold text-white">Final Mix và MP4 Export</h4>
+                  <h4 className="text-sm font-semibold text-white">
+                    Final Mix và MP4 Export
+                  </h4>
                   <p className="mt-1 text-xs leading-relaxed text-slate-400">
-                    Dùng video nguồn của job. Final Mix được render theo đúng cài đặt trên; MP4 chỉ được xuất và báo hoàn tất sau khi FFprobe xác minh đầu ra.
+                    Dùng video nguồn của job. Final Mix được render theo đúng
+                    cài đặt trên; MP4 chỉ được xuất và báo hoàn tất sau khi
+                    FFprobe xác minh đầu ra.
                   </p>
                 </div>
               </fieldset>
 
-          {autoPipeline && (
-            <div
-              className={`rounded-xl border p-3 text-xs ${
-                autoPipeline.status === "completed"
-                  ? "border-emerald-500/25 bg-emerald-950/20 text-emerald-200"
-                  : autoPipeline.status === "failed" ||
-                      autoPipeline.status === "interrupted"
-                    ? "border-rose-500/25 bg-rose-950/20 text-rose-200"
-                    : "border-indigo-500/25 bg-indigo-950/20 text-indigo-200"
-              }`}
-            >
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="font-semibold">
-                  {autoPipeline.status === "running"
-                    ? `Đang xử lý: ${
-                        {
-                          validating: "kiểm tra đầu vào",
-                          master: "TTS Master",
-                          separation: "Demucs",
-                          finalMix: "Final Mix",
-                          export: "xuất MP4",
-                          completed: "hoàn tất",
-                        }[autoPipeline.phase]
-                      }`
-                    : autoPipeline.status === "completed"
-                      ? "Auto Pipeline hoàn tất"
-                      : autoPipeline.status === "failed"
-                        ? "Auto Pipeline thất bại"
-                        : autoPipeline.status === "cancelled"
-                          ? "Auto Pipeline đã hủy"
-                          : autoPipeline.status === "interrupted"
-                            ? "Auto Pipeline bị gián đoạn"
-                            : "Chưa chạy Auto Pipeline"}
-                </span>
-                {autoPipeline.status === "running" &&
-                  autoPipeline.progressPercent !== undefined && (
-                    <span>{autoPipeline.progressPercent}%</span>
-                  )}
-              </div>
-              {autoPipeline.status === "running" && (
+              {autoPipeline && (
                 <div
-                  className="mt-2 h-2 overflow-hidden rounded-full bg-slate-800"
-                  role="progressbar"
-                  aria-label="Tiến trình Auto Pipeline"
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-valuenow={autoPipeline.progressPercent}
-                  aria-valuetext={
-                    autoPipeline.progressPercent === undefined
-                      ? "Đang xử lý; tiến trình phần trăm chưa xác định"
-                      : `${autoPipeline.progressPercent}%`
-                  }
+                  className={`rounded-xl border p-3 text-xs ${
+                    autoPipeline.status === "completed"
+                      ? "border-emerald-500/25 bg-emerald-950/20 text-emerald-200"
+                      : autoPipeline.status === "failed" ||
+                          autoPipeline.status === "interrupted"
+                        ? "border-rose-500/25 bg-rose-950/20 text-rose-200"
+                        : "border-indigo-500/25 bg-indigo-950/20 text-indigo-200"
+                  }`}
                 >
-                  <div
-                    className={`h-full rounded-full bg-indigo-400 transition-all ${
-                      autoPipeline.progressPercent === undefined
-                        ? "w-1/3 animate-pulse"
-                        : ""
-                    }`}
-                    style={
-                      autoPipeline.progressPercent === undefined
-                        ? undefined
-                        : { width: `${autoPipeline.progressPercent}%` }
-                    }
-                  />
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="font-semibold">
+                      {autoPipeline.status === "running"
+                        ? `Đang xử lý: ${
+                            {
+                              validating: "kiểm tra đầu vào",
+                              master: "TTS Master",
+                              separation: "Demucs",
+                              finalMix: "Final Mix",
+                              export: "xuất MP4",
+                              completed: "hoàn tất",
+                            }[autoPipeline.phase]
+                          }`
+                        : autoPipeline.status === "completed"
+                          ? "Auto Pipeline hoàn tất"
+                          : autoPipeline.status === "failed"
+                            ? "Auto Pipeline thất bại"
+                            : autoPipeline.status === "cancelled"
+                              ? "Auto Pipeline đã hủy"
+                              : autoPipeline.status === "interrupted"
+                                ? "Auto Pipeline bị gián đoạn"
+                                : "Chưa chạy Auto Pipeline"}
+                    </span>
+                    {autoPipeline.status === "running" &&
+                      autoPipeline.progressPercent !== undefined && (
+                        <span>{autoPipeline.progressPercent}%</span>
+                      )}
+                  </div>
+                  {autoPipeline.status === "running" && (
+                    <div
+                      className="mt-2 h-2 overflow-hidden rounded-full bg-slate-800"
+                      role="progressbar"
+                      aria-label="Tiến trình Auto Pipeline"
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={autoPipeline.progressPercent}
+                      aria-valuetext={
+                        autoPipeline.progressPercent === undefined
+                          ? "Đang xử lý; tiến trình phần trăm chưa xác định"
+                          : `${autoPipeline.progressPercent}%`
+                      }
+                    >
+                      <div
+                        className={`h-full rounded-full bg-indigo-400 transition-all ${
+                          autoPipeline.progressPercent === undefined
+                            ? "w-1/3 animate-pulse"
+                            : ""
+                        }`}
+                        style={
+                          autoPipeline.progressPercent === undefined
+                            ? undefined
+                            : { width: `${autoPipeline.progressPercent}%` }
+                        }
+                      />
+                    </div>
+                  )}
+                  {autoPipeline.error && (
+                    <p className="mt-2 leading-relaxed">{autoPipeline.error}</p>
+                  )}
+                  {autoPipeline.completedStages.length > 0 && (
+                    <p className="mt-2 text-slate-300">
+                      Hoàn tất: {autoPipeline.completedStages.join(", ")}
+                      {autoPipeline.reusedOutputs.length > 0 &&
+                        ` · Tái sử dụng: ${autoPipeline.reusedOutputs.join(", ")}`}
+                    </p>
+                  )}
                 </div>
               )}
-              {autoPipeline.error && (
-                <p className="mt-2 leading-relaxed">{autoPipeline.error}</p>
+              {autoPipelineError && (
+                <div className="flex items-start gap-2 rounded-lg border border-rose-500/30 bg-rose-950/40 p-3 text-xs text-rose-200">
+                  <AlertCircle className="h-4 w-4 shrink-0 text-rose-400" />
+                  <span>{autoPipelineError}</span>
+                </div>
               )}
-              {autoPipeline.completedStages.length > 0 && (
-                <p className="mt-2 text-slate-300">
-                  Hoàn tất: {autoPipeline.completedStages.join(", ")}
-                  {autoPipeline.reusedOutputs.length > 0 &&
-                    ` · Tái sử dụng: ${autoPipeline.reusedOutputs.join(", ")}`}
+
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => void saveAutoPipelineConfig()}
+                  disabled={
+                    !autoPipelineConfig ||
+                    autoPipelineSaving ||
+                    isAutoPipelineRunning
+                  }
+                  className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-700 px-3 py-2.5 text-xs font-semibold text-slate-200 hover:border-slate-500 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {autoPipelineSaving ? (
+                    <LoaderCircle className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <HardDrive className="h-4 w-4" />
+                  )}
+                  Lưu cấu hình
+                </button>
+                {isAutoPipelineRunning ? (
+                  <button
+                    type="button"
+                    onClick={() => void cancelAutoPipeline()}
+                    className="inline-flex items-center justify-center gap-2 rounded-xl border border-rose-500/30 bg-rose-950/30 px-4 py-2.5 text-xs font-bold text-rose-100 hover:bg-rose-950/60"
+                  >
+                    <X className="h-4 w-4" />
+                    Hủy pipeline
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => void startAutoPipeline()}
+                    disabled={!canStartAutoPipeline}
+                    className="inline-flex items-center justify-center gap-2 rounded-xl bg-indigo-400 px-4 py-2.5 text-xs font-bold text-slate-950 hover:bg-indigo-300 disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-500"
+                  >
+                    <Play className="h-4 w-4" />
+                    Bắt đầu Auto Pipeline
+                  </button>
+                )}
+              </div>
+              {!autoPipelineConfig && (
+                <p className="text-[11px] leading-relaxed text-amber-300">
+                  Chọn SRT có cue hợp lệ và giọng Piper để cấu hình Auto
+                  Pipeline.
                 </p>
               )}
-            </div>
-          )}
-          {autoPipelineError && (
-            <div className="flex items-start gap-2 rounded-lg border border-rose-500/30 bg-rose-950/40 p-3 text-xs text-rose-200">
-              <AlertCircle className="h-4 w-4 shrink-0 text-rose-400" />
-              <span>{autoPipelineError}</span>
-            </div>
-          )}
-
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => void saveAutoPipelineConfig()}
-              disabled={!autoPipelineConfig || autoPipelineSaving || isAutoPipelineRunning}
-              className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-700 px-3 py-2.5 text-xs font-semibold text-slate-200 hover:border-slate-500 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              {autoPipelineSaving ? (
-                <LoaderCircle className="h-4 w-4 animate-spin" />
-              ) : (
-                <HardDrive className="h-4 w-4" />
-              )}
-              Lưu cấu hình
-            </button>
-            {isAutoPipelineRunning ? (
-              <button
-                type="button"
-                onClick={() => void cancelAutoPipeline()}
-                className="inline-flex items-center justify-center gap-2 rounded-xl border border-rose-500/30 bg-rose-950/30 px-4 py-2.5 text-xs font-bold text-rose-100 hover:bg-rose-950/60"
-              >
-                <X className="h-4 w-4" />
-                Hủy pipeline
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={() => void startAutoPipeline()}
-                disabled={!canStartAutoPipeline}
-                className="inline-flex items-center justify-center gap-2 rounded-xl bg-indigo-400 px-4 py-2.5 text-xs font-bold text-slate-950 hover:bg-indigo-300 disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-500"
-              >
-                <Play className="h-4 w-4" />
-                Bắt đầu Auto Pipeline
-              </button>
-            )}
-          </div>
-          {!autoPipelineConfig && (
-            <p className="text-[11px] leading-relaxed text-amber-300">
-              Chọn SRT có cue hợp lệ và giọng Piper để cấu hình Auto Pipeline.
-            </p>
-          )}
             </div>
           )}
         </section>
@@ -3352,322 +3516,361 @@ export default function VideoDubbingTab() {
 
         {masterPanelExpanded && (
           <div id="video-dubbing-master-panel" className="space-y-5">
-        {masterGeneration?.status === "generating" && (
-          <div className="space-y-2 rounded-xl border border-amber-500/25 bg-amber-950/20 p-3.5">
-            <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-              <span className="inline-flex items-center gap-2 text-amber-200">
-                <LoaderCircle className="w-4 h-4 animate-spin" />
-                Đang tạo TTS Master
-              </span>
-              <span className="text-slate-300">
-                {masterGeneration.completedSentences}/{masterGeneration.totalSentences} câu · {Math.round(masterGeneration.progressPercent)}%
-              </span>
-            </div>
-            <div className="h-2 rounded-full bg-slate-800 overflow-hidden">
-              <div
-                className="h-full rounded-full bg-amber-400 transition-all"
-                style={{ width: `${masterGeneration.progressPercent}%` }}
-              />
-            </div>
-            <button
-              type="button"
-              onClick={() => void cancelMaster()}
-              disabled={isAutoPipelineRunning}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-950/70 px-2.5 py-1.5 text-xs text-slate-300 hover:text-white hover:border-slate-500 transition-colors"
-            >
-              <X className="w-3.5 h-3.5" />
-              Hủy tạo Master
-            </button>
-          </div>
-        )}
-
-        {masterError && (
-          <div className="flex items-start gap-2 rounded-lg border border-rose-500/30 bg-rose-950/40 p-3 text-xs text-rose-200">
-            <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
-            <span>{masterError}</span>
-          </div>
-        )}
-        {masterGeneration?.status === "failed" && masterGeneration.error && (
-          <div className="flex items-start gap-2 rounded-lg border border-rose-500/30 bg-rose-950/40 p-3 text-xs text-rose-200">
-            <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
-            <span>{masterGeneration.error}</span>
-          </div>
-        )}
-        {masterGeneration?.status === "cancelled" && !isMasterGenerating && (
-          <p className="text-xs text-slate-400">Đã hủy quá trình tạo TTS Master.</p>
-        )}
-        {masterGeneration?.status === "interrupted" && (
-          <p className="rounded-lg border border-amber-500/25 bg-amber-950/20 p-3 text-xs text-amber-200">
-            {masterGeneration.error || "Tác vụ TTS Master bị gián đoạn."}
-          </p>
-        )}
-
-        <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-          <button
-            type="button"
-            onClick={() => void createMaster()}
-            disabled={!canGenerateMaster}
-            className="inline-flex items-center justify-center gap-2 rounded-xl bg-amber-500 px-4 py-2.5 text-sm font-bold text-slate-950 transition-colors hover:bg-amber-400 disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-500"
-          >
-            {isMasterGenerating ? (
-              <LoaderCircle className="w-4 h-4 animate-spin" />
-            ) : (
-              <Volume2 className="w-4 h-4" />
-            )}
-            Tạo TTS Master
-          </button>
-          {!canGenerateMaster && !isMasterGenerating && (
-            <p className="text-xs text-slate-500">
-              Cần video đã kiểm tra thành công, SRT có cue hợp lệ và một giọng Piper.
-            </p>
-          )}
-        </div>
-
-        {hasMasterAudio && masterGeneration?.durationSeconds !== undefined && (
-            <div className="space-y-3 rounded-xl border border-emerald-500/25 bg-emerald-950/20 p-3.5">
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-                <span className="inline-flex items-center gap-1.5 font-semibold text-emerald-300">
-                  {masterGeneration.status === "completed" ? (
-                    <>
-                      <CheckCircle2 className="w-4 h-4" />
-                      TTS Master hoàn tất
-                    </>
-                  ) : (
-                    "Master đã hoàn tất trước đó, vẫn được giữ"
-                  )}
-                </span>
-                <span className="text-slate-300">
-                  Thời lượng {formatDuration(masterGeneration.durationSeconds)}
-                </span>
-                {masterGeneration.sizeBytes !== undefined && (
-                  <span className="text-slate-400">
-                    {formatFileSize(masterGeneration.sizeBytes)}
+            {masterGeneration?.status === "generating" && (
+              <div className="space-y-2 rounded-xl border border-amber-500/25 bg-amber-950/20 p-3.5">
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <span className="inline-flex items-center gap-2 text-amber-200">
+                    <LoaderCircle className="w-4 h-4 animate-spin" />
+                    Đang tạo TTS Master
                   </span>
-                )}
+                  <span className="text-slate-300">
+                    {masterGeneration.completedSentences}/
+                    {masterGeneration.totalSentences} câu ·{" "}
+                    {Math.round(masterGeneration.progressPercent)}%
+                  </span>
+                </div>
+                <div className="h-2 rounded-full bg-slate-800 overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-amber-400 transition-all"
+                    style={{ width: `${masterGeneration.progressPercent}%` }}
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void cancelMaster()}
+                  disabled={isAutoPipelineRunning}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-950/70 px-2.5 py-1.5 text-xs text-slate-300 hover:text-white hover:border-slate-500 transition-colors"
+                >
+                  <X className="w-3.5 h-3.5" />
+                  Hủy tạo Master
+                </button>
               </div>
-              <audio
-                key={`${job?.id}-${masterGeneration.sizeBytes}`}
-                controls
-                preload="metadata"
-                src={`/api/video-dubbing/jobs/${job?.id}/master-audio`}
-                className="w-full"
-              >
-                Trình duyệt không hỗ trợ phát WAV.
-              </audio>
-            </div>
-          )}
+            )}
 
-        <p className="text-[11px] leading-relaxed text-slate-500">
-          Tùy chọn giọng/tốc độ chỉ áp dụng cho lần tạo mới; Master đã hoàn tất
-          vẫn được giữ nguyên cho đến khi tạo Master mới hoặc bỏ job video.
-        </p>
+            {masterError && (
+              <div className="flex items-start gap-2 rounded-lg border border-rose-500/30 bg-rose-950/40 p-3 text-xs text-rose-200">
+                <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
+                <span>{masterError}</span>
+              </div>
+            )}
+            {masterGeneration?.status === "failed" &&
+              masterGeneration.error && (
+                <div className="flex items-start gap-2 rounded-lg border border-rose-500/30 bg-rose-950/40 p-3 text-xs text-rose-200">
+                  <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
+                  <span>{masterGeneration.error}</span>
+                </div>
+              )}
+            {masterGeneration?.status === "cancelled" &&
+              !isMasterGenerating && (
+                <p className="text-xs text-slate-400">
+                  Đã hủy quá trình tạo TTS Master.
+                </p>
+              )}
+            {masterGeneration?.status === "interrupted" && (
+              <p className="rounded-lg border border-amber-500/25 bg-amber-950/20 p-3 text-xs text-amber-200">
+                {masterGeneration.error || "Tác vụ TTS Master bị gián đoạn."}
+              </p>
+            )}
+
+            <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+              <button
+                type="button"
+                onClick={() => void createMaster()}
+                disabled={!canGenerateMaster}
+                className="inline-flex items-center justify-center gap-2 rounded-xl bg-amber-500 px-4 py-2.5 text-sm font-bold text-slate-950 transition-colors hover:bg-amber-400 disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-500"
+              >
+                {isMasterGenerating ? (
+                  <LoaderCircle className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Volume2 className="w-4 h-4" />
+                )}
+                Tạo TTS Master
+              </button>
+              {!canGenerateMaster && !isMasterGenerating && (
+                <p className="text-xs text-slate-500">
+                  Cần video đã kiểm tra thành công, SRT có cue hợp lệ và một
+                  giọng Piper.
+                </p>
+              )}
+            </div>
+
+            {hasMasterAudio &&
+              masterGeneration?.durationSeconds !== undefined && (
+                <div className="space-y-3 rounded-xl border border-emerald-500/25 bg-emerald-950/20 p-3.5">
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                    <span className="inline-flex items-center gap-1.5 font-semibold text-emerald-300">
+                      {masterGeneration.status === "completed" ? (
+                        <>
+                          <CheckCircle2 className="w-4 h-4" />
+                          TTS Master hoàn tất
+                        </>
+                      ) : (
+                        "Master đã hoàn tất trước đó, vẫn được giữ"
+                      )}
+                    </span>
+                    <span className="text-slate-300">
+                      Thời lượng{" "}
+                      {formatDuration(masterGeneration.durationSeconds)}
+                    </span>
+                    {masterGeneration.sizeBytes !== undefined && (
+                      <span className="text-slate-400">
+                        {formatFileSize(masterGeneration.sizeBytes)}
+                      </span>
+                    )}
+                  </div>
+                  <audio
+                    key={`${job?.id}-${masterGeneration.sizeBytes}`}
+                    controls
+                    preload="metadata"
+                    src={`/api/video-dubbing/jobs/${job?.id}/master-audio`}
+                    className="w-full"
+                  >
+                    Trình duyệt không hỗ trợ phát WAV.
+                  </audio>
+                </div>
+              )}
+
+            <p className="text-[11px] leading-relaxed text-slate-500">
+              Tùy chọn giọng/tốc độ chỉ áp dụng cho lần tạo mới; Master đã hoàn
+              tất vẫn được giữ nguyên cho đến khi tạo Master mới hoặc bỏ job
+              video.
+            </p>
           </div>
         )}
       </section>
 
       {job &&
         (job.status === "completed" ||
-          Boolean(separation?.vocalsSizeBytes || separation?.instrumentalSizeBytes)) && (
-        <section className="rounded-2xl border border-slate-800 bg-slate-900/80 p-4 sm:p-5 space-y-4">
-          <button
-            type="button"
-            onClick={() =>
-              setSeparationPanelExpanded((expanded) => !expanded)
-            }
-            aria-expanded={separationPanelExpanded}
-            aria-controls="video-dubbing-separation-panel"
-            className="flex w-full items-start gap-3 text-left"
-          >
-            <div className="w-10 h-10 rounded-xl bg-violet-500/15 text-violet-300 border border-violet-500/25 flex items-center justify-center shrink-0">
-              <AudioLines className="w-5 h-5" />
-            </div>
-            <div className="min-w-0">
-              <h3 className="font-semibold text-white">Tách giọng và nhạc nền</h3>
-              <p className="mt-1 text-xs leading-relaxed text-slate-400">
-                Chạy cục bộ bằng Demucs {separationAvailability?.model || "htdemucs"}.
-                Kết quả là các stem ước lượng, có thể còn lẫn giọng hoặc nhạc.
-              </p>
-            </div>
-            <ChevronDown
-              className={`mt-2 h-4 w-4 shrink-0 text-slate-400 transition-transform ${
-                separationPanelExpanded ? "rotate-180" : ""
-              }`}
-            />
-          </button>
-
-          {separationPanelExpanded && (
-            <div id="video-dubbing-separation-panel" className="space-y-4">
-          {!separationAvailability ? (
-            <p className="text-xs text-slate-400">Đang kiểm tra Python, model và thiết bị…</p>
-          ) : (
-            <div
-              className={`rounded-xl border p-3 text-xs ${
-                separationAvailability.status === "ready"
-                  ? "border-emerald-500/25 bg-emerald-950/20 text-emerald-200"
-                  : "border-amber-500/25 bg-amber-950/20 text-amber-200"
-              }`}
+          Boolean(
+            separation?.vocalsSizeBytes || separation?.instrumentalSizeBytes,
+          )) && (
+          <section className="rounded-2xl border border-slate-800 bg-slate-900/80 p-4 sm:p-5 space-y-4">
+            <button
+              type="button"
+              onClick={() =>
+                setSeparationPanelExpanded((expanded) => !expanded)
+              }
+              aria-expanded={separationPanelExpanded}
+              aria-controls="video-dubbing-separation-panel"
+              className="flex w-full items-start gap-3 text-left"
             >
-              <div className="font-semibold">
-                {separationAvailability.status === "ready"
-                  ? `Sẵn sàng · ${separationAvailability.device === "cuda" ? "CUDA" : "CPU"}`
-                  : "Chưa sẵn sàng"}
+              <div className="w-10 h-10 rounded-xl bg-violet-500/15 text-violet-300 border border-violet-500/25 flex items-center justify-center shrink-0">
+                <AudioLines className="w-5 h-5" />
               </div>
-              <p className="mt-1 leading-relaxed">{separationAvailability.message}</p>
-              {separationAvailability.status === "unavailable" && (
-                <p className="mt-2 leading-relaxed">
-                  Cấu hình riêng Python bằng biến VIDEO_DUBBING_SEPARATION_PYTHON rồi khởi động lại ứng dụng. Cần cài Demucs/PyTorch và tải model htdemucs trước; nút xử lý không tự cài hoặc tải model.
+              <div className="min-w-0">
+                <h3 className="font-semibold text-white">
+                  Tách giọng và nhạc nền
+                </h3>
+                <p className="mt-1 text-xs leading-relaxed text-slate-400">
+                  Chạy cục bộ bằng Demucs{" "}
+                  {separationAvailability?.model || "htdemucs"}. Kết quả là các
+                  stem ước lượng, có thể còn lẫn giọng hoặc nhạc.
                 </p>
-              )}
-            </div>
-          )}
-
-          {job.metadata?.audioCodec === null && (
-            <p className="rounded-lg border border-amber-500/25 bg-amber-950/20 p-3 text-xs text-amber-200">
-              Video này không có audio gốc để tách.
-            </p>
-          )}
-          {separationError && (
-            <div className="flex items-start gap-2 rounded-lg border border-rose-500/30 bg-rose-950/40 p-3 text-xs text-rose-200">
-              <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
-              <span>{separationError}</span>
-            </div>
-          )}
-          {separation?.status === "error" && separation.error && (
-            <div className="flex items-start gap-2 rounded-lg border border-rose-500/30 bg-rose-950/40 p-3 text-xs text-rose-200">
-              <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
-              <span>{separation.error}</span>
-            </div>
-          )}
-          {isSeparationProcessing && (
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-xl border border-violet-500/25 bg-violet-950/20 p-3.5">
-              <span className="inline-flex items-center gap-2 text-xs text-violet-200">
-                <LoaderCircle className="w-4 h-4 animate-spin" />
-                {separation.phase === "extracting"
-                  ? "Đang trích và chuẩn hóa audio nguồn"
-                  : separation.phase === "checking"
-                    ? "Đang kiểm tra môi trường tách audio"
-                    : separation.phase === "loading_model"
-                      ? "Đang tải model Demucs từ cache cục bộ"
-                      : separation.phase === "writing_outputs"
-                        ? "Đang ghi các track vocals và instrumental"
-                    : separation.phase === "validating"
-                      ? "Đang ghi và xác minh hai track"
-                      : "Demucs đang tách audio"}
-              </span>
-              <span className="text-xs text-violet-100">
-                {separation.progressPercent === undefined
-                  ? "Đang xử lý…"
-                  : `${separation.progressPercent}%${
-                      separation.completedSegments !== undefined &&
-                      separation.totalSegments !== undefined
-                        ? ` · ${separation.completedSegments}/${separation.totalSegments} đoạn`
-                        : ""
-                    }`}
-              </span>
-              <div
-                className="h-2 w-full overflow-hidden rounded-full bg-slate-800"
-                role="progressbar"
-                aria-label="Tiến trình tách audio"
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-valuenow={separation.progressPercent}
-                aria-valuetext={
-                  separation.progressPercent === undefined
-                    ? "Đang xử lý, chưa xác định phần trăm"
-                    : `${separation.progressPercent}%`
-                }
-              >
-                <div
-                  className={`h-full rounded-full bg-violet-400 transition-all ${
-                    separation.progressPercent === undefined
-                      ? "w-1/3 animate-pulse"
-                      : ""
-                  }`}
-                  style={
-                    separation.progressPercent === undefined
-                      ? undefined
-                      : { width: `${separation.progressPercent}%` }
-                  }
-                />
               </div>
-              <button
-                type="button"
-                onClick={() => void cancelSeparation()}
-                disabled={isAutoPipelineRunning}
-                className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-700 bg-slate-950/70 px-2.5 py-1.5 text-xs text-slate-300 hover:text-white hover:border-slate-500 transition-colors"
-              >
-                <X className="w-3.5 h-3.5" />
-                Hủy tách audio
-              </button>
-            </div>
-          )}
-          {separation?.status === "cancelled" && (
-            <p className="text-xs text-amber-300">Tác vụ tách audio đã bị hủy.</p>
-          )}
-          {separation?.status === "interrupted" && (
-            <p className="rounded-lg border border-amber-500/25 bg-amber-950/20 p-3 text-xs text-amber-200">
-              {separation.error || "Tác vụ tách audio bị gián đoạn; có thể chạy lại."}
-            </p>
-          )}
+              <ChevronDown
+                className={`mt-2 h-4 w-4 shrink-0 text-slate-400 transition-transform ${
+                  separationPanelExpanded ? "rotate-180" : ""
+                }`}
+              />
+            </button>
 
-          {separationAvailability?.status === "ready" &&
-            Boolean(job.metadata?.audioCodec) && (
-              <button
-                type="button"
-                onClick={() => void startSeparation()}
-                disabled={!canStartSeparation}
-                className="inline-flex items-center justify-center gap-2 rounded-xl bg-violet-500 px-4 py-2.5 text-sm font-bold text-white transition-colors hover:bg-violet-400 disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-500"
-              >
-                {isSeparationProcessing ? (
-                  <LoaderCircle className="w-4 h-4 animate-spin" />
+            {separationPanelExpanded && (
+              <div id="video-dubbing-separation-panel" className="space-y-4">
+                {!separationAvailability ? (
+                  <p className="text-xs text-slate-400">
+                    Đang kiểm tra Python, model và thiết bị…
+                  </p>
                 ) : (
-                  <AudioLines className="w-4 h-4" />
-                )}
-                Tách audio nguồn
-              </button>
-            )}
-
-          {(separation?.vocalsSizeBytes || separation?.instrumentalSizeBytes) && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {([
-                { key: "vocals", label: "Giọng (vocals)", size: separation.vocalsSizeBytes },
-                {
-                  key: "instrumental",
-                  label: "Nhạc nền (instrumental)",
-                  size: separation.instrumentalSizeBytes,
-                },
-              ] as const).map((track) => (
-                <div
-                  key={track.key}
-                  className="space-y-2 rounded-xl border border-slate-800 bg-slate-950/60 p-3"
-                >
-                  <div className="flex items-center justify-between gap-2 text-xs">
-                    <span className="font-semibold text-slate-200">{track.label}</span>
-                    <span className="text-slate-400">
-                      {track.size ? formatFileSize(track.size) : "Không có"}
-                    </span>
-                  </div>
-                  <audio
-                    controls
-                    preload="metadata"
-                    src={`/api/video-dubbing/jobs/${job.id}/separation/${track.key}`}
-                    className="w-full"
+                  <div
+                    className={`rounded-xl border p-3 text-xs ${
+                      separationAvailability.status === "ready"
+                        ? "border-emerald-500/25 bg-emerald-950/20 text-emerald-200"
+                        : "border-amber-500/25 bg-amber-950/20 text-amber-200"
+                    }`}
                   >
-                    Trình duyệt không hỗ trợ phát WAV.
-                  </audio>
-                </div>
-              ))}
-            </div>
-          )}
-          {separation?.status === "completed" && (
-            <p className="text-xs text-emerald-300">
-              Đã xác minh hai track WAV · {formatDuration(separation.durationSeconds || 0)} · {separation.sampleRate} Hz · {separation.channels} kênh. Kết quả chưa được tự động đưa vào bản phối.
-            </p>
-          )}
-            </div>
-          )}
-        </section>
-      )}
+                    <div className="font-semibold">
+                      {separationAvailability.status === "ready"
+                        ? `Sẵn sàng · ${separationAvailability.device === "cuda" ? "CUDA" : "CPU"}`
+                        : "Chưa sẵn sàng"}
+                    </div>
+                    <p className="mt-1 leading-relaxed">
+                      {separationAvailability.message}
+                    </p>
+                    {separationAvailability.status === "unavailable" && (
+                      <p className="mt-2 leading-relaxed">
+                        Cấu hình riêng Python bằng biến
+                        VIDEO_DUBBING_SEPARATION_PYTHON rồi khởi động lại ứng
+                        dụng. Cần cài Demucs/PyTorch và tải model htdemucs
+                        trước; nút xử lý không tự cài hoặc tải model.
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {job.metadata?.audioCodec === null && (
+                  <p className="rounded-lg border border-amber-500/25 bg-amber-950/20 p-3 text-xs text-amber-200">
+                    Video này không có audio gốc để tách.
+                  </p>
+                )}
+                {separationError && (
+                  <div className="flex items-start gap-2 rounded-lg border border-rose-500/30 bg-rose-950/40 p-3 text-xs text-rose-200">
+                    <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
+                    <span>{separationError}</span>
+                  </div>
+                )}
+                {separation?.status === "error" && separation.error && (
+                  <div className="flex items-start gap-2 rounded-lg border border-rose-500/30 bg-rose-950/40 p-3 text-xs text-rose-200">
+                    <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
+                    <span>{separation.error}</span>
+                  </div>
+                )}
+                {isSeparationProcessing && (
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-xl border border-violet-500/25 bg-violet-950/20 p-3.5">
+                    <span className="inline-flex items-center gap-2 text-xs text-violet-200">
+                      <LoaderCircle className="w-4 h-4 animate-spin" />
+                      {separation.phase === "extracting"
+                        ? "Đang trích và chuẩn hóa audio nguồn"
+                        : separation.phase === "checking"
+                          ? "Đang kiểm tra môi trường tách audio"
+                          : separation.phase === "loading_model"
+                            ? "Đang tải model Demucs từ cache cục bộ"
+                            : separation.phase === "writing_outputs"
+                              ? "Đang ghi các track vocals và instrumental"
+                              : separation.phase === "validating"
+                                ? "Đang ghi và xác minh hai track"
+                                : "Demucs đang tách audio"}
+                    </span>
+                    <span className="text-xs text-violet-100">
+                      {separation.progressPercent === undefined
+                        ? "Đang xử lý…"
+                        : `${separation.progressPercent}%${
+                            separation.completedSegments !== undefined &&
+                            separation.totalSegments !== undefined
+                              ? ` · ${separation.completedSegments}/${separation.totalSegments} đoạn`
+                              : ""
+                          }`}
+                    </span>
+                    <div
+                      className="h-2 w-full overflow-hidden rounded-full bg-slate-800"
+                      role="progressbar"
+                      aria-label="Tiến trình tách audio"
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={separation.progressPercent}
+                      aria-valuetext={
+                        separation.progressPercent === undefined
+                          ? "Đang xử lý, chưa xác định phần trăm"
+                          : `${separation.progressPercent}%`
+                      }
+                    >
+                      <div
+                        className={`h-full rounded-full bg-violet-400 transition-all ${
+                          separation.progressPercent === undefined
+                            ? "w-1/3 animate-pulse"
+                            : ""
+                        }`}
+                        style={
+                          separation.progressPercent === undefined
+                            ? undefined
+                            : { width: `${separation.progressPercent}%` }
+                        }
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void cancelSeparation()}
+                      disabled={isAutoPipelineRunning}
+                      className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-700 bg-slate-950/70 px-2.5 py-1.5 text-xs text-slate-300 hover:text-white hover:border-slate-500 transition-colors"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                      Hủy tách audio
+                    </button>
+                  </div>
+                )}
+                {separation?.status === "cancelled" && (
+                  <p className="text-xs text-amber-300">
+                    Tác vụ tách audio đã bị hủy.
+                  </p>
+                )}
+                {separation?.status === "interrupted" && (
+                  <p className="rounded-lg border border-amber-500/25 bg-amber-950/20 p-3 text-xs text-amber-200">
+                    {separation.error ||
+                      "Tác vụ tách audio bị gián đoạn; có thể chạy lại."}
+                  </p>
+                )}
+
+                {separationAvailability?.status === "ready" &&
+                  Boolean(job.metadata?.audioCodec) && (
+                    <button
+                      type="button"
+                      onClick={() => void startSeparation()}
+                      disabled={!canStartSeparation}
+                      className="inline-flex items-center justify-center gap-2 rounded-xl bg-violet-500 px-4 py-2.5 text-sm font-bold text-white transition-colors hover:bg-violet-400 disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-500"
+                    >
+                      {isSeparationProcessing ? (
+                        <LoaderCircle className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <AudioLines className="w-4 h-4" />
+                      )}
+                      Tách audio nguồn
+                    </button>
+                  )}
+
+                {(separation?.vocalsSizeBytes ||
+                  separation?.instrumentalSizeBytes) && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {(
+                      [
+                        {
+                          key: "vocals",
+                          label: "Giọng (vocals)",
+                          size: separation.vocalsSizeBytes,
+                        },
+                        {
+                          key: "instrumental",
+                          label: "Nhạc nền (instrumental)",
+                          size: separation.instrumentalSizeBytes,
+                        },
+                      ] as const
+                    ).map((track) => (
+                      <div
+                        key={track.key}
+                        className="space-y-2 rounded-xl border border-slate-800 bg-slate-950/60 p-3"
+                      >
+                        <div className="flex items-center justify-between gap-2 text-xs">
+                          <span className="font-semibold text-slate-200">
+                            {track.label}
+                          </span>
+                          <span className="text-slate-400">
+                            {track.size
+                              ? formatFileSize(track.size)
+                              : "Không có"}
+                          </span>
+                        </div>
+                        <audio
+                          controls
+                          preload="metadata"
+                          src={`/api/video-dubbing/jobs/${job.id}/separation/${track.key}`}
+                          className="w-full"
+                        >
+                          Trình duyệt không hỗ trợ phát WAV.
+                        </audio>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {separation?.status === "completed" && (
+                  <p className="text-xs text-emerald-300">
+                    Đã xác minh hai track WAV ·{" "}
+                    {formatDuration(separation.durationSeconds || 0)} ·{" "}
+                    {separation.sampleRate} Hz · {separation.channels} kênh. Kết
+                    quả chưa được tự động đưa vào bản phối.
+                  </p>
+                )}
+              </div>
+            )}
+          </section>
+        )}
 
       {job?.status === "completed" && (
         <section className="space-y-4 rounded-2xl border border-cyan-500/25 bg-slate-900/80 p-4 sm:p-5">
@@ -3682,7 +3885,9 @@ export default function VideoDubbingTab() {
               <AudioLines className="h-5 w-5" />
             </div>
             <div className="min-w-0 flex-1">
-              <h3 className="font-semibold text-white">Mixer Preview · 3 track</h3>
+              <h3 className="font-semibold text-white">
+                Mixer Preview · 3 track
+              </h3>
               <p className="mt-1 text-xs leading-relaxed text-slate-400">
                 Nghe đồng bộ bằng Web Audio với gain riêng cho vocals,
                 instrumental và TTS Master. Mọi thay đổi chỉ áp dụng tức thời
@@ -3698,311 +3903,322 @@ export default function VideoDubbingTab() {
 
           {mixerPanelExpanded && (
             <div id="video-dubbing-mixer-panel" className="space-y-4">
-          <div className="space-y-3 rounded-xl border border-slate-800 bg-black/40 p-3">
-            <video
-              key={job.id}
-              ref={previewVideoRef}
-              src={`/api/video-dubbing/jobs/${job.id}/source-video`}
-              muted
-              playsInline
-              preload="metadata"
-              onLoadedMetadata={() => setVideoPreviewReady(true)}
-              onError={() => {
-                setVideoPreviewReady(false);
-                setPreviewError(
-                  "Trình duyệt không thể giải mã định dạng video này. Hãy dùng MP4 hoặc WebM tương thích để xem trước.",
-                );
-              }}
-              className="max-h-[min(60vh,640px)] w-full rounded-lg bg-black object-contain"
-              aria-label="Video nguồn"
-            />
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={() => void playMixerPreview()}
-                disabled={!hasPreviewTrack || !videoPreviewReady || isMediaProcessing}
-                className="inline-flex items-center gap-2 rounded-lg border border-cyan-500/30 bg-cyan-950/30 px-3 py-2 text-xs font-semibold text-cyan-100 hover:bg-cyan-950/60 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                {previewStatus === "playing" ? (
-                  <Pause className="h-3.5 w-3.5" />
-                ) : (
-                  <Play className="h-3.5 w-3.5" />
-                )}
-                {previewStatus === "playing" ? "Tạm dừng" : "Phát"}
-              </button>
-              <button
-                type="button"
-                onClick={() => void restartMixerPreview()}
-                disabled={!videoPreviewReady || isMediaProcessing}
-                className="inline-flex items-center gap-2 rounded-lg border border-slate-700 px-3 py-2 text-xs text-slate-300 hover:text-white disabled:opacity-40"
-              >
-                <RotateCcw className="h-3.5 w-3.5" />
-                Phát lại từ đầu
-              </button>
-              <span className="text-xs tabular-nums text-slate-400">
-                {formatDuration(previewCurrentTime)} /{" "}
-                {formatDuration(job.metadata?.durationSeconds || 0)}
-              </span>
-            </div>
-            {job.metadata && (
-              <input
-                type="range"
-                min={0}
-                max={job.metadata.durationSeconds}
-                step={0.05}
-                value={Math.min(previewCurrentTime, job.metadata.durationSeconds)}
-                onChange={(event) =>
-                  seekMixerPreview(Number(event.target.value))
-                }
-                disabled={!videoPreviewReady}
-                className="w-full accent-cyan-400 disabled:opacity-40"
-                aria-label="Tua video và các track mixer"
-              />
-            )}
-            <p className="text-[10px] leading-relaxed text-slate-500">
-              Video là mốc thời gian chính; nguồn video được làm im lặng trong
-              preview. Các track chưa có hoặc chưa xác minh sẽ không thể chọn.
-            </p>
-          </div>
-
-          {!hasMasterAudio && (
-            <p className="rounded-lg border border-amber-500/25 bg-amber-950/20 p-3 text-xs text-amber-200">
-              Cần tạo TTS Master bằng pipeline hiện có trước khi render final
-              mix. Các track vocals/instrumental có thể nghe riêng ở phần tách
-              audio phía trên.
-            </p>
-          )}
-          {mixerError && (
-            <p className="rounded-lg border border-rose-500/30 bg-rose-950/30 p-3 text-xs text-rose-200">
-              {mixerError}
-            </p>
-          )}
-          {previewError && (
-            <p className="rounded-lg border border-rose-500/30 bg-rose-950/30 p-3 text-xs text-rose-200">
-              {previewError}
-            </p>
-          )}
-          {mediaError && (
-            <p className="rounded-lg border border-rose-500/30 bg-rose-950/30 p-3 text-xs text-rose-200">
-              {mediaError}
-            </p>
-          )}
-
-          <div className="flex flex-wrap items-center gap-3">
-            <button
-              type="button"
-              onClick={() => void startFinalMix()}
-              disabled={!canRenderFinalMix}
-              className="inline-flex items-center gap-2 rounded-xl bg-cyan-400 px-4 py-2.5 text-sm font-bold text-slate-950 hover:bg-cyan-300 disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-500"
-            >
-              {finalMix?.status === "running" ? (
-                <LoaderCircle className="h-4 w-4 animate-spin" />
-              ) : (
-                <Volume2 className="h-4 w-4" />
-              )}
-              Render final mix
-            </button>
-            {finalMix?.status === "running" && (
-              <button
-                type="button"
-                onClick={() => void cancelFinalMix()}
-                disabled={isAutoPipelineRunning}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 px-3 py-2 text-xs text-slate-300 hover:border-rose-500/40 hover:text-rose-200"
-              >
-                <X className="h-3.5 w-3.5" />
-                Hủy render
-              </button>
-            )}
-            {mixerSettingsSaved ? (
-              <span className="text-[11px] text-emerald-300">
-                Cấu hình mixer đã lưu cho job
-              </span>
-            ) : mixerTouchedRef.current ? (
-              <span className="text-[11px] text-slate-400">
-                Đang lưu cấu hình mixer…
-              </span>
-            ) : (
-              <span className="text-[11px] text-slate-400">
-                Cấu hình mặc định · thay đổi để lưu
-              </span>
-            )}
-          </div>
-
-          {finalMix?.status === "running" && (
-            <div className="space-y-2 rounded-xl border border-cyan-500/25 bg-cyan-950/20 p-3">
-              <div className="flex justify-between gap-3 text-xs text-cyan-100">
-                <span>
-                  {finalMix.phase === "validating"
-                    ? "Đang xác minh WAV đầu ra"
-                    : "Đang render các track bằng FFmpeg"}
-                </span>
-                <span>
-                  {finalMix.progressPercent === undefined
-                    ? "Đang xử lý…"
-                    : `${finalMix.progressPercent}%`}
-                </span>
-              </div>
-              <div
-                role="progressbar"
-                aria-label="Tiến trình render final mix"
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-valuenow={finalMix.progressPercent}
-                className="h-2 overflow-hidden rounded-full bg-slate-800"
-              >
-                <div
-                  className="h-full rounded-full bg-cyan-400 transition-all"
-                  style={{
-                    width: `${finalMix.progressPercent ?? 30}%`,
-                    ...(finalMix.progressPercent === undefined
-                      ? { animation: "pulse 1.5s ease-in-out infinite" }
-                      : {}),
-                  }}
-                />
-              </div>
-            </div>
-          )}
-          {finalMix?.status === "failed" && finalMix.error && (
-            <p className="rounded-lg border border-rose-500/30 bg-rose-950/30 p-3 text-xs text-rose-200">
-              Render final mix thất bại: {finalMix.error}
-            </p>
-          )}
-          {finalMix?.status === "cancelled" && (
-            <p className="text-xs text-amber-200">Đã hủy render final mix.</p>
-          )}
-          {finalMix?.status === "interrupted" && finalMix.error && (
-            <p className="text-xs text-amber-200">{finalMix.error}</p>
-          )}
-          {hasFinalMix && job && (
-            <div className="space-y-2 rounded-xl border border-emerald-500/25 bg-emerald-950/20 p-3.5">
-              <p className="text-xs font-semibold text-emerald-300">
-                {isFinalMixCurrent
-                  ? "Final mix đã xác minh"
-                  : "Final mix cũ vẫn được giữ; chưa khớp mixer settings hiện tại"}
-              </p>
-              <audio
-                key={`${job.id}-${finalMix?.sizeBytes}`}
-                controls
-                preload="metadata"
-                src={`/api/video-dubbing/jobs/${job.id}/final-mix-audio`}
-                className="w-full"
-              >
-                Trình duyệt không hỗ trợ phát WAV.
-              </audio>
-            </div>
-          )}
-
-          <div className="space-y-4 border-t border-slate-800 pt-4">
-            <div className="flex flex-wrap items-center gap-3">
-              <button
-                type="button"
-                onClick={() => void startVideoExport()}
-                disabled={!canExportVideo}
-                className="inline-flex items-center gap-2 rounded-xl bg-sky-500 px-4 py-2.5 text-sm font-bold text-slate-950 transition-colors hover:bg-sky-400 disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-500"
-              >
-                {videoExport?.status === "running" ? (
-                  <LoaderCircle className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Film className="h-4 w-4" />
-                )}
-                Merge Master TTS vào Video
-              </button>
-              <span className="text-xs text-slate-400">
-                {!isFinalMixCurrent
-                  ? "Cần render final mix hiện tại trước khi xuất MP4."
-                  : "Video stream được giữ nguyên; audio final mix được mã hóa AAC."}
-              </span>
-            </div>
-
-            {videoExport?.status === "running" && (
-              <div className="space-y-2 rounded-xl border border-sky-500/25 bg-sky-950/20 p-3">
-                <div className="flex flex-wrap justify-between gap-3 text-xs text-sky-100">
-                  <span>
-                    {videoExport.phase === "validating"
-                      ? "Đang xác minh MP4"
-                      : "Đang xuất MP4 (copy video stream)"}
-                  </span>
-                  <span>
-                    {videoExport.progressPercent === undefined
-                      ? "Đang xử lý…"
-                      : `${videoExport.progressPercent}%`}
-                  </span>
-                </div>
-                <div
-                  role="progressbar"
-                  aria-label="Tiến trình xuất video MP4"
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-valuenow={videoExport.progressPercent}
-                  className="h-2 overflow-hidden rounded-full bg-slate-800"
-                >
-                  <div
-                    className="h-full rounded-full bg-sky-400 transition-all"
-                    style={{
-                      width: `${videoExport.progressPercent ?? 30}%`,
-                      ...(videoExport.progressPercent === undefined
-                        ? { animation: "pulse 1.5s ease-in-out infinite" }
-                        : {}),
-                    }}
-                  />
-                </div>
-                <button
-                  type="button"
-                  onClick={() => void cancelMediaTask("export")}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 px-2.5 py-1.5 text-xs text-slate-300 hover:border-rose-500/40 hover:text-rose-200"
-                >
-                  <X className="h-3.5 w-3.5" />
-                  Hủy xuất video
-                </button>
-              </div>
-            )}
-            {videoExport?.status === "failed" && videoExport.error && (
-              <p className="rounded-lg border border-rose-500/30 bg-rose-950/30 p-3 text-xs text-rose-200">
-                Xuất MP4 thất bại: {videoExport.error}
-              </p>
-            )}
-            {videoExport?.status === "cancelled" && (
-              <p className="text-xs text-amber-200">Đã hủy xuất MP4.</p>
-            )}
-            {videoExport?.status === "interrupted" && videoExport.error && (
-              <p className="rounded-lg border border-amber-500/25 bg-amber-950/20 p-3 text-xs text-amber-200">
-                {videoExport.error}
-              </p>
-            )}
-
-            {hasExportedVideo && job && (
-              <div className="space-y-3 rounded-xl border border-emerald-500/25 bg-emerald-950/20 p-3.5">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="text-xs font-semibold text-emerald-300">
-                    {videoExport?.status === "completed" && isFinalMixCurrent
-                      ? "MP4 đã xuất"
-                      : "MP4 trước đó vẫn được giữ"}
-                  </span>
-                  <span className="text-xs text-slate-400">
-                    {formatFileSize(videoExport?.sizeBytes || 0)}
-                    {videoExport?.durationSeconds !== undefined &&
-                      ` · ${formatDuration(videoExport.durationSeconds)}`}
-                  </span>
-                </div>
+              <div className="space-y-3 rounded-xl border border-slate-800 bg-black/40 p-3">
                 <video
-                  key={`${job.id}-${videoExport?.sizeBytes}`}
-                  controls
+                  key={job.id}
+                  ref={previewVideoRef}
+                  src={`/api/video-dubbing/jobs/${job.id}/source-video`}
+                  muted
                   playsInline
                   preload="metadata"
-                  src={`/api/video-dubbing/jobs/${job.id}/exported-video`}
-                  className="max-h-[min(60vh,640px)] w-full rounded-lg bg-black"
-                  aria-label="Video MP4 đã xuất"
+                  onLoadedMetadata={() => setVideoPreviewReady(true)}
+                  onError={() => {
+                    setVideoPreviewReady(false);
+                    setPreviewError(
+                      "Trình duyệt không thể giải mã định dạng video này. Hãy dùng MP4 hoặc WebM tương thích để xem trước.",
+                    );
+                  }}
+                  className="max-h-[min(60vh,640px)] w-full rounded-lg bg-black object-contain"
+                  aria-label="Video nguồn"
                 />
-                <a
-                  href={`/api/video-dubbing/jobs/${job.id}/download`}
-                  download={`video-dubbing-${job.id}.mp4`}
-                  className="inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-500/40 px-4 py-2.5 text-sm font-bold text-emerald-200 hover:bg-emerald-950/60"
-                >
-                  Tải MP4
-                </a>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void playMixerPreview()}
+                    disabled={
+                      !hasPreviewTrack ||
+                      !videoPreviewReady ||
+                      isMediaProcessing
+                    }
+                    className="inline-flex items-center gap-2 rounded-lg border border-cyan-500/30 bg-cyan-950/30 px-3 py-2 text-xs font-semibold text-cyan-100 hover:bg-cyan-950/60 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    {previewStatus === "playing" ? (
+                      <Pause className="h-3.5 w-3.5" />
+                    ) : (
+                      <Play className="h-3.5 w-3.5" />
+                    )}
+                    {previewStatus === "playing" ? "Tạm dừng" : "Phát"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void restartMixerPreview()}
+                    disabled={!videoPreviewReady || isMediaProcessing}
+                    className="inline-flex items-center gap-2 rounded-lg border border-slate-700 px-3 py-2 text-xs text-slate-300 hover:text-white disabled:opacity-40"
+                  >
+                    <RotateCcw className="h-3.5 w-3.5" />
+                    Phát lại từ đầu
+                  </button>
+                  <span className="text-xs tabular-nums text-slate-400">
+                    {formatDuration(previewCurrentTime)} /{" "}
+                    {formatDuration(job.metadata?.durationSeconds || 0)}
+                  </span>
+                </div>
+                {job.metadata && (
+                  <input
+                    type="range"
+                    min={0}
+                    max={job.metadata.durationSeconds}
+                    step={0.05}
+                    value={Math.min(
+                      previewCurrentTime,
+                      job.metadata.durationSeconds,
+                    )}
+                    onChange={(event) =>
+                      seekMixerPreview(Number(event.target.value))
+                    }
+                    disabled={!videoPreviewReady}
+                    className="w-full accent-cyan-400 disabled:opacity-40"
+                    aria-label="Tua video và các track mixer"
+                  />
+                )}
+                <p className="text-[10px] leading-relaxed text-slate-500">
+                  Video là mốc thời gian chính; nguồn video được làm im lặng
+                  trong preview. Các track chưa có hoặc chưa xác minh sẽ không
+                  thể chọn.
+                </p>
               </div>
-            )}
-          </div>
+
+              {!hasMasterAudio && (
+                <p className="rounded-lg border border-amber-500/25 bg-amber-950/20 p-3 text-xs text-amber-200">
+                  Cần tạo TTS Master bằng pipeline hiện có trước khi render
+                  final mix. Các track vocals/instrumental có thể nghe riêng ở
+                  phần tách audio phía trên.
+                </p>
+              )}
+              {mixerError && (
+                <p className="rounded-lg border border-rose-500/30 bg-rose-950/30 p-3 text-xs text-rose-200">
+                  {mixerError}
+                </p>
+              )}
+              {previewError && (
+                <p className="rounded-lg border border-rose-500/30 bg-rose-950/30 p-3 text-xs text-rose-200">
+                  {previewError}
+                </p>
+              )}
+              {mediaError && (
+                <p className="rounded-lg border border-rose-500/30 bg-rose-950/30 p-3 text-xs text-rose-200">
+                  {mediaError}
+                </p>
+              )}
+
+              <div className="flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => void startFinalMix()}
+                  disabled={!canRenderFinalMix}
+                  className="inline-flex items-center gap-2 rounded-xl bg-cyan-400 px-4 py-2.5 text-sm font-bold text-slate-950 hover:bg-cyan-300 disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-500"
+                >
+                  {finalMix?.status === "running" ? (
+                    <LoaderCircle className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Volume2 className="h-4 w-4" />
+                  )}
+                  Render final mix
+                </button>
+                {finalMix?.status === "running" && (
+                  <button
+                    type="button"
+                    onClick={() => void cancelFinalMix()}
+                    disabled={isAutoPipelineRunning}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 px-3 py-2 text-xs text-slate-300 hover:border-rose-500/40 hover:text-rose-200"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                    Hủy render
+                  </button>
+                )}
+                {mixerSettingsSaved ? (
+                  <span className="text-[11px] text-emerald-300">
+                    Cấu hình mixer đã lưu cho job
+                  </span>
+                ) : mixerTouchedRef.current ? (
+                  <span className="text-[11px] text-slate-400">
+                    Đang lưu cấu hình mixer…
+                  </span>
+                ) : (
+                  <span className="text-[11px] text-slate-400">
+                    Cấu hình mặc định · thay đổi để lưu
+                  </span>
+                )}
+              </div>
+
+              {finalMix?.status === "running" && (
+                <div className="space-y-2 rounded-xl border border-cyan-500/25 bg-cyan-950/20 p-3">
+                  <div className="flex justify-between gap-3 text-xs text-cyan-100">
+                    <span>
+                      {finalMix.phase === "validating"
+                        ? "Đang xác minh WAV đầu ra"
+                        : "Đang render các track bằng FFmpeg"}
+                    </span>
+                    <span>
+                      {finalMix.progressPercent === undefined
+                        ? "Đang xử lý…"
+                        : `${finalMix.progressPercent}%`}
+                    </span>
+                  </div>
+                  <div
+                    role="progressbar"
+                    aria-label="Tiến trình render final mix"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={finalMix.progressPercent}
+                    className="h-2 overflow-hidden rounded-full bg-slate-800"
+                  >
+                    <div
+                      className="h-full rounded-full bg-cyan-400 transition-all"
+                      style={{
+                        width: `${finalMix.progressPercent ?? 30}%`,
+                        ...(finalMix.progressPercent === undefined
+                          ? { animation: "pulse 1.5s ease-in-out infinite" }
+                          : {}),
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
+              {finalMix?.status === "failed" && finalMix.error && (
+                <p className="rounded-lg border border-rose-500/30 bg-rose-950/30 p-3 text-xs text-rose-200">
+                  Render final mix thất bại: {finalMix.error}
+                </p>
+              )}
+              {finalMix?.status === "cancelled" && (
+                <p className="text-xs text-amber-200">
+                  Đã hủy render final mix.
+                </p>
+              )}
+              {finalMix?.status === "interrupted" && finalMix.error && (
+                <p className="text-xs text-amber-200">{finalMix.error}</p>
+              )}
+              {hasFinalMix && job && (
+                <div className="space-y-2 rounded-xl border border-emerald-500/25 bg-emerald-950/20 p-3.5">
+                  <p className="text-xs font-semibold text-emerald-300">
+                    {isFinalMixCurrent
+                      ? "Final mix đã xác minh"
+                      : "Final mix cũ vẫn được giữ; chưa khớp mixer settings hiện tại"}
+                  </p>
+                  <audio
+                    key={`${job.id}-${finalMix?.sizeBytes}`}
+                    controls
+                    preload="metadata"
+                    src={`/api/video-dubbing/jobs/${job.id}/final-mix-audio`}
+                    className="w-full"
+                  >
+                    Trình duyệt không hỗ trợ phát WAV.
+                  </audio>
+                </div>
+              )}
+
+              <div className="space-y-4 border-t border-slate-800 pt-4">
+                <div className="flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => void startVideoExport()}
+                    disabled={!canExportVideo}
+                    className="inline-flex items-center gap-2 rounded-xl bg-sky-500 px-4 py-2.5 text-sm font-bold text-slate-950 transition-colors hover:bg-sky-400 disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-500"
+                  >
+                    {videoExport?.status === "running" ? (
+                      <LoaderCircle className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Film className="h-4 w-4" />
+                    )}
+                    Merge Master TTS vào Video
+                  </button>
+                  <span className="text-xs text-slate-400">
+                    {!isFinalMixCurrent
+                      ? "Cần render final mix hiện tại trước khi xuất MP4."
+                      : "Video stream được giữ nguyên; audio final mix được mã hóa AAC."}
+                  </span>
+                </div>
+
+                {videoExport?.status === "running" && (
+                  <div className="space-y-2 rounded-xl border border-sky-500/25 bg-sky-950/20 p-3">
+                    <div className="flex flex-wrap justify-between gap-3 text-xs text-sky-100">
+                      <span>
+                        {videoExport.phase === "validating"
+                          ? "Đang xác minh MP4"
+                          : "Đang xuất MP4 (copy video stream)"}
+                      </span>
+                      <span>
+                        {videoExport.progressPercent === undefined
+                          ? "Đang xử lý…"
+                          : `${videoExport.progressPercent}%`}
+                      </span>
+                    </div>
+                    <div
+                      role="progressbar"
+                      aria-label="Tiến trình xuất video MP4"
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={videoExport.progressPercent}
+                      className="h-2 overflow-hidden rounded-full bg-slate-800"
+                    >
+                      <div
+                        className="h-full rounded-full bg-sky-400 transition-all"
+                        style={{
+                          width: `${videoExport.progressPercent ?? 30}%`,
+                          ...(videoExport.progressPercent === undefined
+                            ? { animation: "pulse 1.5s ease-in-out infinite" }
+                            : {}),
+                        }}
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void cancelMediaTask("export")}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 px-2.5 py-1.5 text-xs text-slate-300 hover:border-rose-500/40 hover:text-rose-200"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                      Hủy xuất video
+                    </button>
+                  </div>
+                )}
+                {videoExport?.status === "failed" && videoExport.error && (
+                  <p className="rounded-lg border border-rose-500/30 bg-rose-950/30 p-3 text-xs text-rose-200">
+                    Xuất MP4 thất bại: {videoExport.error}
+                  </p>
+                )}
+                {videoExport?.status === "cancelled" && (
+                  <p className="text-xs text-amber-200">Đã hủy xuất MP4.</p>
+                )}
+                {videoExport?.status === "interrupted" && videoExport.error && (
+                  <p className="rounded-lg border border-amber-500/25 bg-amber-950/20 p-3 text-xs text-amber-200">
+                    {videoExport.error}
+                  </p>
+                )}
+
+                {hasExportedVideo && job && (
+                  <div className="space-y-3 rounded-xl border border-emerald-500/25 bg-emerald-950/20 p-3.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-xs font-semibold text-emerald-300">
+                        {videoExport?.status === "completed" &&
+                        isFinalMixCurrent
+                          ? "MP4 đã xuất"
+                          : "MP4 trước đó vẫn được giữ"}
+                      </span>
+                      <span className="text-xs text-slate-400">
+                        {formatFileSize(videoExport?.sizeBytes || 0)}
+                        {videoExport?.durationSeconds !== undefined &&
+                          ` · ${formatDuration(videoExport.durationSeconds)}`}
+                      </span>
+                    </div>
+                    <video
+                      key={`${job.id}-${videoExport?.sizeBytes}`}
+                      controls
+                      playsInline
+                      preload="metadata"
+                      src={`/api/video-dubbing/jobs/${job.id}/exported-video`}
+                      className="max-h-[min(60vh,640px)] w-full rounded-lg bg-black"
+                      aria-label="Video MP4 đã xuất"
+                    />
+                    <a
+                      href={`/api/video-dubbing/jobs/${job.id}/download`}
+                      download={`video-dubbing-${job.id}.mp4`}
+                      className="inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-500/40 px-4 py-2.5 text-sm font-bold text-emerald-200 hover:bg-emerald-950/60"
+                    >
+                      Tải MP4
+                    </a>
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </section>
@@ -4011,7 +4227,9 @@ export default function VideoDubbingTab() {
       <div className="flex items-start gap-2 rounded-xl border border-slate-800 bg-slate-950/60 p-3.5 text-xs text-slate-400">
         <AlertCircle className="w-4 h-4 shrink-0 text-amber-400" />
         <p>
-          Tách giọng và nhạc nền chạy cục bộ bằng Demucs khi model đã sẵn sàng. Các track tách được chỉ để nghe thử; chưa tự động đưa vào bản phối. Preset chưa được hỗ trợ.
+          Tách giọng và nhạc nền chạy cục bộ bằng Demucs khi model đã sẵn sàng.
+          Các track tách được chỉ để nghe thử; chưa tự động đưa vào bản phối.
+          Preset chưa được hỗ trợ.
         </p>
       </div>
     </section>

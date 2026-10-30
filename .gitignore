@@ -20,6 +20,7 @@ datasets_storage/
 jobs_storage/
 stories_storage/
 bgm_storage/
+join_audio_storage/
 piper_workspace/
 
 # Model checkpoints & heavy binaries

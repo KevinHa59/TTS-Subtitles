@@ -19,7 +19,7 @@
     - Vào link Releases chính thức: [https://github.com/espeak-ng/espeak-ng/releases](https://github.com/espeak-ng/espeak-ng/releases)
     - Tải file **`espeak-ng-X64.msi`** và cài đặt vào thư mục mặc định (`C:\Program Files\eSpeak NG`).
     - `Start-App.bat` và máy chủ sẽ tự động phát hiện đường dẫn này mà không cần bạn cấu hình thủ công.
-- **FFmpeg (Khuyến nghị để nén MP3 và tăng tốc đọc `atempo`)**:
+- **FFmpeg/FFprobe (Bắt buộc cho Join Audio; khuyến nghị để nén MP3 và tăng tốc đọc `atempo`)**:
   - **Cách 1 (Tự động qua winget)**:
     ```cmd
     winget install Gyan.FFmpeg
@@ -86,6 +86,14 @@ Bạn **không cần** mở VS Code, không cần gõ lệnh dòng lệnh phức
 
 Ứng dụng tuân thủ nghiêm ngặt quy trình xử lý tối ưu hóa tài nguyên đĩa cứng:
 
+### Join Audio trong tab Clone Giọng
+
+- Mở **Clone Giọng → Join Audio**, thêm một hoặc nhiều tệp `.mp3`/`.wav`; thứ tự thêm được giữ nguyên hoặc có thể sắp xếp theo tên A–Z.
+- FFprobe kiểm tra đầu vào với tối đa 4 tiến trình đồng thời. FFmpeg ghép theo lô tối đa 32 tệp, chuẩn hóa trên toàn bộ audio và xuất WAV mono 16 kHz, PCM 16-bit, mặc định `-20 LUFS` / `-1 dBTP`. Có thể điều chỉnh target loudness và true peak trong giao diện.
+- Giao diện chỉ giữ số lượng, dung lượng, thời lượng, tiến độ và lỗi cần xem; file được tải/ghi theo luồng thay vì nạp toàn bộ audio vào bộ nhớ. Có thể hủy tác vụ; dữ liệu nguồn không bị thay đổi và file tạm được dọn sau khi hoàn tất, hủy hoặc lỗi.
+- Kết quả được FFprobe xác minh và lưu trong `join_audio_storage/results/`. Nút **Dùng cho Whisper** chuyển tham chiếu tệp kết quả trực tiếp vào quy trình Whisper.cpp hiện có trong **Chuẩn Bị Dữ Liệu Offline**, không tải WAV về trình duyệt.
+- FFmpeg và FFprobe cần có trong `PATH` hoặc được cấu hình qua `FFMPEG_PATH` / `FFPROBE_PATH`.
+
 1. **Đọc & Phân tích file phụ đề**:
    - Tải lên file `.srt` hoặc `.txt` có định dạng timestamp tiêu chuẩn.
    - Ứng dụng phân tích thành từng câu thoại với thời lượng mục tiêu `targetDuration = endTime - startTime`.
@@ -114,6 +122,10 @@ Bạn **không cần** mở VS Code, không cần gõ lệnh dòng lệnh phức
 | `Start-App.bat`    | Script khởi chạy máy chủ production local và tự mở trình duyệt              |
 | `Stop-App.bat`     | Script dừng an toàn tiến trình ứng dụng trên cổng 3000                      |
 | `server.ts`                    | Máy chủ Express tích hợp PiperNativeTTS, FFmpeg spawning, timeline assembly |
+| `joinAudioManager.ts`          | Quản lý upload theo luồng, ghép theo lô, chuẩn hóa và xác minh WAV          |
+| `joinAudioRoutes.ts`           | API tiến độ, hủy tác vụ và phân phối kết quả Join Audio                     |
+| `src/components/JoinAudioTab.tsx` | Giao diện thêm tệp, cấu hình chuẩn hóa và nghe thử Join Audio            |
+| `join_audio_storage/`    | Kết quả WAV đã xác minh và dữ liệu tạm của Join Audio                       |
 | `videoDubbingManager.ts`        | Quản lý upload, metadata bền vững, khôi phục và lịch sử job                  |
 | `videoDubbingRoutes.ts`         | API job, history, task và đầu ra Video Dubbing                               |
 | `videoDubbingMaster.ts`         | Điều phối pipeline Đồng Bộ Phụ Đề hiện có cho TTS Master Video Dubbing       |
