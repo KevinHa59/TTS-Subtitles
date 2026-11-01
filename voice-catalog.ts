@@ -342,7 +342,8 @@ export const AVAILABLE_MODELS: VoiceDefinition[] = [
     tag: "Nam · Miền Nam · Giọng tùy chỉnh (Offline)",
     gender: "male",
     description: "Giọng nam News Flash được huấn luyện riêng.",
-    sampleText: "Ta là Tề Thiên Đại Thánh, Tôn Ngộ Không. Cẩn tuân tông chủ chi lệnh.",
+    sampleText:
+      "Ta là Tề Thiên Đại Thánh, Tôn Ngộ Không. Cẩn tuân tông chủ chi lệnh.",
     recommended: false,
   },
   {
@@ -352,7 +353,8 @@ export const AVAILABLE_MODELS: VoiceDefinition[] = [
     tag: "Nam · Miền Nam · Giọng tùy chỉnh (Offline)",
     gender: "male",
     description: "Giọng nam News Flash được huấn luyện riêng.",
-    sampleText: "Ta là tông chủ Thanh Vân Tiên Tông, Phong Thanh Dương. Cẩn tuân tông chủ chi lệnh.",
+    sampleText:
+      "Ta là tông chủ Thanh Vân Tiên Tông, Phong Thanh Dương. Cẩn tuân tông chủ chi lệnh.",
     recommended: false,
   },
   {
@@ -362,7 +364,8 @@ export const AVAILABLE_MODELS: VoiceDefinition[] = [
     tag: "Nam · Miền Nam · Giọng tùy chỉnh (Offline)",
     gender: "male",
     description: "Giọng nam News Flash được huấn luyện riêng.",
-    sampleText: "Ta là tông chủ Thanh Vân Tiên Tông, Phong Thanh Dương. Cẩn tuân tông chủ chi lệnh.",
+    sampleText:
+      "Ta là tông chủ Thanh Vân Tiên Tông, Phong Thanh Dương. Cẩn tuân tông chủ chi lệnh.",
     recommended: false,
   },
   {
@@ -372,7 +375,8 @@ export const AVAILABLE_MODELS: VoiceDefinition[] = [
     tag: "Nam · Miền Nam · Giọng tùy chỉnh (Offline)",
     gender: "male",
     description: "Giọng nam News Flash được huấn luyện riêng.",
-    sampleText: "Ta là tông chủ Thanh Vân Tiên Tông, Phong Thanh Dương. Cẩn tuân tông chủ chi lệnh.",
+    sampleText:
+      "Ta là tông chủ Thanh Vân Tiên Tông, Phong Thanh Dương. Cẩn tuân tông chủ chi lệnh.",
     recommended: false,
   },
   {
