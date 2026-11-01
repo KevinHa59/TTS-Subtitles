@@ -34,12 +34,88 @@ export interface VideoDubbingJob {
   mixerSettings?: VideoDubbingMixerSettings;
   mixSelection?: "legacy" | "final";
   videoExport?: VideoDubbingMediaTask;
+  exportedVideoFileName?: string;
+  overlaySettings?: VideoDubbingOverlaySettings;
   separation?: VideoDubbingSeparationTask;
   autoPipeline?: VideoDubbingAutoPipelineState;
   error?: string;
   warning?: string;
   createdAt: number;
   updatedAt: number;
+}
+
+export type VideoDubbingOverlayPosition =
+  | "top-left"
+  | "top-center"
+  | "top-right"
+  | "middle-left"
+  | "middle-center"
+  | "middle-right"
+  | "bottom-left"
+  | "bottom-center"
+  | "bottom-right";
+
+export interface VideoDubbingSubtitleCue {
+  startTime: number;
+  endTime: number;
+  text: string;
+}
+
+export interface VideoDubbingTextOverlayCue extends VideoDubbingSubtitleCue {
+  fontSize: number;
+  fontFamily: string;
+  color: string;
+  bold: boolean;
+  italic: boolean;
+  position: VideoDubbingOverlayPosition;
+  /** Optional center point in video coordinates, normalized to 0–100%. */
+  xPercent?: number;
+  yPercent?: number;
+  underline?: boolean;
+  textCase?: "none" | "uppercase" | "lowercase" | "capitalize";
+  outlineEnabled?: boolean;
+  outlineColor?: string;
+  outlineWidthPx?: number;
+  characterSpacingPx?: number;
+  lineSpacingPx?: number;
+  backgroundColor: string;
+  backgroundTransparent: boolean;
+  paddingPx: number;
+}
+
+export interface VideoDubbingOverlaySettings {
+  logoEnabled: boolean;
+  logoFileName?: string;
+  logoWidthPercent: number;
+  logoPaddingPx: number;
+  logoPosition: VideoDubbingOverlayPosition;
+  subtitlesEnabled: boolean;
+  subtitles: VideoDubbingSubtitleCue[];
+  textOverlays?: VideoDubbingTextOverlayCue[];
+  subtitleFontSize: number;
+  subtitleFontFamily: string;
+  subtitleColor: string;
+  subtitleBackgroundColor: string;
+  subtitleBackgroundTransparent?: boolean;
+  subtitleBackgroundMode?: "none" | "color" | "image";
+  subtitleBold: boolean;
+  subtitleItalic: boolean;
+  subtitleUnderline?: boolean;
+  subtitleTextCase?: "none" | "uppercase" | "lowercase" | "capitalize";
+  subtitleOutlineEnabled?: boolean;
+  subtitleOutlineColor?: string;
+  subtitleOutlineWidthPx?: number;
+  subtitleCharacterSpacingPx?: number;
+  subtitleLineSpacingPx?: number;
+  subtitlePaddingPx: number;
+  subtitleMarginPx: number;
+  subtitleFontSizeScale?: number;
+  subtitleVerticalOffsetPx?: number;
+  subtitleBackgroundSideScale?: number;
+  subtitlePosition: VideoDubbingOverlayPosition;
+  subtitleBackgroundImage?: string | null;
+  subtitleBackgroundLeftSlicePx?: number;
+  subtitleBackgroundRightSlicePx?: number;
 }
 
 export interface VideoDubbingAutoPipelineConfig {
@@ -136,6 +212,21 @@ export interface VideoDubbingJobHistoryItem {
   warning?: string;
 }
 
+/** Persistent editable workspace that owns one or more Video Dubbing jobs. */
+export interface VideoDubbingProject {
+  id: string;
+  name: string;
+  jobIds: string[];
+  activeJobId?: string;
+  srt?: { fileName: string; content: string };
+  /** Source SRT files imported into this project, keyed by their stored id. */
+  sourceSrts?: Array<{ id: string; fileName: string; content: string; videoId?: string; matchByName?: boolean }>;
+  /** Versioned UI/editor state, validated and size-limited by the API. */
+  workspace?: Record<string, unknown>;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface VideoDubbingMasterGeneration {
   status:
     | "idle"
@@ -164,8 +255,12 @@ export type VideoDubbingMediaTaskStatus =
 
 export interface VideoDubbingMediaTask {
   status: VideoDubbingMediaTaskStatus;
-  phase?: "extracting" | "mixing" | "remuxing" | "validating";
+  phase?: "extracting" | "mixing" | "remuxing" | "rendering" | "validating";
   progressPercent?: number;
+  detail?: string;
+  startedAtMs?: number;
+  completedAtMs?: number;
+  elapsedSeconds?: number;
   ttsVolumePercent?: number;
   originalVolumePercent?: number;
   durationSeconds?: number;
@@ -185,7 +280,9 @@ export type VideoDubbingSeparationStatus =
 export interface VideoDubbingSeparationAvailability {
   status: "unavailable" | "ready";
   model: string;
-  device?: "cpu" | "cuda";
+  backend?: "demucs" | "mdx";
+  device?: "cpu" | "cuda" | "directml";
+  fallbackDevice?: "cpu" | "cuda";
   message: string;
 }
 
@@ -200,6 +297,10 @@ export interface VideoDubbingSeparationTask {
     | "validating"
     | "interrupted";
   progressPercent?: number;
+  startedAtMs?: number;
+  elapsedSeconds?: number;
+  /** Refreshed by the server while the separation worker process remains active. */
+  heartbeatAtMs?: number;
   completedSegments?: number;
   totalSegments?: number;
   durationSeconds?: number;

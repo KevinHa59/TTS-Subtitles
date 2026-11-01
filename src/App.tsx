@@ -2030,7 +2030,7 @@ export default function App() {
       </header>
 
       {/* Main Container */}
-      <main className="flex-1 max-w-[1680px] w-full mx-auto px-3 sm:px-6 py-6 pb-36 sm:pb-44 space-y-6">
+      <main className={`flex-1 w-full mx-auto py-6 pb-36 sm:pb-44 space-y-6 ${activeTab === "video-dubbing" ? "max-w-none px-0" : "max-w-[1680px] px-3 sm:px-6"}`}>
         {/* ========================================================= */}
         {/* TAB 1: SUBTITLE TIMELINE SYNCHRONIZATION STUDIO */}
         {/* ========================================================= */}

@@ -1,0 +1,5 @@
+# Optional local MDX DirectML backend for Video Dubbing.
+# Keep this environment separate from Piper and the main application Python.
+audio-separator==0.48.0
+demucs==4.1.0
+onnxruntime-directml==1.23.0

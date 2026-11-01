@@ -30,7 +30,12 @@ function run(command: string, args: string[]) {
   return result;
 }
 
-function createVideo(filePath: string, duration: number, withAudio: boolean): Buffer {
+function createVideo(
+  filePath: string,
+  duration: number,
+  withAudio: boolean,
+  resolution = "320x240",
+): Buffer {
   const args = [
     "-hide_banner",
     "-loglevel",
@@ -38,7 +43,7 @@ function createVideo(filePath: string, duration: number, withAudio: boolean): Bu
     "-f",
     "lavfi",
     "-i",
-    "color=c=black:s=320x240:r=25",
+    `color=c=black:s=${resolution}:r=25`,
   ];
   if (withAudio) {
     args.push(
@@ -90,11 +95,13 @@ async function createReadyJob(
   duration: number,
   withAudio: boolean,
   masterDuration: number,
+  resolution?: string,
 ): Promise<{ id: string; source: Buffer }> {
   const source = createVideo(
     path.join(fixtureDirectory, `${name}.mp4`),
     duration,
     withAudio,
+    resolution,
   );
   const job = manager.createJob(`${name}.mp4`, source.length);
   const uploaded = await manager.receiveUpload(
@@ -763,6 +770,16 @@ test("exports an MP4, verifies it with FFprobe, and serves the real download", a
       Buffer.from(await previewRangeResponse.arrayBuffer()),
       fs.readFileSync(outputPath).subarray(0, 32),
     );
+    const outputSize = fs.statSync(outputPath).size;
+    const previewUnsatisfiableRange = await fetch(
+      `http://127.0.0.1:${address.port}/api/video-dubbing/jobs/${job.id}/exported-video`,
+      { headers: { Range: `bytes=${outputSize}-${outputSize}` } },
+    );
+    assert.equal(previewUnsatisfiableRange.status, 416);
+    assert.equal(
+      previewUnsatisfiableRange.headers.get("content-range"),
+      `bytes */${outputSize}`,
+    );
 
     const response = await fetch(
       `http://127.0.0.1:${address.port}/api/video-dubbing/jobs/${job.id}/download`,
@@ -777,6 +794,189 @@ test("exports an MP4, verifies it with FFprobe, and serves the real download", a
       server.close((error) => (error ? reject(error) : resolve()));
     });
   }
+});
+
+test("uploads a Unicode-caption logo and composites subtitle PNG and logo overlays into the exported video", async () => {
+  const root = await createTemporaryDirectory();
+  const fixtureDirectory = path.join(root, "fixtures");
+  fs.mkdirSync(fixtureDirectory);
+  const manager = new VideoDubbingManager({
+    storageDirectory: path.join(root, "jobs"),
+    ffprobePath: "ffprobe",
+  });
+  const coordinator = createCoordinator(manager);
+  const job = await createReadyJob(
+    manager,
+    fixtureDirectory,
+    "overlay",
+    1.4,
+    true,
+    0.8,
+    "1920x1080",
+  );
+  const logoPath = path.join(fixtureDirectory, "logo.png");
+  run("ffmpeg", [
+    "-hide_banner",
+    "-loglevel",
+    "error",
+    "-f",
+    "lavfi",
+    "-i",
+    "color=c=red:s=64x32",
+    "-frames:v",
+    "1",
+    "-y",
+    logoPath,
+  ]);
+  const app = express();
+  app.use(
+    "/api/video-dubbing",
+    createVideoDubbingRouter(manager, undefined, coordinator),
+  );
+  const server = app.listen(0, "127.0.0.1");
+  await new Promise<void>((resolve, reject) => {
+    server.once("listening", resolve);
+    server.once("error", reject);
+  });
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const baseUrl = `http://127.0.0.1:${address.port}/api/video-dubbing/jobs/${job.id}`;
+  let logo: Awaited<ReturnType<typeof manager.getJob>> = null;
+  try {
+    const uploadResponse = await fetch(`${baseUrl}/logo?extension=.png`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/octet-stream" },
+      body: fs.readFileSync(logoPath),
+    });
+    assert.equal(uploadResponse.status, 200);
+    const uploadResult = await uploadResponse.json();
+    logo = uploadResult.job;
+    const preview = await fetch(`${baseUrl}/logo`);
+    assert.equal(preview.status, 200);
+    assert.match(preview.headers.get("content-type") || "", /image\/png/i);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
+  assert.ok(logo);
+  assert.equal(logo.overlaySettings?.logoFileName, "overlay-logo.png");
+  assert.equal(logo.overlaySettings?.logoPosition, "top-left");
+  assert.equal(logo.overlaySettings?.subtitlePosition, "bottom-center");
+
+  coordinator.startFinalMix(job.id, {
+    vocals: { volumePercent: 0, muted: false },
+    instrumental: { volumePercent: 0, muted: false },
+    ttsMaster: { volumePercent: 100, muted: false },
+  });
+  await waitForTask(manager, job.id, "finalMix");
+  assert.equal(manager.getJob(job.id)?.finalMix?.status, "completed");
+  coordinator.startExport(job.id, {
+    logoEnabled: true,
+    logoWidthPercent: 15,
+    logoPaddingPx: 40,
+    logoPosition: "top-left",
+    subtitlesEnabled: true,
+    subtitles: [
+      { startTime: 0.1, endTime: 1.1, text: "Xin chào tiếng Việt" },
+    ],
+    subtitleFontSize: 28,
+    subtitleFontFamily: "Verdana",
+    subtitleColor: "#f0e0d0",
+    subtitleBackgroundColor: "#123456",
+    subtitleBold: true,
+    subtitleItalic: true,
+    subtitlePaddingPx: 12,
+    subtitleMarginPx: 48,
+    subtitlePosition: "bottom-center",
+  });
+  await waitForTask(manager, job.id, "videoExport");
+
+  const exportTask = manager.getJob(job.id)?.videoExport;
+  assert.equal(exportTask?.status, "completed", exportTask?.error);
+  assert.equal(manager.getJob(job.id)?.overlaySettings?.subtitles[0].text, "Xin chào tiếng Việt");
+  assert.equal(manager.getJob(job.id)?.overlaySettings?.subtitleFontFamily, "Verdana");
+  assert.equal(manager.getJob(job.id)?.overlaySettings?.subtitleColor, "#f0e0d0");
+  assert.equal(manager.getJob(job.id)?.overlaySettings?.subtitleBold, true);
+  const outputPath = coordinator.getVideoExportPath(job.id);
+  assert.ok(outputPath);
+  const overlayProbe = probeMedia(outputPath);
+  assert.equal(
+    overlayProbe.streams[0].codec_name,
+    "h264",
+    JSON.stringify(overlayProbe.streams),
+  );
+  const pixel = spawnSync(
+    "ffmpeg",
+    [
+      "-v",
+      "error",
+      "-ss",
+      "0.3",
+      "-i",
+      outputPath,
+      "-frames:v",
+      "1",
+      "-vf",
+      "crop=1:1:50:50,format=rgb24",
+      "-f",
+      "rawvideo",
+      "pipe:1",
+    ],
+    { windowsHide: true, maxBuffer: 1024 },
+  );
+  assert.equal(pixel.status, 0, pixel.stderr.toString());
+  assert.equal(pixel.stdout.length, 3);
+  assert.ok(pixel.stdout[0] > 120, `expected red logo pixel, got ${pixel.stdout}`);
+  assert.ok(pixel.stdout[1] < 100, `expected red logo pixel, got ${pixel.stdout}`);
+  assert.ok(pixel.stdout[2] < 100, `expected red logo pixel, got ${pixel.stdout}`);
+  const subtitleFrame = spawnSync(
+    "ffmpeg",
+    [
+      "-v",
+      "error",
+      "-ss",
+      "0.3",
+      "-i",
+      outputPath,
+      "-frames:v",
+      "1",
+      "-vf",
+      "format=rgb24",
+      "-f",
+      "rawvideo",
+      "pipe:1",
+    ],
+    { windowsHide: true, maxBuffer: 8 * 1024 * 1024 },
+  );
+  assert.equal(subtitleFrame.status, 0, subtitleFrame.stderr.toString());
+  let subtitleTop = 1080;
+  let subtitleBottom = 0;
+  for (let y = 850; y < 1080; y++) {
+    for (let x = 0; x < 1920; x++) {
+      const offset = (y * 1920 + x) * 3;
+      if (
+        subtitleFrame.stdout[offset] > 10 ||
+        subtitleFrame.stdout[offset + 1] > 10 ||
+        subtitleFrame.stdout[offset + 2] > 10
+      ) {
+        subtitleTop = Math.min(subtitleTop, y);
+        subtitleBottom = Math.max(subtitleBottom, y);
+      }
+    }
+  }
+  const subtitleHeight = subtitleBottom - subtitleTop + 1;
+  assert.ok(subtitleHeight >= 20, `subtitle render is too small: ${subtitleHeight}px`);
+  assert.ok(
+    subtitleHeight <= 300,
+    `subtitle render exceeded preview-sized bounds: ${subtitleHeight}px`,
+  );
+  assert.ok(
+    !fs.readdirSync(manager.getJobDirectory(job.id)!).some((file) =>
+      file.startsWith(".overlay-subtitles-"),
+    ),
+  );
 });
 
 test("keeps media files and states isolated between jobs", async () => {

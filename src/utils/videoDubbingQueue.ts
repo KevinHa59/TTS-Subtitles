@@ -5,8 +5,8 @@ export interface VideoDubbingQueueRow<TVideo, TSubtitle> {
 }
 
 export function pairVideoDubbingQueueRows<
-  TVideo extends { name: string },
-  TSubtitle extends { fileName: string },
+  TVideo extends { name: string; id?: string; job?: { id: string } },
+  TSubtitle extends { fileName: string; videoId?: string; matchByName?: boolean },
 >(
   videos: readonly TVideo[],
   subtitles: readonly TSubtitle[],
@@ -23,10 +23,16 @@ export function pairVideoDubbingQueueRows<
   const usedSubtitleIndices = new Set<number>();
   const rows: VideoDubbingQueueRow<TVideo, TSubtitle>[] = videos.map(
     (video, index) => {
-    const matchingIndices = subtitleIndicesByName.get(fileStem(video.name));
-    const subtitleIndex = matchingIndices?.find(
-      (candidate) => !usedSubtitleIndices.has(candidate),
+    const sourceId = video.job?.id || video.id;
+    const boundSubtitleIndex = subtitles.findIndex(
+      (subtitle, candidate) => subtitle.videoId === sourceId && !usedSubtitleIndices.has(candidate),
     );
+    const matchingIndices = subtitleIndicesByName.get(fileStem(video.name));
+    const subtitleIndex = boundSubtitleIndex >= 0
+      ? boundSubtitleIndex
+      : matchingIndices?.find(
+        (candidate) => !usedSubtitleIndices.has(candidate) && !subtitles[candidate].videoId && subtitles[candidate].matchByName !== false,
+      );
     if (subtitleIndex !== undefined) usedSubtitleIndices.add(subtitleIndex);
     return {
       index,

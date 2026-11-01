@@ -66,6 +66,7 @@ import {
   resetCurrentJob,
 } from "./systemToolsManager";
 import { VideoDubbingManager } from "./videoDubbingManager";
+import { VideoDubbingProjects } from "./videoDubbingProjects";
 import { createVideoDubbingRouter } from "./videoDubbingRoutes";
 import { JoinAudioManager } from "./joinAudioManager";
 import { createJoinAudioRouter } from "./joinAudioRoutes";
@@ -294,6 +295,7 @@ const videoDubbingManager = new VideoDubbingManager({
   storageDirectory: VIDEO_DUBBING_DIR,
   ffprobePath: resolveFfprobePath(),
 });
+const videoDubbingProjects = new VideoDubbingProjects(VIDEO_DUBBING_DIR);
 const videoDubbingMediaCoordinator = new VideoDubbingMediaCoordinator(
   videoDubbingManager,
   {
@@ -392,6 +394,7 @@ app.use(
     videoDubbingMediaCoordinator,
     videoDubbingSeparationCoordinator,
     videoDubbingPipelineCoordinator,
+    videoDubbingProjects,
   ),
 );
 

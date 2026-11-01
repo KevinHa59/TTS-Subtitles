@@ -16,6 +16,8 @@ import {
   VideoDubbingSeparationTask,
   VideoDubbingAutoPipelineConfig,
   VideoDubbingAutoPipelineState,
+  VideoDubbingOverlaySettings,
+  VideoDubbingOverlayPosition,
 } from "./src/types/videoDubbing";
 
 const DEFAULT_MAX_UPLOAD_BYTES = 4 * 1024 * 1024 * 1024;
@@ -82,6 +84,126 @@ const AUTO_PIPELINE_STAGES = new Set([
   "export",
   "completed",
 ]);
+const OVERLAY_POSITIONS = new Set<VideoDubbingOverlayPosition>([
+  "top-left",
+  "top-center",
+  "top-right",
+  "middle-left",
+  "middle-center",
+  "middle-right",
+  "bottom-left",
+  "bottom-center",
+  "bottom-right",
+]);
+
+function isOverlaySettings(
+  input: unknown,
+): input is VideoDubbingOverlaySettings {
+  if (!input || typeof input !== "object") return false;
+  const settings = input as Record<string, unknown>;
+  return (
+    typeof settings.logoEnabled === "boolean" &&
+    (settings.logoFileName === undefined ||
+      (typeof settings.logoFileName === "string" &&
+        /^overlay-logo\.(png|jpe?g|webp)$/.test(settings.logoFileName))) &&
+    typeof settings.logoWidthPercent === "number" &&
+    settings.logoWidthPercent >= 5 &&
+    settings.logoWidthPercent <= 40 &&
+    (settings.logoPaddingPx === undefined ||
+      (typeof settings.logoPaddingPx === "number" &&
+        settings.logoPaddingPx >= 0 &&
+        settings.logoPaddingPx <= 200)) &&
+    OVERLAY_POSITIONS.has(settings.logoPosition as VideoDubbingOverlayPosition) &&
+    typeof settings.subtitlesEnabled === "boolean" &&
+    Array.isArray(settings.subtitles) &&
+    settings.subtitles.length <= 10_000 &&
+    settings.subtitles.every(
+      (cue) =>
+        cue &&
+        Number.isFinite(cue.startTime) &&
+        Number.isFinite(cue.endTime) &&
+        cue.startTime >= 0 &&
+        cue.endTime > cue.startTime &&
+        typeof cue.text === "string",
+    ) &&
+    typeof settings.subtitleFontSize === "number" &&
+    settings.subtitleFontSize >= 12 &&
+    settings.subtitleFontSize <= 72 &&
+    (settings.subtitleFontFamily === undefined ||
+      (typeof settings.subtitleFontFamily === "string" &&
+        settings.subtitleFontFamily.length <= 64)) &&
+    (settings.subtitleColor === undefined ||
+      (typeof settings.subtitleColor === "string" &&
+        /^#[0-9a-f]{6}$/i.test(settings.subtitleColor))) &&
+    (settings.subtitleBackgroundColor === undefined ||
+      (typeof settings.subtitleBackgroundColor === "string" &&
+        /^#[0-9a-f]{6}$/i.test(settings.subtitleBackgroundColor))) &&
+    (settings.subtitleBackgroundTransparent === undefined ||
+      typeof settings.subtitleBackgroundTransparent === "boolean") &&
+    (settings.subtitleBackgroundMode === undefined ||
+      (typeof settings.subtitleBackgroundMode === "string" &&
+        ["none", "color", "image"].includes(settings.subtitleBackgroundMode))) &&
+    (settings.subtitleBold === undefined ||
+      typeof settings.subtitleBold === "boolean") &&
+    (settings.subtitleItalic === undefined ||
+      typeof settings.subtitleItalic === "boolean") &&
+    (settings.subtitleUnderline === undefined ||
+      typeof settings.subtitleUnderline === "boolean") &&
+    (settings.subtitleTextCase === undefined ||
+      (typeof settings.subtitleTextCase === "string" && ["none", "uppercase", "lowercase", "capitalize"].includes(settings.subtitleTextCase))) &&
+    (settings.subtitleOutlineEnabled === undefined ||
+      typeof settings.subtitleOutlineEnabled === "boolean") &&
+    (settings.subtitleOutlineColor === undefined ||
+      (typeof settings.subtitleOutlineColor === "string" && /^#[0-9a-f]{6}$/i.test(settings.subtitleOutlineColor))) &&
+    (settings.subtitleOutlineWidthPx === undefined ||
+      (typeof settings.subtitleOutlineWidthPx === "number" && Number.isFinite(settings.subtitleOutlineWidthPx) && settings.subtitleOutlineWidthPx >= 0 && settings.subtitleOutlineWidthPx <= 8)) &&
+    (settings.subtitleCharacterSpacingPx === undefined ||
+      (typeof settings.subtitleCharacterSpacingPx === "number" && Number.isFinite(settings.subtitleCharacterSpacingPx) && settings.subtitleCharacterSpacingPx >= 0 && settings.subtitleCharacterSpacingPx <= 40)) &&
+    (settings.subtitleLineSpacingPx === undefined ||
+      (typeof settings.subtitleLineSpacingPx === "number" && Number.isFinite(settings.subtitleLineSpacingPx) && settings.subtitleLineSpacingPx >= 0 && settings.subtitleLineSpacingPx <= 80)) &&
+    (settings.subtitlePaddingPx === undefined ||
+      (typeof settings.subtitlePaddingPx === "number" &&
+        settings.subtitlePaddingPx >= 0 &&
+        settings.subtitlePaddingPx <= 40)) &&
+    (settings.subtitleMarginPx === undefined ||
+      (typeof settings.subtitleMarginPx === "number" &&
+        settings.subtitleMarginPx >= 0 &&
+        settings.subtitleMarginPx <= 200)) &&
+    (settings.subtitleVerticalOffsetPx === undefined ||
+      (typeof settings.subtitleVerticalOffsetPx === "number" &&
+        settings.subtitleVerticalOffsetPx >= -200 &&
+        settings.subtitleVerticalOffsetPx <= 200)) &&
+    (settings.subtitleFontSizeScale === undefined ||
+      (typeof settings.subtitleFontSizeScale === "number" &&
+        settings.subtitleFontSizeScale >= 50 &&
+        settings.subtitleFontSizeScale <= 200)) &&
+    (settings.subtitleBackgroundSideScale === undefined ||
+      (typeof settings.subtitleBackgroundSideScale === "number" &&
+        settings.subtitleBackgroundSideScale >= 25 &&
+        settings.subtitleBackgroundSideScale <= 150)) &&
+    (settings.subtitleBackgroundImage === undefined ||
+      settings.subtitleBackgroundImage === null ||
+      (typeof settings.subtitleBackgroundImage === "string" &&
+        /^[a-zA-Z0-9][a-zA-Z0-9._-]*\.(png|webp)$/i.test(
+          settings.subtitleBackgroundImage,
+        ) &&
+        !settings.subtitleBackgroundImage.includes(".."))) &&
+    (settings.subtitleBackgroundLeftSlicePx === undefined ||
+      (typeof settings.subtitleBackgroundLeftSlicePx === "number" &&
+        settings.subtitleBackgroundLeftSlicePx >= 1 &&
+        settings.subtitleBackgroundLeftSlicePx <= 500)) &&
+    (settings.subtitleBackgroundRightSlicePx === undefined ||
+      (typeof settings.subtitleBackgroundRightSlicePx === "number" &&
+        settings.subtitleBackgroundRightSlicePx >= 1 &&
+        settings.subtitleBackgroundRightSlicePx <= 500)) &&
+    OVERLAY_POSITIONS.has(
+      settings.subtitlePosition as VideoDubbingOverlayPosition,
+    ) &&
+    (settings.textOverlays === undefined ||
+      (Array.isArray(settings.textOverlays) && settings.textOverlays.length <= 1_000 &&
+        settings.textOverlays.every((cue) => cue && Number.isFinite(cue.startTime) && Number.isFinite(cue.endTime) && cue.startTime >= 0 && cue.endTime > cue.startTime && typeof cue.text === "string" && typeof cue.fontSize === "number" && typeof cue.fontFamily === "string" && typeof cue.color === "string" && typeof cue.bold === "boolean" && typeof cue.italic === "boolean" && (cue.underline === undefined || typeof cue.underline === "boolean") && (cue.textCase === undefined || ["none", "uppercase", "lowercase", "capitalize"].includes(cue.textCase)) && (cue.outlineEnabled === undefined || typeof cue.outlineEnabled === "boolean") && (cue.outlineColor === undefined || (typeof cue.outlineColor === "string" && /^#[0-9a-f]{6}$/i.test(cue.outlineColor))) && (cue.outlineWidthPx === undefined || (Number.isFinite(cue.outlineWidthPx) && cue.outlineWidthPx >= 0 && cue.outlineWidthPx <= 8)) && (cue.characterSpacingPx === undefined || (Number.isFinite(cue.characterSpacingPx) && cue.characterSpacingPx >= 0 && cue.characterSpacingPx <= 40)) && (cue.lineSpacingPx === undefined || (Number.isFinite(cue.lineSpacingPx) && cue.lineSpacingPx >= 0 && cue.lineSpacingPx <= 80)) && typeof cue.backgroundColor === "string" && typeof cue.backgroundTransparent === "boolean" && Number.isFinite(cue.paddingPx) && (cue.xPercent === undefined || (Number.isFinite(cue.xPercent) && cue.xPercent >= 0 && cue.xPercent <= 100)) && (cue.yPercent === undefined || (Number.isFinite(cue.yPercent) && cue.yPercent >= 0 && cue.yPercent <= 100)) && OVERLAY_POSITIONS.has(cue.position))))
+  );
+}
 
 function isCancelled(job: InternalJob): boolean {
   return job.state.status === "cancelled";
@@ -275,6 +397,14 @@ export class VideoDubbingManager {
           videoExport: job.state.videoExport
             ? { ...job.state.videoExport }
             : undefined,
+          overlaySettings: job.state.overlaySettings
+            ? {
+                ...job.state.overlaySettings,
+                subtitles: job.state.overlaySettings.subtitles.map((cue) => ({
+                  ...cue,
+                })),
+              }
+            : undefined,
           finalMix: job.state.finalMix
             ? {
                 ...job.state.finalMix,
@@ -368,6 +498,17 @@ export class VideoDubbingManager {
     if (task === "videoExport" && job.state.autoPipeline) {
       job.state.autoPipeline.artifacts.export = undefined;
     }
+    job.state.updatedAt = Date.now();
+    this.persistJob(job);
+  }
+
+  setExportedVideoFileName(jobId: string, fileName: string): void {
+    const job = this.findJob(jobId);
+    if (!job) throw new Error("Không tìm thấy job Video Dubbing.");
+    if (path.basename(fileName) !== fileName || !fileName.toLowerCase().endsWith(".mp4")) {
+      throw new Error("Tên file MP4 đầu ra không hợp lệ.");
+    }
+    job.state.exportedVideoFileName = fileName;
     job.state.updatedAt = Date.now();
     this.persistJob(job);
   }
@@ -471,6 +612,141 @@ export class VideoDubbingManager {
 
   getJobDirectory(jobId: string): string | null {
     return this.findJob(jobId)?.directory || null;
+  }
+
+  updateOverlaySettings(
+    jobId: string,
+    settings: VideoDubbingOverlaySettings,
+  ): void {
+    const job = this.findJob(jobId);
+    if (!job) throw new Error("Không tìm thấy job Video Dubbing.");
+    const previousSettings = job.state.overlaySettings;
+    const settingsChanged =
+      previousSettings &&
+      (previousSettings.logoEnabled !== settings.logoEnabled ||
+        previousSettings.logoFileName !== settings.logoFileName ||
+        previousSettings.logoWidthPercent !== settings.logoWidthPercent ||
+        previousSettings.logoPaddingPx !== settings.logoPaddingPx ||
+        previousSettings.logoPosition !== settings.logoPosition ||
+        previousSettings.subtitlesEnabled !== settings.subtitlesEnabled ||
+        previousSettings.subtitleFontSize !== settings.subtitleFontSize ||
+        previousSettings.subtitleFontFamily !== settings.subtitleFontFamily ||
+        previousSettings.subtitleColor !== settings.subtitleColor ||
+        previousSettings.subtitleBackgroundColor !==
+          settings.subtitleBackgroundColor ||
+        previousSettings.subtitleBackgroundTransparent !==
+          settings.subtitleBackgroundTransparent ||
+        previousSettings.subtitleBackgroundMode !==
+          settings.subtitleBackgroundMode ||
+        previousSettings.subtitleBold !== settings.subtitleBold ||
+        previousSettings.subtitleItalic !== settings.subtitleItalic ||
+        previousSettings.subtitlePaddingPx !== settings.subtitlePaddingPx ||
+        previousSettings.subtitleMarginPx !== settings.subtitleMarginPx ||
+        previousSettings.subtitleFontSizeScale !==
+          settings.subtitleFontSizeScale ||
+        previousSettings.subtitleVerticalOffsetPx !==
+          settings.subtitleVerticalOffsetPx ||
+        previousSettings.subtitleBackgroundSideScale !==
+          settings.subtitleBackgroundSideScale ||
+        previousSettings.subtitlePosition !== settings.subtitlePosition ||
+        previousSettings.subtitleBackgroundImage !==
+          settings.subtitleBackgroundImage ||
+        previousSettings.subtitleBackgroundLeftSlicePx !==
+          settings.subtitleBackgroundLeftSlicePx ||
+        previousSettings.subtitleBackgroundRightSlicePx !==
+          settings.subtitleBackgroundRightSlicePx ||
+        JSON.stringify(previousSettings.subtitles) !==
+          JSON.stringify(settings.subtitles) ||
+        JSON.stringify(previousSettings.textOverlays ?? []) !==
+          JSON.stringify(settings.textOverlays ?? []));
+    if (settingsChanged && job.state.videoExport?.sizeBytes) {
+      job.state.videoExport = {
+        ...job.state.videoExport,
+        status: "stale",
+        error: "Cấu hình logo/phụ đề đã thay đổi; hãy xuất lại MP4.",
+      };
+      if (job.state.autoPipeline) {
+        job.state.autoPipeline.artifacts.export = undefined;
+      }
+    }
+    job.state.overlaySettings = {
+      ...settings,
+      subtitles: settings.subtitles.map((cue) => ({ ...cue })),
+      textOverlays: (settings.textOverlays ?? []).map((cue) => ({ ...cue })),
+    };
+    job.state.updatedAt = Date.now();
+    this.persistJob(job);
+  }
+
+  setOverlayLogo(jobId: string, fileName: string | undefined): void {
+    const job = this.findJob(jobId);
+    if (!job) throw new Error("Không tìm thấy job Video Dubbing.");
+    const currentFileName = job.state.overlaySettings?.logoFileName;
+    if (fileName && !/^overlay-logo\.(png|jpe?g|webp)$/.test(fileName)) {
+      throw new Error("Tên tệp logo không hợp lệ.");
+    }
+    const settings = job.state.overlaySettings || {
+      logoEnabled: false,
+      logoWidthPercent: 15,
+      logoPaddingPx: 24,
+      logoPosition: "top-left" as const,
+      subtitlesEnabled: false,
+      subtitles: [],
+      subtitleFontSize: 32,
+      subtitleFontFamily: "Arial",
+      subtitleColor: "#ffffff",
+      subtitleBackgroundColor: "#000000",
+      subtitleBackgroundTransparent: false,
+      subtitleBackgroundMode: "color" as const,
+      subtitleBold: false,
+      subtitleItalic: false,
+      subtitlePaddingPx: 8,
+      subtitleMarginPx: 32,
+      subtitleFontSizeScale: 100,
+      subtitlePosition: "bottom-center" as const,
+      subtitleBackgroundImage: null,
+      subtitleBackgroundLeftSlicePx: 128,
+      subtitleBackgroundRightSlicePx: 128,
+    };
+    job.state.overlaySettings = {
+      ...settings,
+      logoEnabled: Boolean(fileName),
+      logoFileName: fileName,
+    };
+    if (job.state.videoExport?.sizeBytes) {
+      job.state.videoExport = {
+        ...job.state.videoExport,
+        status: "stale",
+        error: "Logo đã thay đổi; hãy xuất lại MP4.",
+      };
+      if (job.state.autoPipeline) {
+        job.state.autoPipeline.artifacts.export = undefined;
+      }
+    }
+    if (currentFileName && currentFileName !== fileName) {
+      fs.rmSync(path.join(job.directory, currentFileName), { force: true });
+    }
+    job.state.updatedAt = Date.now();
+    this.persistJob(job);
+  }
+
+  getOverlayLogoPath(jobId: string): string | null {
+    const job = this.findJob(jobId);
+    const fileName = job?.state.overlaySettings?.logoFileName;
+    if (!job || !fileName || !/^overlay-logo\.(png|jpe?g|webp)$/.test(fileName)) {
+      return null;
+    }
+    const filePath = path.resolve(job.directory, fileName);
+    if (!filePath.startsWith(`${path.resolve(job.directory)}${path.sep}`)) {
+      return null;
+    }
+    try {
+      const stats = fs.statSync(filePath);
+      return stats.isFile() && stats.size > 0 ? filePath : null;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      return null;
+    }
   }
 
   getSourceVideoPath(jobId: string): string | null {
@@ -715,6 +991,54 @@ export class VideoDubbingManager {
               ? parsed.updatedAt
               : parsed.createdAt,
           } as VideoDubbingJob;
+          if (!isOverlaySettings(parsed.overlaySettings)) {
+            state.overlaySettings = undefined;
+          } else {
+            state.overlaySettings = {
+              ...parsed.overlaySettings,
+              logoPaddingPx: parsed.overlaySettings.logoPaddingPx ?? 24,
+              subtitleFontFamily:
+                parsed.overlaySettings.subtitleFontFamily ?? "Arial",
+              subtitleColor: parsed.overlaySettings.subtitleColor ?? "#ffffff",
+              subtitleBackgroundColor:
+                parsed.overlaySettings.subtitleBackgroundColor ?? "#000000",
+              subtitleBackgroundTransparent:
+                parsed.overlaySettings.subtitleBackgroundTransparent ?? false,
+              subtitleBackgroundMode:
+                parsed.overlaySettings.subtitleBackgroundMode ??
+                (parsed.overlaySettings.subtitleBackgroundImage
+                  ? "image"
+                  : parsed.overlaySettings.subtitleBackgroundTransparent
+                    ? "none"
+                    : "color"),
+              subtitleBold: parsed.overlaySettings.subtitleBold ?? false,
+              subtitleItalic: parsed.overlaySettings.subtitleItalic ?? false,
+              subtitlePaddingPx:
+                parsed.overlaySettings.subtitlePaddingPx ?? 8,
+              subtitleMarginPx:
+                parsed.overlaySettings.subtitleMarginPx ?? 32,
+              subtitleFontSizeScale:
+                parsed.overlaySettings.subtitleFontSizeScale ?? 100,
+              subtitleVerticalOffsetPx:
+                parsed.overlaySettings.subtitleVerticalOffsetPx ?? 0,
+              subtitleBackgroundSideScale:
+                parsed.overlaySettings.subtitleBackgroundSideScale ?? 100,
+              subtitleBackgroundImage:
+                parsed.overlaySettings.subtitleBackgroundImage ?? null,
+              subtitleBackgroundLeftSlicePx:
+                parsed.overlaySettings.subtitleBackgroundLeftSlicePx ?? 128,
+              subtitleBackgroundRightSlicePx:
+                parsed.overlaySettings.subtitleBackgroundRightSlicePx ?? 128,
+              subtitles: parsed.overlaySettings.subtitles.map(
+                (cue: VideoDubbingOverlaySettings["subtitles"][number]) => ({
+                  ...cue,
+                }),
+              ),
+              textOverlays: (parsed.overlaySettings.textOverlays ?? []).map(
+                (cue: NonNullable<VideoDubbingOverlaySettings["textOverlays"]>[number]) => ({ ...cue }),
+              ),
+            };
+          }
           if (state.mixerSettings) {
             try {
               state.mixerSettings = this.validateMixerSettings(
@@ -881,9 +1205,11 @@ export class VideoDubbingManager {
     const finalMixAudio = await this.isValidAudio(
       path.join(job.directory, "mixed-audio.wav"),
     );
-    const exportedVideo = await this.isValidVideoFile(
-      path.join(job.directory, "output.mp4"),
+    const exportedVideoPath = path.join(
+      job.directory,
+      job.state.exportedVideoFileName || "output.mp4",
     );
+    const exportedVideo = await this.isValidVideoFile(exportedVideoPath);
     const warnings: string[] = [];
 
     if (!sourceVideo) warnings.push("Video nguồn bị thiếu hoặc không hợp lệ.");
@@ -955,10 +1281,8 @@ export class VideoDubbingManager {
       job.state.videoExport = {
         ...previousExport,
         status: previousExport?.status || "completed",
-        sizeBytes: fs.statSync(path.join(job.directory, "output.mp4")).size,
-        durationSeconds: await this.probeDuration(
-          path.join(job.directory, "output.mp4"),
-        ),
+        sizeBytes: fs.statSync(exportedVideoPath).size,
+        durationSeconds: await this.probeDuration(exportedVideoPath),
       };
     }
     if (

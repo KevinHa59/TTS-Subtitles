@@ -11,6 +11,7 @@ import {
 import { VideoDubbingManager } from "./videoDubbingManager";
 
 const MODEL_NAME = "htdemucs";
+const MDX_MODEL_NAME = "UVR-MDX-NET-Inst_HQ_3.onnx";
 const MODEL_SAMPLE_RATE = 44_100;
 const SEPARATION_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 const PROBE_TIMEOUT_MS = 30_000;
@@ -25,9 +26,13 @@ interface DemucsProgressEvent {
 }
 
 const AVAILABILITY_SCRIPT = [
-  "import importlib.util, json, sys",
-  "result = {'demucs': False, 'torch': False, 'model': False, 'cuda': False}",
-  "if importlib.util.find_spec('demucs') and importlib.util.find_spec('torch') and importlib.util.find_spec('huggingface_hub') and importlib.util.find_spec('yaml'):",
+  "import importlib.util, json, os, sys",
+  "result = {'demucs': False, 'torch': False, 'model': False, 'cuda': False, 'mdx': False, 'dml': False}",
+  "if importlib.util.find_spec('audio_separator') and importlib.util.find_spec('onnxruntime'):",
+  "  import onnxruntime as ort",
+  "  result['dml'] = 'DmlExecutionProvider' in ort.get_available_providers()",
+  "  result['mdx'] = result['dml'] and os.path.isfile(sys.argv[2])",
+  "if all(importlib.util.find_spec(name) for name in ('demucs', 'torch', 'huggingface_hub', 'yaml')):",
   "  result['demucs'] = True",
   "  import torch",
   "  result['torch'] = True",
@@ -42,6 +47,51 @@ const AVAILABILITY_SCRIPT = [
   "      signatures = yaml.safe_load(stream).get('models', [])",
   "    result['model'] = bool(signatures) and all(try_to_load_from_cache(repo, signature + '.safetensors') for signature in signatures)",
   "print(json.dumps(result))",
+].join("\n");
+
+const MDX_ENTRY_SCRIPT = [
+  "import json, os, shutil, socket, sys",
+  "from pathlib import Path",
+  "def deny_network(*args, **kwargs): raise RuntimeError('Network access is disabled for local separation.')",
+  "socket.socket.connect = deny_network",
+  "socket.create_connection = deny_network",
+  "input_path, output_path, model_path = sys.argv[1:4]",
+  "import onnxruntime as ort",
+  "from audio_separator.separator import Separator",
+  "if 'DmlExecutionProvider' not in ort.get_available_providers(): raise RuntimeError('ONNX Runtime DirectML provider is unavailable.')",
+  "sessions = []",
+  "original_session = ort.InferenceSession",
+  "def tracked_session(*args, **kwargs):",
+  "  session = original_session(*args, **kwargs)",
+  "  sessions.append(session)",
+  "  return session",
+  "ort.InferenceSession = tracked_session",
+  "model_path = Path(model_path).resolve()",
+  "if not model_path.is_file(): raise RuntimeError('The configured MDX model file is missing.')",
+  "output_directory = Path(output_path)",
+  "output_directory.mkdir(parents=True, exist_ok=True)",
+  "separator = Separator(log_level=40, model_file_dir=str(model_path.parent), output_dir=str(output_directory), output_format='WAV', sample_rate=44100)",
+  "separator.onnx_execution_provider = ['DmlExecutionProvider']",
+  "print(json.dumps({'type':'phase','phase':'loading_model'}), flush=True)",
+  "separator.load_model(model_path.name)",
+  "session = sessions[0] if sessions else None",
+  "providers = session.get_providers() if session is not None else []",
+  "if not providers or providers[0] != 'DmlExecutionProvider': raise RuntimeError('MDX ONNX session did not activate DmlExecutionProvider.')",
+  "print(json.dumps({'type':'phase','phase':'separating','backend':'mdx','provider':providers[0]}), flush=True)",
+  "outputs = separator.separate(input_path)",
+  "target = output_directory / 'mdx' / 'input'",
+  "target.mkdir(parents=True, exist_ok=True)",
+  "found = set()",
+  "for output in outputs:",
+  "  source_file = Path(output)",
+  "  if not source_file.is_absolute(): source_file = output_directory / source_file",
+  "  name = source_file.name.lower()",
+  "  stem = 'vocals' if 'vocal' in name else ('no_vocals' if 'instrumental' in name or 'no_vocal' in name else None)",
+  "  if stem:",
+  "    shutil.copy2(source_file, target / (stem + '.wav'))",
+  "    found.add(stem)",
+  "if found != {'vocals', 'no_vocals'}: raise RuntimeError('MDX did not produce both vocals and instrumental stems.')",
+  "print(json.dumps({'type':'phase','phase':'validating'}), flush=True)",
 ].join("\n");
 
 const DEMUCS_ENTRY_SCRIPT = [
@@ -170,6 +220,8 @@ export class VideoDubbingSeparationCoordinator {
     const state: VideoDubbingSeparationTask = {
       status: "processing",
       phase: "checking",
+      startedAtMs: Date.now(),
+      heartbeatAtMs: Date.now(),
       durationSeconds: previous?.durationSeconds,
       sampleRate: previous?.sampleRate,
       channels: previous?.channels,
@@ -218,30 +270,55 @@ export class VideoDubbingSeparationCoordinator {
         torch?: boolean;
         model?: boolean;
         cuda?: boolean;
+        mdx?: boolean;
+        dml?: boolean;
       };
-      if (!result.demucs || !result.torch) {
+      const requestedBackend = process.env.VIDEO_DUBBING_SEPARATION_BACKEND || "auto";
+      const mdxReady = Boolean(result.mdx);
+      const demucsReady = Boolean(result.demucs && result.torch && result.model);
+      if (requestedBackend === "mdx" && mdxReady && demucsReady) {
         return {
-          status: "unavailable",
-          model: MODEL_NAME,
-          message:
-            "Các thư viện cần cho Demucs (Demucs, PyTorch, Hugging Face Hub và PyYAML) chưa sẵn sàng trong Python đã cấu hình. Hãy cài riêng cho tính năng này hoặc đặt VIDEO_DUBBING_SEPARATION_PYTHON; ứng dụng không tự cài package.",
+          status: "ready",
+          backend: "mdx",
+          model: MDX_MODEL_NAME,
+          device: "directml",
+          fallbackDevice: result.cuda ? "cuda" : "cpu",
+          message: "MDX htdemucs-Inst-HQ-3 sẵn sàng trên ONNX Runtime DirectML; Demucs CPU sẽ được dùng nếu DirectML gặp lỗi.",
         };
       }
-      if (!result.model) {
+      if (requestedBackend === "mdx") {
         return {
           status: "unavailable",
-          model: MODEL_NAME,
+          model: MDX_MODEL_NAME,
           message:
-            "Model Demucs htdemucs chưa có trong cache cục bộ. Hãy tải/cài model riêng trước khi sử dụng; ứng dụng sẽ không tự tải model.",
+            "MDX DirectML chưa sẵn sàng hoặc Demucs CPU fallback chưa có model/dependency. Cần audio-separator, onnxruntime-directml, model MDX local và Demucs htdemucs; ứng dụng không tự cài hoặc tải model.",
+        };
+      }
+      if (requestedBackend !== "demucs" && mdxReady && demucsReady) {
+        return {
+          status: "ready",
+          backend: "mdx",
+          model: MDX_MODEL_NAME,
+          device: "directml",
+          fallbackDevice: result.cuda ? "cuda" : "cpu",
+          message: "MDX DirectML sẵn sàng; Demucs CUDA/CPU được giữ làm fallback nếu inference DirectML lỗi.",
+        };
+      }
+      if (demucsReady) {
+        return {
+          status: "ready",
+          backend: "demucs",
+          model: MODEL_NAME,
+          device: result.cuda ? "cuda" : "cpu",
+          message: result.cuda
+            ? "Demucs htdemucs sẵn sàng; sẽ sử dụng CUDA."
+            : "Demucs htdemucs sẵn sàng; sẽ chạy bằng CPU.",
         };
       }
       return {
-        status: "ready",
-        model: MODEL_NAME,
-        device: result.cuda ? "cuda" : "cpu",
-        message: result.cuda
-          ? "Demucs htdemucs sẵn sàng; sẽ sử dụng CUDA."
-          : "Demucs htdemucs sẵn sàng; sẽ chạy bằng CPU.",
+        status: "unavailable",
+        model: MDX_MODEL_NAME,
+        message: "Không có backend tách audio khả dụng. Cần Demucs + model htdemucs, hoặc MDX + ONNX Runtime DirectML + file model local.",
       };
     } catch (error) {
       console.error("[VideoDubbing] Separation preflight failed:", error);
@@ -258,7 +335,12 @@ export class VideoDubbingSeparationCoordinator {
     return new Promise((resolve, reject) => {
       const child = spawn(
         this.options.pythonPath,
-        ["-c", AVAILABILITY_SCRIPT, MODEL_NAME],
+        [
+          "-c",
+          AVAILABILITY_SCRIPT,
+          MODEL_NAME,
+          process.env.VIDEO_DUBBING_MDX_MODEL_PATH || "",
+        ],
         {
           shell: false,
           windowsHide: true,
@@ -607,6 +689,17 @@ export class VideoDubbingSeparationCoordinator {
     job: VideoDubbingJob,
     active: ActiveSeparation,
   ): Promise<void> {
+    const heartbeat = setInterval(() => {
+      const current = this.manager.getJob(active.jobId)?.separation;
+      if (current?.status !== "processing") return;
+      const now = Date.now();
+      this.updateTask(active, {
+        heartbeatAtMs: now,
+        elapsedSeconds: current.startedAtMs
+          ? Math.max(0, Math.floor((now - current.startedAtMs) / 1000))
+          : current.elapsedSeconds,
+      });
+    }, 5000);
     try {
       const availability = await this.getAvailability();
       this.assertNotCancelled(active);
@@ -614,7 +707,7 @@ export class VideoDubbingSeparationCoordinator {
         throw new Error(availability.message);
       }
       this.updateTask(active, { phase: "extracting" });
-      await this.processSeparation(job, active);
+      await this.processSeparation(job, active, availability);
     } catch (error) {
       const previous = this.manager.getJob(active.jobId)?.separation;
       const message = error instanceof Error ? error.message : "Tách audio thất bại.";
@@ -622,6 +715,9 @@ export class VideoDubbingSeparationCoordinator {
         this.manager.setSeparationTask(active.jobId, {
           ...previous,
           status: active.cancelled ? "cancelled" : "error",
+          elapsedSeconds: previous?.startedAtMs
+            ? Math.max(0, Math.floor((Date.now() - previous.startedAtMs) / 1000))
+            : previous?.elapsedSeconds,
           error: active.cancelled ? undefined : message,
         });
       }
@@ -629,6 +725,7 @@ export class VideoDubbingSeparationCoordinator {
         console.error("[VideoDubbing] Separation failed:", error);
       }
     } finally {
+      clearInterval(heartbeat);
       await this.cleanup(active);
     }
   }
@@ -636,6 +733,7 @@ export class VideoDubbingSeparationCoordinator {
   private async processSeparation(
     job: VideoDubbingJob,
     active: ActiveSeparation,
+    availability: VideoDubbingSeparationAvailability,
   ): Promise<void> {
     const inputPath = path.join(active.temporaryDirectory, "input.wav");
     const outputDirectory = path.join(active.temporaryDirectory, "demucs");
@@ -656,6 +754,7 @@ export class VideoDubbingSeparationCoordinator {
       channels: 2,
     });
 
+    let selectedBackend = availability.backend ?? "demucs";
     if (this.options.runInference) {
       await this.options.runInference(
         inputPath,
@@ -663,22 +762,54 @@ export class VideoDubbingSeparationCoordinator {
         active.abortController.signal,
         (event) => this.handleDemucsEvent(active, JSON.stringify(event)),
       );
+      selectedBackend = "demucs";
     } else {
-      const device = (await this.getAvailability()).device || "cpu";
-      await this.runChild(
-        active,
-        this.options.pythonPath,
-        [
-          "-c",
-          DEMUCS_ENTRY_SCRIPT,
-          inputPath,
-          outputDirectory,
-          device,
-        ],
-        SEPARATION_TIMEOUT_MS,
-        "Demucs không thể hoàn tất inference.",
-        (line) => this.handleDemucsEvent(active, line),
-      );
+      if (selectedBackend === "mdx") {
+        const modelPath = process.env.VIDEO_DUBBING_MDX_MODEL_PATH || "";
+        try {
+          await this.runChild(
+            active,
+            this.options.pythonPath,
+            ["-c", MDX_ENTRY_SCRIPT, inputPath, path.join(active.temporaryDirectory, "mdx-output"), modelPath],
+            SEPARATION_TIMEOUT_MS,
+            "MDX DirectML không thể hoàn tất inference.",
+            (line) => this.handleDemucsEvent(active, line),
+          );
+        } catch (error) {
+          this.assertNotCancelled(active);
+          console.warn("[VideoDubbing] MDX DirectML failed; falling back to Demucs:", error);
+          this.updateTask(active, {
+            phase: "loading_model",
+            progressPercent: undefined,
+            completedSegments: undefined,
+            totalSegments: undefined,
+          });
+          selectedBackend = "demucs";
+        }
+      }
+      if (selectedBackend === "demucs") {
+        const device =
+          selectedBackend === availability.backend
+            ? availability.device === "cuda"
+              ? "cuda"
+              : "cpu"
+            : availability.fallbackDevice || "cpu";
+        const demucsOutputDirectory = path.join(active.temporaryDirectory, "demucs");
+        await this.runChild(
+          active,
+          this.options.pythonPath,
+          [
+            "-c",
+            DEMUCS_ENTRY_SCRIPT,
+            inputPath,
+            demucsOutputDirectory,
+            device,
+          ],
+          SEPARATION_TIMEOUT_MS,
+          "Demucs không thể hoàn tất inference.",
+          (line) => this.handleDemucsEvent(active, line),
+        );
+      }
     }
     this.assertNotCancelled(active);
 
@@ -691,11 +822,13 @@ export class VideoDubbingSeparationCoordinator {
       channels: 2,
     });
 
-    const modelOutput = path.join(outputDirectory, MODEL_NAME, "input");
+    const modelOutput = selectedBackend === "mdx"
+      ? path.join(active.temporaryDirectory, "mdx-output", "mdx", "input")
+      : path.join(active.temporaryDirectory, "demucs", MODEL_NAME, "input");
     const vocalsPath = path.join(modelOutput, "vocals.wav");
     const instrumentalPath = path.join(modelOutput, "no_vocals.wav");
-    this.assertOutput(vocalsPath, "Demucs không tạo được track vocals.");
-    this.assertOutput(instrumentalPath, "Demucs không tạo được track instrumental.");
+    this.assertOutput(vocalsPath, "Backend tách audio không tạo được track vocals.");
+    this.assertOutput(instrumentalPath, "Backend tách audio không tạo được track instrumental.");
     const vocalsMetadata = await this.probe(vocalsPath, active);
     const instrumentalMetadata = await this.probe(instrumentalPath, active);
     this.validateAudioMetadata(
@@ -753,7 +886,7 @@ export class VideoDubbingSeparationCoordinator {
         alignedInstrumentalPath,
       ],
       SEPARATION_TIMEOUT_MS,
-      "FFmpeg không thể căn chỉnh các track Demucs.",
+      "FFmpeg không thể căn chỉnh các track tách audio.",
     );
     this.assertOutput(alignedVocalsPath, "Không tạo được track vocals đã căn chỉnh.");
     this.assertOutput(
@@ -789,6 +922,10 @@ export class VideoDubbingSeparationCoordinator {
     this.manager.setSeparationTask(active.jobId, {
       status: "completed",
       progressPercent: 100,
+      startedAtMs: this.manager.getJob(active.jobId)?.separation?.startedAtMs,
+      elapsedSeconds: this.manager.getJob(active.jobId)?.separation?.startedAtMs
+        ? Math.max(0, Math.floor((Date.now() - this.manager.getJob(active.jobId)!.separation!.startedAtMs!) / 1000))
+        : undefined,
       completedSegments:
         this.manager.getJob(active.jobId)?.separation?.completedSegments,
       totalSegments:
@@ -821,6 +958,8 @@ export class VideoDubbingSeparationCoordinator {
       | {
           type?: string;
           phase?: string;
+          backend?: string;
+          provider?: string;
           progressPercent?: number;
           completedSegments?: number;
           totalSegments?: number;
@@ -840,6 +979,9 @@ export class VideoDubbingSeparationCoordinator {
           totalSegments: undefined,
         });
       } else if (event?.phase === "separating") {
+        if (event.backend === "mdx" && event.provider === "DmlExecutionProvider") {
+          console.info("[VideoDubbing] MDX inference is using DmlExecutionProvider.");
+        }
         this.updateTask(active, {
           phase: "separating",
           progressPercent: undefined,

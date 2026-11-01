@@ -1,21 +1,82 @@
 import fs from "fs";
 import path from "path";
 import { randomBytes } from "crypto";
-import { ChildProcessByStdio, spawn } from "child_process";
-import { Readable } from "stream";
+import { ChildProcess, spawn } from "child_process";
+import { once } from "events";
+import { Readable, Transform, Writable } from "stream";
+import { pipeline } from "stream/promises";
+import { renderToStaticMarkup } from "react-dom/server";
+import React from "react";
+import sharp from "sharp";
+import puppeteer, { Browser, Page } from "puppeteer-core";
+import SubtitleOverlayRenderer from "./src/components/SubtitleOverlayRenderer";
 import {
   VideoDubbingFinalMixTask,
   VideoDubbingJob,
   VideoDubbingMixerSettings,
   VideoDubbingMixerTrack,
   VideoDubbingMediaTask,
+  VideoDubbingOverlayPosition,
+  VideoDubbingOverlaySettings,
+  VideoDubbingSubtitleCue,
+  VideoDubbingTextOverlayCue,
 } from "./src/types/videoDubbing";
 import { VideoDubbingManager } from "./videoDubbingManager";
+import { createSubtitleFontFaceCss, getSupportedSubtitleFontFamilies, quoteCssFontFamily } from "./videoDubbingFonts";
 
 const AUDIO_SAMPLE_RATE = 48_000;
 const MAX_GAIN_PERCENT = 200;
 const PROCESS_OUTPUT_LIMIT = 64 * 1024;
 const MAX_MEDIA_TASK_MS = 2 * 60 * 60 * 1000;
+const MAX_LOGO_BYTES = 20 * 1024 * 1024;
+const DEFAULT_X264_THREADS = 8;
+const MAX_X264_THREADS = 256;
+const DEFAULT_QSV_GLOBAL_QUALITY = 18;
+const DEFAULT_QSV_PRESET = "medium";
+type TextCaseValue = "none" | "uppercase" | "lowercase" | "capitalize";
+const VIDEO_EXPORT_PREPARATION_PROGRESS = 10;
+const VIDEO_EXPORT_FFMPEG_PROGRESS_SPAN = 84;
+const DEFAULT_OVERLAY_SETTINGS: VideoDubbingOverlaySettings = {
+  logoEnabled: false,
+  logoWidthPercent: 15,
+  logoPaddingPx: 24,
+  logoPosition: "top-left",
+  subtitlesEnabled: false,
+  subtitles: [],
+  textOverlays: [],
+  subtitleFontSize: 32,
+  subtitleFontFamily: "Arial",
+  subtitleColor: "#ffffff",
+  subtitleBackgroundColor: "#000000",
+  subtitleBackgroundTransparent: false,
+  subtitleBackgroundMode: "color",
+  subtitleBold: false,
+  subtitleItalic: false,
+  subtitleUnderline: false,
+  subtitleTextCase: "none",
+  subtitleOutlineEnabled: false,
+  subtitleOutlineColor: "#000000",
+  subtitleOutlineWidthPx: 2,
+  subtitleCharacterSpacingPx: 0,
+  subtitleLineSpacingPx: 0,
+  subtitlePaddingPx: 8,
+  subtitleMarginPx: 32,
+  subtitlePosition: "bottom-center",
+  subtitleBackgroundImage: null,
+  subtitleBackgroundLeftSlicePx: 128,
+  subtitleBackgroundRightSlicePx: 128,
+};
+const OVERLAY_POSITIONS = new Set<VideoDubbingOverlayPosition>([
+  "top-left",
+  "top-center",
+  "top-right",
+  "middle-left",
+  "middle-center",
+  "middle-right",
+  "bottom-left",
+  "bottom-center",
+  "bottom-right",
+]);
 
 interface ProbeStream {
   codec_type?: string;
@@ -37,10 +98,134 @@ interface MediaProbe {
 interface ActiveTask {
   jobId: string;
   kind: "audioMix" | "videoExport" | "finalMix";
-  child?: ChildProcessByStdio<null, Readable, Readable>;
+  child?: ChildProcess;
   cancelled: boolean;
   operation: Promise<void>;
   temporaryFiles: Set<string>;
+}
+
+interface SubtitlePngOverlay extends SubtitleImageBounds {
+  image: Buffer;
+  left: number;
+  top: number;
+  startTime: number;
+  endTime: number;
+}
+
+interface SubtitleImageBounds {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+interface CachedSubtitleImage extends SubtitleImageBounds {
+  image: Buffer;
+}
+
+interface SubtitleOverlayStream {
+  overlays: SubtitlePngOverlay[];
+  width: number;
+  top: number;
+  height: number;
+  frameRate: number;
+  frameCount: number;
+}
+
+class PersistentChromiumPage {
+  private browser: Browser | null = null;
+  private page: Page | null = null;
+
+  constructor(
+    private readonly executable: string,
+    private readonly width: number,
+    private readonly height: number,
+  ) {}
+
+  async start(): Promise<void> {
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        this.browser = await puppeteer.launch({
+          executablePath: this.executable,
+          headless: true,
+          timeout: 15_000,
+          args: [
+            "--hide-scrollbars",
+            "--no-sandbox",
+            "--disable-gpu",
+            "--disable-dev-shm-usage",
+            "--no-first-run",
+            "--no-default-browser-check",
+          ],
+        });
+        this.page = await this.browser.newPage();
+        await this.page.setViewport({
+          width: this.width,
+          height: this.height,
+          deviceScaleFactor: 1,
+        });
+        return;
+      } catch (error) {
+        lastError = error;
+        if (this.browser?.connected) await this.browser.close().catch(() => undefined);
+        this.browser = null;
+        this.page = null;
+      }
+    }
+    throw lastError instanceof Error
+      ? lastError
+      : new Error("Không khởi tạo được trang Chromium để render phụ đề.");
+  }
+
+  async renderHtml(html: string): Promise<Buffer> {
+    if (!this.page) throw new Error("Trang Chromium chưa được khởi tạo.");
+    try {
+      await this.page.setContent(html, {
+        waitUntil: "load",
+        timeout: 15_000,
+      });
+    } catch (error) {
+      if (!this.browser?.connected) throw error;
+      if (!this.page.isClosed()) {
+        await this.page.close().catch(() => undefined);
+      }
+      this.page = await this.browser.newPage();
+      await this.page.setContent(html, {
+        waitUntil: "load",
+        timeout: 15_000,
+      });
+    }
+    await this.page.evaluate(async () => {
+      await (document.fonts ? document.fonts.ready : Promise.resolve());
+      await Promise.all(Array.from(document.images).map((image) =>
+        image.complete
+          ? Promise.resolve()
+          : new Promise<void>((resolve) => {
+              image.addEventListener("load", () => resolve(), { once: true });
+              image.addEventListener("error", () => resolve(), { once: true });
+            }),
+      ));
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      );
+    });
+    const stage = await this.page.$("#video-subtitle-stage");
+    if (!stage) throw new Error("Không tìm thấy container phụ đề để chụp PNG.");
+    return await stage.screenshot({
+      type: "png",
+      omitBackground: true,
+      encoding: "binary",
+      captureBeyondViewport: false,
+    }) as Buffer;
+  }
+
+  async close(): Promise<void> {
+    if (this.page && !this.page.isClosed()) await this.page.close().catch(() => undefined);
+    this.page = null;
+    if (this.browser?.connected) await this.browser.close().catch(() => undefined);
+    this.browser = null;
+  }
 }
 
 export interface VideoDubbingMediaOptions {
@@ -79,21 +264,110 @@ export class VideoDubbingMediaCoordinator {
     return { ...task };
   }
 
-  startExport(jobId: string): VideoDubbingMediaTask {
+  startExport(jobId: string, input?: unknown): VideoDubbingMediaTask {
     const job = this.requireReadyJob(jobId);
     this.assertNoActiveTask(jobId);
     const mixedAudioPath = this.requireMixedAudio(jobId, job);
+    const settings = this.validateOverlaySettings(input, job);
+    if (settings.logoEnabled && !this.manager.getOverlayLogoPath(jobId)) {
+      throw new Error("Hãy chọn và tải logo lên trước khi bật chèn logo.");
+    }
+    if (settings.subtitlesEnabled && settings.subtitles.length === 0) {
+      throw new Error("Hãy chọn tệp SRT hợp lệ trước khi bật phụ đề.");
+    }
+    this.manager.updateOverlaySettings(jobId, settings);
     const previous = job.videoExport;
+    const startedAtMs = Date.now();
     const task = this.createTask(jobId, "videoExport", {
       status: "running",
-      phase: "remuxing",
+      phase:
+        settings.logoEnabled || settings.subtitlesEnabled || Boolean(settings.textOverlays?.length)
+          ? "rendering"
+          : "remuxing",
       progressPercent: 0,
+      detail: settings.subtitlesEnabled
+        ? "Đang chuẩn bị Chromium render phụ đề trong suốt"
+        : settings.logoEnabled
+          ? "Đang chuẩn bị ghép logo và mã hóa video"
+          : "Đang remux video và audio final mix",
+      startedAtMs,
+      completedAtMs: undefined,
+      elapsedSeconds: 0,
       durationSeconds: previous?.durationSeconds,
       sizeBytes: previous?.sizeBytes,
     });
     const active = this.registerTask(jobId, "videoExport");
-    active.operation = this.runExport(job, active, mixedAudioPath);
+    active.operation = this.runExport(
+      job,
+      active,
+      mixedAudioPath,
+      settings,
+    );
     return { ...task };
+  }
+
+  saveOverlaySettings(jobId: string, input: unknown): VideoDubbingJob {
+    const job = this.requireReadyJob(jobId);
+    this.assertNoActiveTask(jobId);
+    const settings = this.validateOverlaySettings(input, job);
+    if (settings.logoEnabled && !this.manager.getOverlayLogoPath(jobId)) {
+      throw new Error("Hãy tải logo vào job trước khi bật chèn logo.");
+    }
+    this.manager.updateOverlaySettings(jobId, settings);
+    return this.manager.getJob(jobId)!;
+  }
+
+  async uploadLogo(
+    jobId: string,
+    request: Readable,
+    extensionInput: unknown,
+  ): Promise<VideoDubbingJob> {
+    this.requireReadyJob(jobId);
+    this.assertNoActiveTask(jobId);
+    const extension =
+      typeof extensionInput === "string"
+        ? extensionInput.toLowerCase()
+        : "";
+    if (![".png", ".jpg", ".jpeg", ".webp"].includes(extension)) {
+      throw new Error("Logo chỉ hỗ trợ PNG, JPG hoặc WebP.");
+    }
+    const directory = this.requireDirectory(jobId);
+    const temporaryPath = path.join(
+      directory,
+      `.overlay-logo-${randomBytes(8).toString("hex")}.upload`,
+    );
+    let receivedBytes = 0;
+    try {
+      const sizeLimiter = new Transform({
+        transform(chunk: Buffer, _encoding, callback) {
+          receivedBytes += chunk.length;
+          if (receivedBytes > MAX_LOGO_BYTES) {
+            callback(new Error("Logo vượt quá giới hạn 20 MB."));
+            return;
+          }
+          callback(null, chunk);
+        },
+      });
+      await pipeline(
+        request,
+        sizeLimiter,
+        fs.createWriteStream(temporaryPath, { flags: "wx" }),
+      );
+      if (receivedBytes === 0) throw new Error("Tệp logo rỗng.");
+      this.assertLogoImage(temporaryPath, extension);
+      const fileName = `overlay-logo${extension}`;
+      const targetPath = path.join(directory, fileName);
+      this.publishFile(temporaryPath, targetPath, directory);
+      this.manager.setOverlayLogo(jobId, fileName);
+      return this.manager.getJob(jobId)!;
+    } catch (error) {
+      await fs.promises.rm(temporaryPath, { force: true });
+      throw error;
+    }
+  }
+
+  getLogoPath(jobId: string): string | null {
+    return this.manager.getOverlayLogoPath(jobId);
   }
 
   async cancel(jobId: string): Promise<void> {
@@ -126,10 +400,31 @@ export class VideoDubbingMediaCoordinator {
     const job = this.manager.getJob(jobId);
     const directory = this.manager.getJobDirectory(jobId);
     if (!job || !directory) return null;
-    const filePath = path.join(directory, "output.mp4");
+    const filePath = path.join(directory, job.exportedVideoFileName || "output.mp4");
     return fs.existsSync(filePath) && fs.statSync(filePath).size > 0
       ? filePath
       : null;
+  }
+
+  openExportFolder(jobId: string): void {
+    const directory = this.manager.getJobDirectory(jobId);
+    if (!directory || !fs.existsSync(directory)) {
+      throw new Error("Không tìm thấy thư mục lưu video đã export.");
+    }
+    const command = process.platform === "win32"
+      ? "explorer.exe"
+      : process.platform === "darwin"
+        ? "open"
+        : "xdg-open";
+    const child = spawn(command, [directory], {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    child.once("error", (error) => {
+      console.error("[VideoDubbing] Không mở được thư mục export:", error);
+    });
+    child.unref();
   }
 
   getFinalMixPath(jobId: string): string | null {
@@ -216,6 +511,306 @@ export class VideoDubbingMediaCoordinator {
 
   validateMixerSettings(input: unknown): VideoDubbingMixerSettings {
     return this.validateMixerSettingsInput(input);
+  }
+
+  private validateOverlaySettings(
+    input: unknown,
+    job: VideoDubbingJob,
+  ): VideoDubbingOverlaySettings {
+    const saved = job.overlaySettings || DEFAULT_OVERLAY_SETTINGS;
+    if (!input || typeof input !== "object") {
+      if (input !== undefined) throw new Error("Cấu hình logo/phụ đề không hợp lệ.");
+      return {
+        ...saved,
+        subtitles: saved.subtitles.map((cue) => ({ ...cue })),
+      };
+    }
+    const values = input as Record<string, unknown>;
+    const numberInRange = (
+      value: unknown,
+      minimum: number,
+      maximum: number,
+      label: string,
+    ) => {
+      if (
+        typeof value !== "number" ||
+        !Number.isFinite(value) ||
+        value < minimum ||
+        value > maximum
+      ) {
+        throw new Error(`${label} phải nằm trong khoảng ${minimum}–${maximum}.`);
+      }
+      return value;
+    };
+    const position = (
+      value: unknown,
+      fallback: VideoDubbingOverlayPosition,
+      label: string,
+    ) => {
+      const selected = value ?? fallback;
+      if (
+        typeof selected !== "string" ||
+        !OVERLAY_POSITIONS.has(selected as VideoDubbingOverlayPosition)
+      ) {
+        throw new Error(`${label} không hợp lệ.`);
+      }
+      return selected as VideoDubbingOverlayPosition;
+    };
+    const logoEnabled = values.logoEnabled ?? saved.logoEnabled;
+    const subtitlesEnabled = values.subtitlesEnabled ?? saved.subtitlesEnabled;
+    if (typeof logoEnabled !== "boolean" || typeof subtitlesEnabled !== "boolean") {
+      throw new Error("Trạng thái bật/tắt logo hoặc phụ đề không hợp lệ.");
+    }
+    const subtitleFontFamily =
+      values.subtitleFontFamily ?? saved.subtitleFontFamily ?? "Arial";
+    if (
+      typeof subtitleFontFamily !== "string" ||
+      !getSupportedSubtitleFontFamilies().has(subtitleFontFamily)
+    ) {
+      throw new Error("Font phụ đề không được hỗ trợ.");
+    }
+    const color = (value: unknown, fallback: string, label: string) => {
+      const selected = value ?? fallback;
+      if (typeof selected !== "string" || !/^#[0-9a-f]{6}$/i.test(selected)) {
+        throw new Error(`${label} phải là mã màu HEX hợp lệ.`);
+      }
+      return selected.toLowerCase();
+    };
+    const booleanValue = (value: unknown, fallback: boolean, label: string) => {
+      const selected = value ?? fallback;
+      if (typeof selected !== "boolean") {
+        throw new Error(`${label} không hợp lệ.`);
+      }
+      return selected;
+    };
+    const textCaseValue = (value: unknown, fallback: TextCaseValue, label: string): TextCaseValue => {
+      const selected = value ?? fallback;
+      if (selected !== "none" && selected !== "uppercase" && selected !== "lowercase" && selected !== "capitalize") {
+        throw new Error(`${label} không hợp lệ.`);
+      }
+      return selected;
+    };
+    const inputCues = values.subtitles ?? saved.subtitles;
+    if (!Array.isArray(inputCues) || inputCues.length > 10_000) {
+      throw new Error("Danh sách phụ đề không hợp lệ hoặc vượt quá 10.000 dòng.");
+    }
+    let totalTextLength = 0;
+    const subtitles: VideoDubbingSubtitleCue[] = inputCues.map((cue) => {
+      if (!cue || typeof cue !== "object") {
+        throw new Error("Dữ liệu một dòng phụ đề không hợp lệ.");
+      }
+      const values = cue as Record<string, unknown>;
+      if (typeof values.text !== "string") {
+        throw new Error("Nội dung phụ đề phải là văn bản.");
+      }
+      totalTextLength += values.text.length;
+      if (totalTextLength > 2_000_000) {
+        throw new Error("Tổng nội dung phụ đề vượt quá 2 MB.");
+      }
+      const startTime = numberInRange(
+        values.startTime,
+        0,
+        job.metadata!.durationSeconds,
+        "Thời điểm bắt đầu phụ đề",
+      );
+      const endTime = numberInRange(
+        values.endTime,
+        0,
+        job.metadata!.durationSeconds + 60,
+        "Thời điểm kết thúc phụ đề",
+      );
+      if (endTime <= startTime) {
+        throw new Error("Thời điểm kết thúc phụ đề phải sau thời điểm bắt đầu.");
+      }
+      return {
+        startTime,
+        endTime,
+        text: values.text,
+      };
+    });
+    const inputTextOverlays = values.textOverlays ?? saved.textOverlays ?? [];
+    if (!Array.isArray(inputTextOverlays) || inputTextOverlays.length > 1_000) {
+      throw new Error("Danh sách text timeline không hợp lệ hoặc vượt quá 1.000 clip.");
+    }
+    const textOverlays: VideoDubbingTextOverlayCue[] = inputTextOverlays.map((cue) => {
+      if (!cue || typeof cue !== "object") throw new Error("Text clip không hợp lệ.");
+      const item = cue as Record<string, unknown>;
+      if (typeof item.text !== "string" || item.text.length > 10_000) throw new Error("Nội dung text clip không hợp lệ.");
+      if (typeof item.fontFamily !== "string" || !getSupportedSubtitleFontFamilies().has(item.fontFamily)) throw new Error("Font text clip không được hỗ trợ.");
+      return {
+        startTime: numberInRange(item.startTime, 0, job.metadata!.durationSeconds, "Thời điểm bắt đầu text"),
+        endTime: numberInRange(item.endTime, 0, job.metadata!.durationSeconds, "Thời điểm kết thúc text"),
+        text: item.text,
+        fontSize: numberInRange(item.fontSize, 8, 160, "Cỡ chữ text"),
+        fontFamily: item.fontFamily,
+        color: color(item.color, "#ffffff", "Màu chữ text"),
+        bold: booleanValue(item.bold, false, "Text đậm"),
+        italic: booleanValue(item.italic, false, "Text nghiêng"),
+        underline: booleanValue(item.underline, false, "Text gạch chân"),
+        textCase: textCaseValue(item.textCase, "none", "Kiểu chữ text"),
+        outlineEnabled: booleanValue(item.outlineEnabled, false, "Outline text"),
+        outlineColor: color(item.outlineColor, "#000000", "Màu outline text"),
+        outlineWidthPx: numberInRange(item.outlineWidthPx ?? 2, 0, 8, "Độ dày outline text"),
+        characterSpacingPx: numberInRange(item.characterSpacingPx ?? 0, 0, 40, "Giãn ký tự text"),
+        lineSpacingPx: numberInRange(item.lineSpacingPx ?? 0, 0, 80, "Giãn dòng text"),
+        position: position(item.position, "middle-center", "Vị trí text"),
+        xPercent: item.xPercent === undefined
+          ? undefined
+          : numberInRange(item.xPercent, 0, 100, "Tọa độ ngang text"),
+        yPercent: item.yPercent === undefined
+          ? undefined
+          : numberInRange(item.yPercent, 0, 100, "Tọa độ dọc text"),
+        backgroundColor: color(item.backgroundColor, "#000000", "Màu nền text"),
+        backgroundTransparent: booleanValue(item.backgroundTransparent, true, "Nền text trong suốt"),
+        paddingPx: numberInRange(item.paddingPx, 0, 40, "Padding text"),
+      };
+    });
+    if (textOverlays.some((cue) => cue.endTime <= cue.startTime)) throw new Error("Thời điểm kết thúc text phải sau thời điểm bắt đầu.");
+    return {
+      logoEnabled,
+      logoFileName: saved.logoFileName,
+      logoWidthPercent: numberInRange(
+        values.logoWidthPercent ?? saved.logoWidthPercent,
+        5,
+        40,
+        "Kích thước logo",
+      ),
+      logoPaddingPx: numberInRange(
+        values.logoPaddingPx ?? saved.logoPaddingPx ?? 24,
+        0,
+        200,
+        "Khoảng cách logo",
+      ),
+      logoPosition: position(
+        values.logoPosition,
+        saved.logoPosition,
+        "Vị trí logo",
+      ),
+      subtitlesEnabled,
+      subtitles,
+      textOverlays,
+      subtitleFontSize: numberInRange(
+        values.subtitleFontSize ?? saved.subtitleFontSize,
+        12,
+        72,
+        "Cỡ chữ phụ đề",
+      ),
+      subtitleFontFamily,
+      subtitleColor: color(
+        values.subtitleColor,
+        saved.subtitleColor || "#ffffff",
+        "Màu chữ phụ đề",
+      ),
+      subtitleBackgroundColor: color(
+        values.subtitleBackgroundColor,
+        saved.subtitleBackgroundColor || "#000000",
+        "Màu nền phụ đề",
+      ),
+      subtitleBackgroundTransparent: booleanValue(
+        values.subtitleBackgroundTransparent,
+        saved.subtitleBackgroundTransparent ?? false,
+        "Nền phụ đề trong suốt",
+      ),
+      subtitleBackgroundMode:
+        values.subtitleBackgroundMode === "none" ||
+        values.subtitleBackgroundMode === "color" ||
+        values.subtitleBackgroundMode === "image"
+          ? values.subtitleBackgroundMode
+          : saved.subtitleBackgroundMode ??
+            (saved.subtitleBackgroundImage
+              ? "image"
+              : saved.subtitleBackgroundTransparent
+                ? "none"
+                : "color"),
+      subtitleBold: booleanValue(
+        values.subtitleBold,
+        saved.subtitleBold ?? false,
+        "Đậm phụ đề",
+      ),
+      subtitleItalic: booleanValue(
+        values.subtitleItalic,
+        saved.subtitleItalic ?? false,
+        "Nghiêng phụ đề",
+      ),
+      subtitleUnderline: booleanValue(values.subtitleUnderline, saved.subtitleUnderline ?? false, "Gạch chân phụ đề"),
+      subtitleTextCase: textCaseValue(values.subtitleTextCase, saved.subtitleTextCase ?? "none", "Kiểu chữ phụ đề"),
+      subtitleOutlineEnabled: booleanValue(values.subtitleOutlineEnabled, saved.subtitleOutlineEnabled ?? false, "Outline phụ đề"),
+      subtitleOutlineColor: color(values.subtitleOutlineColor, saved.subtitleOutlineColor ?? "#000000", "Màu outline phụ đề"),
+      subtitleOutlineWidthPx: numberInRange(values.subtitleOutlineWidthPx ?? saved.subtitleOutlineWidthPx ?? 2, 0, 8, "Độ dày outline phụ đề"),
+      subtitleCharacterSpacingPx: numberInRange(values.subtitleCharacterSpacingPx ?? saved.subtitleCharacterSpacingPx ?? 0, 0, 40, "Giãn ký tự phụ đề"),
+      subtitleLineSpacingPx: numberInRange(values.subtitleLineSpacingPx ?? saved.subtitleLineSpacingPx ?? 0, 0, 80, "Giãn dòng phụ đề"),
+      subtitlePaddingPx: numberInRange(
+        values.subtitlePaddingPx ?? saved.subtitlePaddingPx ?? 8,
+        0,
+        40,
+        "Padding phụ đề",
+      ),
+      subtitleMarginPx: numberInRange(
+        values.subtitleMarginPx ?? saved.subtitleMarginPx ?? 32,
+        0,
+        200,
+        "Khoảng cách phụ đề",
+      ),
+      subtitlePosition: position(
+        values.subtitlePosition,
+        saved.subtitlePosition,
+        "Vị trí phụ đề",
+      ),
+      subtitleBackgroundImage:
+        values.subtitleBackgroundImage === null
+          ? null
+          : typeof values.subtitleBackgroundImage === "string"
+            ? values.subtitleBackgroundImage
+                .replace(/\.(png|webp)$/i, "")
+                .replace(/-(left|center|right)$/i, "")
+                .replace(/[^a-zA-Z0-9_-]/g, "") || null
+            : typeof saved.subtitleBackgroundImage === "string"
+              ? saved.subtitleBackgroundImage
+                  .replace(/\.(png|webp)$/i, "")
+                  .replace(/-(left|center|right)$/i, "")
+                  .replace(/[^a-zA-Z0-9_-]/g, "") || null
+              : null,
+    };
+  }
+
+  private assertLogoImage(filePath: string, extension: string): void {
+    const header = Buffer.alloc(12);
+    const descriptor = fs.openSync(filePath, "r");
+    try {
+      fs.readSync(descriptor, header, 0, header.length, 0);
+    } finally {
+      fs.closeSync(descriptor);
+    }
+    const valid =
+      (extension === ".png" &&
+        header.subarray(0, 8).equals(
+          Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+        )) ||
+      ((extension === ".jpg" || extension === ".jpeg") &&
+        header[0] === 0xff &&
+        header[1] === 0xd8 &&
+        header[2] === 0xff) ||
+      (extension === ".webp" &&
+        header.toString("ascii", 0, 4) === "RIFF" &&
+        header.toString("ascii", 8, 12) === "WEBP");
+    if (!valid) throw new Error("Nội dung tệp không khớp định dạng logo đã chọn.");
+  }
+
+  private overlayCoordinates(
+    position: VideoDubbingOverlayPosition,
+    padding: number,
+  ): { x: string; y: string } {
+    const horizontal = position.endsWith("left")
+      ? String(padding)
+      : position.endsWith("right")
+        ? `main_w-overlay_w-${padding}`
+        : "(main_w-overlay_w)/2";
+    const vertical = position.startsWith("top")
+      ? String(padding)
+      : position.startsWith("bottom")
+        ? `main_h-overlay_h-${padding}`
+        : "(main_h-overlay_h)/2";
+    return { x: horizontal, y: vertical };
   }
 
   private requireReadyJob(jobId: string): VideoDubbingJob {
@@ -355,6 +950,28 @@ export class VideoDubbingMediaCoordinator {
       };
     }
     return settings;
+  }
+
+  private updateVideoExportProgress(
+    active: ActiveTask,
+    phase: "rendering" | "validating",
+    progressPercent: number,
+    detail: string,
+  ): void {
+    if (active.kind !== "videoExport") return;
+    const previous = this.getTask(active.jobId, active.kind) as VideoDubbingMediaTask | undefined;
+    if (!previous || !("status" in previous)) return;
+    this.createTask(active.jobId, active.kind, {
+      ...previous,
+      status: "running",
+      phase,
+      progressPercent,
+      detail,
+      completedAtMs: undefined,
+      elapsedSeconds: previous.startedAtMs
+        ? Math.max(0, (Date.now() - previous.startedAtMs) / 1000)
+        : 0,
+    } as VideoDubbingMediaTask);
   }
 
   private createTask(
@@ -803,100 +1420,509 @@ export class VideoDubbingMediaCoordinator {
     }
   }
 
+  private async ensureTransparentScreenshotPng(
+    image: Buffer,
+  ): Promise<SubtitleImageBounds | null> {
+    const metadata = await sharp(image).metadata();
+    if (metadata.format !== "png" || !metadata.hasAlpha || metadata.channels !== 4) {
+      throw new Error("Ảnh phụ đề không phải PNG RGBA trong suốt.");
+    }
+    const { data, info } = await sharp(image)
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    if (info.channels !== 4 || info.width < 1 || info.height < 1) {
+      throw new Error("Ảnh phụ đề không có kênh alpha RGBA.");
+    }
+    const cornerOffsets = [
+      0,
+      (info.width - 1) * 4,
+      (info.height - 1) * info.width * 4,
+      (info.height * info.width - 1) * 4,
+    ];
+    const cornerIsTransparent = cornerOffsets.every(
+      (offset) => (data[offset + 3] ?? 255) === 0,
+    );
+    if (!cornerIsTransparent) {
+      throw new Error("Chromium tạo PNG phụ đề có nền không trong suốt ở vùng ngoài phụ đề.");
+    }
+
+    let left = info.width;
+    let top = info.height;
+    let right = -1;
+    let bottom = -1;
+    for (let y = 0; y < info.height; y++) {
+      for (let x = 0; x < info.width; x++) {
+        if ((data[(y * info.width + x) * 4 + 3] ?? 0) === 0) continue;
+        left = Math.min(left, x);
+        top = Math.min(top, y);
+        right = Math.max(right, x);
+        bottom = Math.max(bottom, y);
+      }
+    }
+    if (right < left || bottom < top) return null;
+    return {
+      left,
+      top,
+      width: right - left + 1,
+      height: bottom - top + 1,
+    };
+  }
+
+  private getX264ThreadCount(): number {
+    const configured = Number(process.env.VIDEO_DUBBING_X264_THREADS);
+    return Number.isInteger(configured) && configured >= 1 && configured <= MAX_X264_THREADS
+      ? configured
+      : DEFAULT_X264_THREADS;
+  }
+
+  private resolveChromiumExecutable(): string {
+    const candidates = [
+      process.env.CHROMIUM_PATH,
+      process.env.CHROME_PATH,
+      String.raw`C:\Program Files\Google\Chrome\Application\chrome.exe`,
+      String.raw`C:\Program Files (x86)\Google\Chrome\Application\chrome.exe`,
+      path.join(process.env.LOCALAPPDATA ?? "", "Google", "Chrome", "Application", "chrome.exe"),
+      String.raw`C:\Program Files\Microsoft\Edge\Application\msedge.exe`,
+      "/usr/bin/google-chrome",
+      "/usr/bin/chromium",
+      "/usr/bin/chromium-browser",
+    ];
+    return candidates.find((candidate): candidate is string =>
+      Boolean(candidate && fs.existsSync(candidate)),
+    ) ?? "";
+  }
+
+  private async createTransparentSubtitleOverlay(
+    active: ActiveTask,
+    job: VideoDubbingJob,
+    settings: VideoDubbingOverlaySettings,
+    directory: string,
+  ): Promise<SubtitlePngOverlay[]> {
+    const renderItems = [
+      ...(settings.subtitlesEnabled ? settings.subtitles.map((cue) => ({
+        cue,
+        style: {
+          fontSize: settings.subtitleFontSize,
+          fontFamily: settings.subtitleFontFamily,
+          color: settings.subtitleColor,
+          bold: settings.subtitleBold,
+          italic: settings.subtitleItalic,
+          underline: settings.subtitleUnderline ?? false,
+          textCase: settings.subtitleTextCase ?? "none",
+          outlineEnabled: settings.subtitleOutlineEnabled ?? false,
+          outlineColor: settings.subtitleOutlineColor ?? "#000000",
+          outlineWidthPx: settings.subtitleOutlineWidthPx ?? 2,
+          characterSpacingPx: settings.subtitleCharacterSpacingPx ?? 0,
+          lineSpacingPx: settings.subtitleLineSpacingPx ?? 0,
+          position: settings.subtitlePosition,
+          xPercent: undefined,
+          yPercent: undefined,
+          backgroundMode: settings.subtitleBackgroundMode ?? "color" as const,
+          backgroundColor: settings.subtitleBackgroundColor,
+          backgroundTransparent: settings.subtitleBackgroundTransparent ?? false,
+          backgroundImage: settings.subtitleBackgroundImage,
+          paddingPx: settings.subtitlePaddingPx,
+          marginPx: settings.subtitleMarginPx,
+        },
+      })) : []),
+      ...(settings.textOverlays ?? []).map((cue) => ({
+        cue,
+        style: {
+          fontSize: cue.fontSize,
+          fontFamily: cue.fontFamily,
+          color: cue.color,
+          bold: cue.bold,
+          italic: cue.italic,
+          underline: cue.underline ?? false,
+          textCase: cue.textCase ?? "none",
+          outlineEnabled: cue.outlineEnabled ?? false,
+          outlineColor: cue.outlineColor ?? "#000000",
+          outlineWidthPx: cue.outlineWidthPx ?? 2,
+          characterSpacingPx: cue.characterSpacingPx ?? 0,
+          lineSpacingPx: cue.lineSpacingPx ?? 0,
+          position: cue.position,
+          xPercent: cue.xPercent,
+          yPercent: cue.yPercent,
+          backgroundMode: cue.backgroundTransparent ? "none" as const : "color" as const,
+          backgroundColor: cue.backgroundColor,
+          backgroundTransparent: cue.backgroundTransparent,
+          backgroundImage: null,
+          paddingPx: cue.paddingPx,
+          marginPx: 24,
+        },
+      })),
+    ];
+    if (renderItems.length === 0) return [];
+    const chromium = this.resolveChromiumExecutable();
+    if (!chromium) {
+      throw new Error("Không tìm thấy Chromium hoặc Google Chrome để render phụ đề overlay.");
+    }
+
+    const width = Number(job.metadata?.width ?? 0);
+    const height = Number(job.metadata?.height ?? 0);
+    if (width <= 0 || height <= 0) {
+      throw new Error("Không xác định được kích thước video để render phụ đề.");
+    }
+    const assetUrlFor = (imageName: string) => {
+      const assetPath = path.join(directory, "..", "public", "assets", "subtitle", imageName);
+      const fallbackPath = path.resolve(process.cwd(), "public", "assets", "subtitle", imageName);
+      const resolvedPath = fs.existsSync(assetPath) ? assetPath : fallbackPath;
+      if (!fs.existsSync(resolvedPath)) return `/assets/subtitle/${encodeURIComponent(imageName)}`;
+      return `data:image/png;base64,${fs.readFileSync(resolvedPath).toString("base64")}`;
+    };
+    const imageCache = new Map<string, CachedSubtitleImage | null>();
+    const overlays: SubtitlePngOverlay[] = [];
+    const browser = new PersistentChromiumPage(
+      chromium,
+      width,
+      height,
+    );
+    const renderStartedAt = Date.now();
+    try {
+      await browser.start();
+      for (let index = 0; index < renderItems.length; index++) {
+        this.assertNotCancelled(active);
+        const { cue, style } = renderItems[index];
+        const horizontal = style.position.endsWith("-left") ? "flex-start" : style.position.endsWith("-right") ? "flex-end" : "center";
+        const vertical = style.position.startsWith("top-") ? "flex-start" : style.position.startsWith("bottom-") ? "flex-end" : "center";
+        const cacheKey = [
+          cue.text, style.fontSize, style.fontFamily, style.color,
+          style.backgroundMode, style.backgroundColor, style.backgroundImage,
+          style.backgroundTransparent, style.position, style.xPercent, style.yPercent,
+          style.paddingPx, style.marginPx,
+          style.bold, style.italic, style.underline, style.textCase,
+          style.outlineEnabled, style.outlineColor, style.outlineWidthPx,
+          style.characterSpacingPx, style.lineSpacingPx,
+        ].join("|");
+        if (!imageCache.has(cacheKey)) {
+          const subtitle = renderToStaticMarkup(React.createElement(SubtitleOverlayRenderer, {
+            text: cue.text,
+            scale: 1,
+            fontSize: style.fontSize,
+            fontFamily: style.fontFamily,
+            fontWeight: style.bold,
+            fontStyle: style.italic,
+            underline: style.underline,
+            textCase: style.textCase,
+            outlineEnabled: style.outlineEnabled,
+            outlineColor: style.outlineColor,
+            outlineWidthPx: style.outlineWidthPx,
+            characterSpacingPx: style.characterSpacingPx,
+            lineSpacingPx: style.lineSpacingPx,
+            color: style.color,
+            backgroundMode: style.backgroundMode,
+            backgroundColor: style.backgroundColor,
+            backgroundTransparent: style.backgroundTransparent,
+            backgroundImage: style.backgroundImage,
+            paddingPx: style.paddingPx,
+            position: style.position,
+            assetUrlFor,
+          }));
+          const hasCustomPosition = Number.isFinite(style.xPercent) && Number.isFinite(style.yPercent);
+          const content = hasCustomPosition
+            ? `<div style="position:absolute;left:${style.xPercent}%;top:${style.yPercent}%;transform:translate(-50%,-50%);box-sizing:border-box">${subtitle}</div>`
+            : `<div style="position:absolute;inset:0;display:flex;align-items:${vertical};justify-content:${horizontal};padding:${style.marginPx}px;box-sizing:border-box">${subtitle}</div>`;
+          // Keep the screenshot target full-frame. Capturing a custom-positioned
+          // child directly would crop it to its own box and lose its video x/y.
+          const markup = `<div id="video-subtitle-stage" style="position:absolute;left:0;top:0;width:${width}px;height:${height}px;overflow:hidden">${content}</div>`;
+          const html = `<!doctype html><html><head><meta charset="utf-8"><style>${createSubtitleFontFaceCss(style.fontFamily)}html,body{margin:0;width:${width}px;height:${height}px;overflow:hidden;background:transparent}body{font-family:${quoteCssFontFamily(style.fontFamily)}}*{box-sizing:border-box}</style></head><body>${markup}</body></html>`;
+          const screenshot = await browser.renderHtml(html);
+          const bounds = await this.ensureTransparentScreenshotPng(screenshot);
+          if (!bounds) {
+            imageCache.set(cacheKey, null);
+          } else {
+            const croppedPng = await sharp(screenshot, { limitInputPixels: false })
+              .extract(bounds)
+              .png()
+              .toBuffer();
+            const image = await sharp(croppedPng)
+              .ensureAlpha()
+              .raw()
+              .toBuffer();
+            imageCache.set(cacheKey, { image, ...bounds });
+          }
+        }
+        const image = imageCache.get(cacheKey);
+        if (image) {
+          overlays.push({
+            ...image,
+            startTime: cue.startTime,
+            endTime: cue.endTime,
+          });
+        }
+        if (index % 10 === 0 || index === renderItems.length - 1) {
+          this.updateVideoExportProgress(
+            active,
+            "rendering",
+            5 + ((index + 1) / renderItems.length) * 5,
+            `Đang tạo PNG overlay ${index + 1}/${renderItems.length}`,
+          );
+        }
+      }
+      const renderSeconds = ((Date.now() - renderStartedAt) / 1000).toFixed(1);
+      const renderedImageCount = Array.from(imageCache.values()).filter(
+        (image) => image !== null,
+      ).length;
+      console.info(`[VideoDubbing] Chromium render: ${renderItems.length} cue/text, ${renderedImageCount} ảnh RGBA crop trong RAM, ${renderSeconds}s`);
+      return overlays;
+    } finally {
+      await browser.close();
+    }
+  }
+
+  private createSubtitleOverlayStream(
+    overlays: SubtitlePngOverlay[],
+    job: VideoDubbingJob,
+    duration: number,
+  ): SubtitleOverlayStream {
+    const frameRate = job.metadata!.frameRate && job.metadata!.frameRate > 0
+      ? job.metadata!.frameRate
+      : 30;
+    const videoHeight = job.metadata!.height;
+    const firstRow = Math.min(...overlays.map((overlay) => overlay.top));
+    const lastRow = Math.max(...overlays.map((overlay) => overlay.top + overlay.height));
+    const top = Math.max(0, Math.floor(firstRow / 2) * 2);
+    const bottom = Math.min(videoHeight, Math.ceil(lastRow / 2) * 2);
+    if (bottom <= top) throw new Error("Không xác định được vùng overlay phụ đề hợp lệ.");
+    return {
+      overlays,
+      width: job.metadata!.width,
+      top,
+      height: bottom - top,
+      frameRate,
+      frameCount: Math.max(1, Math.round(duration * frameRate)),
+    };
+  }
+
   private async runExport(
     job: VideoDubbingJob,
     active: ActiveTask,
     mixedAudioPath: string,
+    settings: VideoDubbingOverlaySettings,
   ): Promise<void> {
     const directory = this.requireDirectory(active.jobId);
-    const tempOutput = path.join(
-      directory,
-      `.output-${randomBytes(8).toString("hex")}.mp4`,
-    );
+    const tempOutput = path.join(directory, `.output-${randomBytes(8).toString("hex")}.mp4`);
     active.temporaryFiles.add(tempOutput);
     const duration = job.metadata!.durationSeconds;
     const finalMixInput = path.extname(mixedAudioPath).toLowerCase() === ".wav";
+    const renderVideo = settings.logoEnabled || settings.subtitlesEnabled || Boolean(settings.textOverlays?.length);
+    const logoPath = settings.logoEnabled ? this.manager.getOverlayLogoPath(active.jobId) : null;
     const audioCodecArgs = finalMixInput
       ? ["-c:a", "aac", "-b:a", "192k", "-ar", String(AUDIO_SAMPLE_RATE), "-ac", "2"]
       : ["-c:a", "copy"];
+
     try {
-      await this.runFfmpeg(
-        active,
-        [
-          "-i",
-          this.requireVideoPath(active.jobId),
-          "-i",
-          mixedAudioPath,
-          "-map",
-          "0:v:0",
-          "-map",
-          "1:a:0",
-          "-map_metadata",
-          "0",
-          "-map_chapters",
-          "0",
-          "-c:v",
-          "copy",
-          ...audioCodecArgs,
-          "-t",
-          String(duration),
-          "-movflags",
-          "+faststart",
-          tempOutput,
-        ],
-        duration,
-        "remuxing",
-        0,
-        90,
+      if (settings.logoEnabled && !logoPath) {
+        throw new Error("Không tìm thấy logo trong thư mục job.");
+      }
+
+      let logoInputPath = logoPath;
+      if (logoPath) {
+        const logoWidth = Math.max(1, Math.round(job.metadata!.width * settings.logoWidthPercent / 100));
+        const logoMaxHeight = Math.max(1, Math.round(job.metadata!.height * 0.4));
+        logoInputPath = path.join(
+          directory,
+          `.scaled-overlay-logo-${randomBytes(8).toString("hex")}.png`,
+        );
+        active.temporaryFiles.add(logoInputPath);
+        await sharp(logoPath)
+          .resize(logoWidth, logoMaxHeight, { fit: "inside" })
+          .png()
+          .toFile(logoInputPath);
+        this.assertNotCancelled(active);
+      }
+
+      let subtitleOverlays: SubtitlePngOverlay[] = [];
+      if (settings.subtitlesEnabled) {
+        this.updateVideoExportProgress(
+          active,
+          "rendering",
+          5,
+          "Đang chuẩn bị Chromium render phụ đề trong suốt",
+        );
+        subtitleOverlays = await this.createTransparentSubtitleOverlay(active, job, settings, directory);
+        this.assertNotCancelled(active);
+      }
+      const subtitleOverlayStream = subtitleOverlays.length > 0
+        ? this.createSubtitleOverlayStream(subtitleOverlays, job, duration)
+        : null;
+
+      const useQsv = renderVideo &&
+        job.metadata!.width % 2 === 0 &&
+        job.metadata!.height % 2 === 0;
+      const qsvDeviceArgs = useQsv
+        ? ["-init_hw_device", "qsv:hw,child_device_type=d3d11va"]
+        : [];
+      const ffmpegArgs = ["-y", ...qsvDeviceArgs, "-i", this.requireVideoPath(active.jobId), "-i", mixedAudioPath];
+      let logoInputIndex: number | null = null;
+      if (logoInputPath) {
+        logoInputIndex = 2;
+        ffmpegArgs.push("-loop", "1", "-i", logoInputPath);
+      }
+      let subtitleInputIndex: number | null = null;
+      if (subtitleOverlayStream) {
+        subtitleInputIndex = 2 + (logoInputPath ? 1 : 0);
+        ffmpegArgs.push(
+          "-f", "rawvideo",
+          "-pixel_format", "rgba",
+          "-video_size", `${job.metadata!.width}x${subtitleOverlayStream.height}`,
+          "-framerate", String(subtitleOverlayStream.frameRate),
+          "-t", String(duration),
+          "-i", "pipe:0",
+        );
+      }
+
+      const filters: string[] = [];
+      let videoLabel = "0:v:0";
+      if (logoPath) {
+        const { x, y } = this.overlayCoordinates(settings.logoPosition, settings.logoPaddingPx);
+        filters.push(`[${logoInputIndex}:v:0]format=rgba[scaledlogo]`);
+        filters.push(`[${videoLabel}][scaledlogo]overlay=x=${x}:y=${y}:format=auto:eof_action=repeat:shortest=0[v_logo]`);
+        videoLabel = "v_logo";
+      }
+      // Preview draws subtitles and extra text after the logo. Keep the same
+      // layer order here so text remains visible when it crosses the logo.
+      if (subtitleOverlayStream && subtitleInputIndex !== null) {
+        filters.push(`[${subtitleInputIndex}:v:0]format=rgba[subtitle_stream]`);
+        filters.push(
+          `[${videoLabel}][subtitle_stream]overlay=x=0:y=${subtitleOverlayStream.top}:format=auto:shortest=1:eof_action=pass[v_subtitle]`,
+        );
+        videoLabel = "v_subtitle";
+      }
+      if (filters.length > 0) {
+        // Passing a large filter graph as a spawn argument can exceed the
+        // Windows command-line length limit for exports with many subtitles.
+        // Keep the graph in a short-lived script file instead.
+        const filterScriptPath = path.join(
+          directory,
+          `.ffmpeg-filter-${randomBytes(8).toString("hex")}.txt`,
+        );
+        active.temporaryFiles.add(filterScriptPath);
+        await fs.promises.writeFile(filterScriptPath, filters.join(";"), "utf8");
+        ffmpegArgs.push("-filter_complex_script", filterScriptPath);
+        ffmpegArgs.push("-map", `[${videoLabel}]`);
+      } else {
+        ffmpegArgs.push("-map", "0:v:0");
+      }
+      ffmpegArgs.push("-map", "1:a:0", "-map_metadata", "0", "-map_chapters", "0");
+
+      const qsvEncoderArgs = [
+        "-c:v", "h264_qsv",
+        "-preset", DEFAULT_QSV_PRESET,
+        "-global_quality", String(DEFAULT_QSV_GLOBAL_QUALITY),
+        "-pix_fmt", "yuv420p",
+      ];
+      const softwareEncoderArgs = [
+        "-c:v", "libx264", "-threads:v", String(this.getX264ThreadCount()),
+        "-preset", "medium", "-crf", "18",
+        "-pix_fmt",
+        job.metadata!.width % 2 === 0 && job.metadata!.height % 2 === 0
+          ? "yuv420p"
+          : "yuv444p",
+      ];
+      ffmpegArgs.push(
+        ...(renderVideo
+          ? useQsv ? qsvEncoderArgs : softwareEncoderArgs
+          : ["-c:v", "copy"]),
+        ...audioCodecArgs,
+        "-t",
+        String(duration),
+        "-movflags",
+        "+faststart",
+        tempOutput,
       );
+
+      this.updateVideoExportProgress(
+        active,
+        "rendering",
+        VIDEO_EXPORT_PREPARATION_PROGRESS,
+        settings.subtitlesEnabled
+          ? "Đang composite overlay phụ đề và logo lên video gốc"
+          : logoPath
+            ? "Đang composite logo lên video gốc"
+            : "Đang ghép audio final mix vào video nguồn",
+      );
+      try {
+        await this.runFfmpeg(
+          active,
+          ffmpegArgs,
+          duration,
+          renderVideo ? "rendering" : "remuxing",
+          VIDEO_EXPORT_PREPARATION_PROGRESS,
+          VIDEO_EXPORT_FFMPEG_PROGRESS_SPAN,
+          subtitleOverlayStream ?? undefined,
+        );
+      } catch (error) {
+        if (!useQsv || !this.isQsvEncoderError(error)) throw error;
+        this.assertNotCancelled(active);
+        console.warn(
+          "[VideoDubbing] Intel Quick Sync không khởi chạy được; chuyển sang libx264:",
+          error,
+        );
+        await fs.promises.rm(tempOutput, { force: true });
+        const deviceArgsIndex = ffmpegArgs.indexOf("-init_hw_device");
+        const encoderArgsIndex = ffmpegArgs.indexOf("-c:v");
+        const softwareArgs = [
+          ...ffmpegArgs.slice(0, deviceArgsIndex),
+          ...ffmpegArgs.slice(deviceArgsIndex + qsvDeviceArgs.length, encoderArgsIndex),
+          ...softwareEncoderArgs,
+          ...ffmpegArgs.slice(encoderArgsIndex + qsvEncoderArgs.length),
+        ];
+        await this.runFfmpeg(
+          active,
+          softwareArgs,
+          duration,
+          "rendering",
+          VIDEO_EXPORT_PREPARATION_PROGRESS,
+          VIDEO_EXPORT_FFMPEG_PROGRESS_SPAN,
+          subtitleOverlayStream ?? undefined,
+        );
+      }
       this.assertNotCancelled(active);
+      const validatingTask = this.getTask(active.jobId, active.kind) as VideoDubbingMediaTask | undefined;
       this.createTask(active.jobId, active.kind, {
+        ...(validatingTask || {}),
         status: "running",
         phase: "validating",
         progressPercent: 95,
+        detail: "Đang xác minh độ phân giải, FPS, audio và thời lượng đầu ra",
       });
-      this.assertOutputExists(
-        tempOutput,
-        "FFmpeg không tạo được MP4 đầu ra (codec video/container có thể không tương thích).",
-      );
+      this.assertOutputExists(tempOutput, "FFmpeg không tạo được MP4 đầu ra.");
       const probe = await this.probe(tempOutput, active);
       this.assertNotCancelled(active);
-      const videoStream = probe.streams?.find(
-        (stream) => stream.codec_type === "video",
-      );
-      const audioStream = probe.streams?.find(
-        (stream) => stream.codec_type === "audio",
-      );
+      const videoStream = probe.streams?.find((stream) => stream.codec_type === "video");
+      const audioStream = probe.streams?.find((stream) => stream.codec_type === "audio");
       const outputDuration = Number(probe.format?.duration);
       const expectedVideo = job.metadata!;
-      const durationTolerance = Math.max(
-        0.1,
-        expectedVideo.frameRate ? 2 / expectedVideo.frameRate : 0,
-      );
+      const durationTolerance = Math.max(0.1, expectedVideo.frameRate ? 2 / expectedVideo.frameRate : 0);
       if (
         !videoStream ||
         !audioStream ||
-        audioStream.codec_name !== "aac" ||
-        Number(audioStream.sample_rate) !== AUDIO_SAMPLE_RATE ||
-        audioStream.channels !== 2 ||
-        !videoStream.codec_name ||
-        videoStream.codec_name !== expectedVideo.videoCodec ||
         videoStream.width !== expectedVideo.width ||
         videoStream.height !== expectedVideo.height ||
         !Number.isFinite(outputDuration) ||
         Math.abs(outputDuration - duration) > durationTolerance
       ) {
-        throw new Error(
-          "MP4 đầu ra không vượt qua xác minh stream video/audio, độ phân giải hoặc thời lượng.",
-        );
+        throw new Error("MP4 đầu ra không vượt qua xác minh stream video/audio, độ phân giải hoặc thời lượng.");
       }
-      this.publishFile(tempOutput, path.join(directory, "output.mp4"), directory);
+      const outputPath = this.getAvailableExportPath(job, directory);
+      this.publishFile(tempOutput, outputPath, directory);
+      this.manager.setExportedVideoFileName(job.id, path.basename(outputPath));
       active.temporaryFiles.delete(tempOutput);
+      const completedTask = this.getTask(active.jobId, active.kind) as VideoDubbingMediaTask | undefined;
+      const completedAtMs = Date.now();
+      const elapsedSeconds = completedTask?.startedAtMs
+        ? Math.max(0, (completedAtMs - completedTask.startedAtMs) / 1000)
+        : 0;
       this.createTask(active.jobId, active.kind, {
+        ...(completedTask || {}),
         status: "completed",
         progressPercent: 100,
         durationSeconds: outputDuration,
-        sizeBytes: fs.statSync(path.join(directory, "output.mp4")).size,
+        sizeBytes: fs.statSync(outputPath).size,
+        detail: "Xuất MP4 hoàn tất và đã kiểm chứng các stream đầu ra",
+        completedAtMs,
+        elapsedSeconds,
       });
     } catch (error) {
       this.failOrCancel(active, error);
@@ -905,13 +1931,78 @@ export class VideoDubbingMediaCoordinator {
     }
   }
 
+  private async writeSubtitleOverlayFrames(
+    stdin: Writable,
+    active: ActiveTask,
+    stream: SubtitleOverlayStream,
+    frameWidth: number,
+  ): Promise<void> {
+    const frameBytes = frameWidth * stream.height * 4;
+    const emptyFrame = Buffer.alloc(frameBytes);
+    const rowOverlays = [...stream.overlays].sort((a, b) => a.startTime - b.startTime);
+    for (let frameIndex = 0; frameIndex < stream.frameCount; frameIndex++) {
+      this.assertNotCancelled(active);
+      const time = frameIndex / stream.frameRate;
+      const activeOverlays = rowOverlays.filter((overlay) =>
+        overlay.startTime <= time && time < overlay.endTime,
+      );
+      let frame = emptyFrame;
+      if (activeOverlays.length === 1) {
+        const overlay = activeOverlays[0];
+        frame = Buffer.alloc(frameBytes);
+        const rowBytes = overlay.width * 4;
+        for (let row = 0; row < overlay.height; row++) {
+          const sourceStart = row * rowBytes;
+          const targetStart = ((overlay.top - stream.top + row) * frameWidth + overlay.left) * 4;
+          overlay.image.copy(frame, targetStart, sourceStart, sourceStart + rowBytes);
+        }
+      } else if (activeOverlays.length > 1) {
+        frame = Buffer.alloc(frameBytes);
+        for (const overlay of activeOverlays) {
+          const rowBytes = overlay.width * 4;
+          const targetY = overlay.top - stream.top;
+          for (let row = 0; row < overlay.height; row++) {
+            let sourceOffset = row * rowBytes;
+            let targetOffset = ((targetY + row) * frameWidth + overlay.left) * 4;
+            for (let column = 0; column < overlay.width; column++) {
+              const sourceAlpha = overlay.image[sourceOffset + 3] / 255;
+              if (sourceAlpha > 0) {
+                const targetAlpha = frame[targetOffset + 3] / 255;
+                const outputAlpha = sourceAlpha + targetAlpha * (1 - sourceAlpha);
+                if (targetAlpha === 0) {
+                  frame[targetOffset] = overlay.image[sourceOffset];
+                  frame[targetOffset + 1] = overlay.image[sourceOffset + 1];
+                  frame[targetOffset + 2] = overlay.image[sourceOffset + 2];
+                } else if (outputAlpha > 0) {
+                  for (let channel = 0; channel < 3; channel++) {
+                    frame[targetOffset + channel] = Math.round(
+                      (overlay.image[sourceOffset + channel] * sourceAlpha +
+                        frame[targetOffset + channel] * targetAlpha * (1 - sourceAlpha)) /
+                        outputAlpha,
+                    );
+                  }
+                }
+                frame[targetOffset + 3] = Math.round(outputAlpha * 255);
+              }
+              sourceOffset += 4;
+              targetOffset += 4;
+            }
+          }
+        }
+      }
+      if (!stdin.write(frame)) await once(stdin, "drain");
+    }
+    stdin.end();
+  }
+
   private async runFfmpeg(
     active: ActiveTask,
     mediaArgs: string[],
     durationSeconds: number,
-    phase: "extracting" | "mixing" | "remuxing",
+    phase: "extracting" | "mixing" | "remuxing" | "rendering",
     progressStart: number,
     progressSpan: number,
+    subtitleOverlayStream?: SubtitleOverlayStream,
   ): Promise<void> {
     this.assertNotCancelled(active);
     this.updateTaskProgress(active, phase);
@@ -934,44 +2025,56 @@ export class VideoDubbingMediaCoordinator {
         {
           shell: false,
           windowsHide: true,
-          stdio: ["ignore", "pipe", "pipe"],
+          stdio: [subtitleOverlayStream ? "pipe" : "ignore", "pipe", "pipe"],
         },
       );
       active.child = child;
       let stderr = "";
       let progressBuffer = "";
+      let progressValues: Record<string, string> = {};
       let timedOut = false;
       let outputTooLarge = false;
+      let overlayInputError: Error | null = null;
       const timeout = setTimeout(() => {
         timedOut = true;
         child.kill();
       }, MAX_MEDIA_TASK_MS);
 
-      child.stdout.setEncoding("utf8");
-      child.stdout.on("data", (chunk: string) => {
+      child.stdout!.setEncoding("utf8");
+      child.stdout!.on("data", (chunk: string) => {
         progressBuffer += chunk;
         let lineEnd = progressBuffer.indexOf("\n");
         while (lineEnd >= 0) {
           const line = progressBuffer.slice(0, lineEnd).trim();
           progressBuffer = progressBuffer.slice(lineEnd + 1);
-          const match = line.match(/^out_time_(?:us|ms)=(\d+)$/);
-          if (match) {
-            const seconds = Number(match[1]) / 1_000_000;
-            const phaseProgress = Math.max(
-              0,
-              Math.min(1, seconds / durationSeconds),
-            );
-            const progressPercent = Math.min(
-              94,
-              Math.round(progressStart + progressSpan * phaseProgress),
-            );
-            this.updateTaskProgress(active, phase, progressPercent);
+          const separator = line.indexOf("=");
+          if (separator > 0) {
+            progressValues[line.slice(0, separator)] = line.slice(separator + 1);
+          }
+          if (line.startsWith("progress=")) {
+            const rawTime = progressValues.out_time_us ?? progressValues.out_time_ms;
+            if (rawTime && /^\d+$/.test(rawTime)) {
+              const seconds = Number(rawTime) / 1_000_000;
+              const phaseProgress = Math.max(
+                0,
+                Math.min(1, seconds / durationSeconds),
+              );
+              const progressPercent = Math.min(
+                94,
+                Math.round((progressStart + progressSpan * phaseProgress) * 10) / 10,
+              );
+              const detail = active.kind === "videoExport"
+                ? `${phase === "rendering" ? "Đang composite và mã hóa" : "Đang xử lý video"}: ${this.formatProgressTime(seconds)} / ${this.formatProgressTime(durationSeconds)}${progressValues.speed ? ` · ${progressValues.speed}` : ""}${progressValues.fps ? ` · ${progressValues.fps} FPS` : ""}`
+                : undefined;
+              this.updateTaskProgress(active, phase, progressPercent, detail);
+            }
+            progressValues = {};
           }
           lineEnd = progressBuffer.indexOf("\n");
         }
       });
-      child.stderr.setEncoding("utf8");
-      child.stderr.on("data", (chunk: string) => {
+      child.stderr!.setEncoding("utf8");
+      child.stderr!.on("data", (chunk: string) => {
         stderr += chunk;
         if (Buffer.byteLength(stderr) > PROCESS_OUTPUT_LIMIT) {
           stderr = stderr.slice(-PROCESS_OUTPUT_LIMIT);
@@ -979,6 +2082,19 @@ export class VideoDubbingMediaCoordinator {
           child.kill();
         }
       });
+      if (subtitleOverlayStream && child.stdin) {
+        child.stdin.on("error", (error) => {
+          overlayInputError = error;
+        });
+        void this.writeSubtitleOverlayFrames(
+          child.stdin,
+          active,
+          subtitleOverlayStream,
+          subtitleOverlayStream.width,
+        ).catch((error: unknown) => {
+          overlayInputError = error instanceof Error ? error : new Error(String(error));
+        });
+      }
       child.once("error", (error) => {
         clearTimeout(timeout);
         if (active.child === child) active.child = undefined;
@@ -1000,6 +2116,8 @@ export class VideoDubbingMediaCoordinator {
                 `FFmpeg thất bại (mã ${code ?? signal ?? "không xác định"}).`,
             ),
           );
+        } else if (overlayInputError) {
+          reject(new Error(`Không thể tạo raw subtitle overlay stream: ${overlayInputError.message}`));
         } else {
           resolve();
         }
@@ -1009,8 +2127,9 @@ export class VideoDubbingMediaCoordinator {
 
   private updateTaskProgress(
     active: ActiveTask,
-    phase: "extracting" | "mixing" | "remuxing",
+    phase: "extracting" | "mixing" | "remuxing" | "rendering",
     progressPercent?: number,
+    detail?: string,
   ): void {
     const job = this.manager.getJob(active.jobId);
     if (active.kind === "finalMix") {
@@ -1032,11 +2151,30 @@ export class VideoDubbingMediaCoordinator {
     this.manager.setMediaTask(active.jobId, active.kind, {
       ...state,
       phase,
+      ...(detail ? { detail } : {}),
       progressPercent:
         progressPercent === undefined
           ? state.progressPercent
           : Math.max(state.progressPercent || 0, progressPercent),
+      elapsedSeconds: state.startedAtMs
+        ? Math.max(0, (Date.now() - state.startedAtMs) / 1000)
+        : state.elapsedSeconds,
     });
+  }
+
+  private formatProgressTime(seconds: number): string {
+    const safeSeconds = Number.isFinite(seconds) ? Math.max(0, Math.floor(seconds)) : 0;
+    const hours = Math.floor(safeSeconds / 3600);
+    const minutes = Math.floor((safeSeconds % 3600) / 60);
+    const remainder = safeSeconds % 60;
+    return [hours, minutes, remainder]
+      .map((part) => String(part).padStart(2, "0"))
+      .join(":");
+  }
+
+  private isQsvEncoderError(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error);
+    return /h264_qsv|quick sync|\bqsv\b|\bmfx\b|d3d11|hardware device/i.test(message);
   }
 
   private async probe(
@@ -1112,6 +2250,20 @@ export class VideoDubbingMediaCoordinator {
     }
   }
 
+  private getAvailableExportPath(job: VideoDubbingJob, directory: string): string {
+    const sourceName = path.parse(job.fileName).name
+      .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_")
+      .replace(/[. ]+$/g, "") || "video";
+    const baseName = `${sourceName}_merged`;
+    let candidate = path.join(directory, `${baseName}.mp4`);
+    let suffix = 1;
+    while (fs.existsSync(candidate)) {
+      candidate = path.join(directory, `${baseName} (${suffix}).mp4`);
+      suffix++;
+    }
+    return candidate;
+  }
+
   private requireDirectory(jobId: string): string {
     const directory = this.manager.getJobDirectory(jobId);
     if (!directory) throw new Error("Không tìm thấy thư mục job Video Dubbing.");
@@ -1162,11 +2314,19 @@ export class VideoDubbingMediaCoordinator {
   private failOrCancel(active: ActiveTask, error: unknown): void {
     const previous = this.getTask(active.jobId, active.kind);
     if (!previous) return;
+    const completedAtMs = Date.now();
+    const elapsedSeconds =
+      "startedAtMs" in previous && previous.startedAtMs
+        ? Math.max(0, (completedAtMs - previous.startedAtMs) / 1000)
+        : 0;
     if (active.cancelled) {
       this.createTask(active.jobId, active.kind, {
         ...previous,
         status: "cancelled",
         error: undefined,
+        detail: "Tác vụ export đã được hủy",
+        completedAtMs,
+        elapsedSeconds,
       });
       return;
     }
@@ -1175,16 +2335,26 @@ export class VideoDubbingMediaCoordinator {
       ...previous,
       status: "failed",
       error: message,
+      detail: "Export thất bại trong khi xử lý",
+      completedAtMs,
+      elapsedSeconds,
     });
     console.error(`[VideoDubbing] ${active.kind} thất bại:`, error);
   }
 
   private async cleanup(active: ActiveTask): Promise<void> {
     for (const file of active.temporaryFiles) {
-      try {
-        await fs.promises.rm(file, { force: true });
-      } catch (error) {
-        console.error("[VideoDubbing] Không thể dọn file media tạm:", error);
+      for (let attempt = 0; attempt < 10; attempt++) {
+        try {
+          await fs.promises.rm(file, { recursive: true, force: true });
+          break;
+        } catch (error) {
+          if (attempt === 9) {
+            console.error("[VideoDubbing] Không thể dọn file media tạm:", error);
+          } else {
+            await new Promise((resolve) => setTimeout(resolve, 500));
+          }
+        }
       }
     }
     this.activeTasks.delete(active.jobId);
