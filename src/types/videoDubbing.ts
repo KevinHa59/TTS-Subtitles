@@ -216,6 +216,7 @@ export interface VideoDubbingJobHistoryItem {
 export interface VideoDubbingProject {
   id: string;
   name: string;
+  logoFileName?: string;
   jobIds: string[];
   activeJobId?: string;
   srt?: { fileName: string; content: string };

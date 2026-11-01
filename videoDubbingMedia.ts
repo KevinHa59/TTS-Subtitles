@@ -88,6 +88,12 @@ interface ProbeStream {
   channels?: number;
   r_frame_rate?: string;
   avg_frame_rate?: string;
+  pix_fmt?: string;
+  profile?: string;
+  level?: number;
+  time_base?: string;
+  channel_layout?: string;
+  extradata_hash?: string;
 }
 
 interface MediaProbe {
@@ -366,6 +372,42 @@ export class VideoDubbingMediaCoordinator {
     }
   }
 
+  async uploadProjectLogo(
+    assetsDirectory: string,
+    request: Readable,
+    extensionInput: unknown,
+  ): Promise<string> {
+    const extension = typeof extensionInput === "string" ? extensionInput.toLowerCase() : "";
+    if (![".png", ".jpg", ".jpeg", ".webp"].includes(extension)) {
+      throw new Error("Logo chỉ hỗ trợ PNG, JPG hoặc WebP.");
+    }
+    const directory = path.resolve(assetsDirectory);
+    await fs.promises.mkdir(directory, { recursive: true });
+    const temporaryPath = path.join(directory, `.overlay-logo-${randomBytes(8).toString("hex")}.upload`);
+    let receivedBytes = 0;
+    try {
+      const sizeLimiter = new Transform({
+        transform(chunk: Buffer, _encoding, callback) {
+          receivedBytes += chunk.length;
+          if (receivedBytes > MAX_LOGO_BYTES) {
+            callback(new Error("Logo vượt quá giới hạn 20 MB."));
+            return;
+          }
+          callback(null, chunk);
+        },
+      });
+      await pipeline(request, sizeLimiter, fs.createWriteStream(temporaryPath, { flags: "wx" }));
+      if (receivedBytes === 0) throw new Error("Tệp logo rỗng.");
+      this.assertLogoImage(temporaryPath, extension);
+      const fileName = `overlay-logo${extension}`;
+      this.publishFile(temporaryPath, path.join(directory, fileName), directory);
+      return fileName;
+    } catch (error) {
+      await fs.promises.rm(temporaryPath, { force: true });
+      throw error;
+    }
+  }
+
   getLogoPath(jobId: string): string | null {
     return this.manager.getOverlayLogoPath(jobId);
   }
@@ -402,6 +444,148 @@ export class VideoDubbingMediaCoordinator {
     if (!job || !directory) return null;
     const filePath = path.join(directory, job.exportedVideoFileName || "output.mp4");
     return fs.existsSync(filePath) && fs.statSync(filePath).size > 0
+      ? filePath
+      : null;
+  }
+
+  async checkExportConcatCompatibility(jobIdsInput: unknown): Promise<{ compatible: boolean; message: string }> {
+    if (!Array.isArray(jobIdsInput) || jobIdsInput.length < 2 || jobIdsInput.some((id) => typeof id !== "string")) {
+      throw new Error("Cần ít nhất hai video đã lưu để kiểm tra khả năng ghép.");
+    }
+    const jobIds = [...new Set(jobIdsInput as string[])];
+    if (jobIds.length !== jobIdsInput.length) throw new Error("Danh sách video kiểm tra bị trùng.");
+    const jobs = jobIds.map((jobId) => {
+      const job = this.manager.getJob(jobId);
+      if (!job || job.status !== "completed" || !job.metadata) {
+        throw new Error(`Video ${jobId} chưa được lưu và kiểm tra hoàn tất.`);
+      }
+      return job;
+    });
+    const active: ActiveTask = {
+      jobId: jobs[0].id,
+      kind: "videoExport",
+      cancelled: false,
+      operation: Promise.resolve(),
+      temporaryFiles: new Set(),
+    };
+    const probes = await Promise.all(jobs.map((job) => this.probe(this.requireVideoPath(job.id), active)));
+    const baseline = probes[0].streams?.find((stream) => stream.codec_type === "video");
+    if (!baseline || !baseline.width || !baseline.height || !baseline.r_frame_rate || !baseline.time_base) {
+      return { compatible: false, message: "Không đọc đủ thông số video nguồn để xác nhận khả năng ghép." };
+    }
+    for (let index = 1; index < probes.length; index++) {
+      const candidate = probes[index].streams?.find((stream) => stream.codec_type === "video");
+      if (!candidate || candidate.width !== baseline.width || candidate.height !== baseline.height ||
+          candidate.r_frame_rate !== baseline.r_frame_rate || candidate.avg_frame_rate !== baseline.avg_frame_rate ||
+          candidate.time_base !== baseline.time_base) {
+        return {
+          compatible: false,
+          message: `${jobs[index].fileName} khác độ phân giải, FPS hoặc time base so với ${jobs[0].fileName}; ghép stream-copy có thể không chính xác.`,
+        };
+      }
+    }
+    return {
+      compatible: true,
+      message: `${jobs.length} video có cùng độ phân giải, FPS và time base. Audio export được chuẩn hóa; sẽ kiểm tra lại các stream đầu ra trước khi ghép.`,
+    };
+  }
+
+  async concatExportedVideos(jobIdsInput: unknown): Promise<{ jobId: string; fileName: string; sizeBytes: number }> {
+    if (!Array.isArray(jobIdsInput) || jobIdsInput.length < 2 || jobIdsInput.some((id) => typeof id !== "string")) {
+      throw new Error("Cần ít nhất hai job đã export để ghép nối.");
+    }
+    const jobIds = [...new Set(jobIdsInput as string[])];
+    if (jobIds.length !== jobIdsInput.length) throw new Error("Danh sách job ghép nối bị trùng.");
+
+    const entries = jobIds.map((jobId) => {
+      const job = this.manager.getJob(jobId);
+      const filePath = this.getVideoExportPath(jobId);
+      if (!job || job.status !== "completed" || job.videoExport?.status !== "completed" || !filePath) {
+        throw new Error(`Job ${jobId} chưa có video export hoàn tất.`);
+      }
+      return { job, filePath };
+    });
+
+    const active: ActiveTask = {
+      jobId: entries[0].job.id,
+      kind: "videoExport",
+      cancelled: false,
+      operation: Promise.resolve(),
+      temporaryFiles: new Set(),
+    };
+    const probes = await Promise.all(entries.map(({ filePath }) => this.probe(filePath, active)));
+    const streamSignature = (probe: MediaProbe) => JSON.stringify((probe.streams || []).map((stream) => ({
+      codec_type: stream.codec_type,
+      codec_name: stream.codec_name,
+      width: stream.width,
+      height: stream.height,
+      pix_fmt: stream.pix_fmt,
+      profile: stream.profile,
+      level: stream.level,
+      sample_rate: stream.sample_rate,
+      channels: stream.channels,
+      channel_layout: stream.channel_layout,
+      extradata_hash: stream.extradata_hash,
+      r_frame_rate: stream.r_frame_rate,
+      avg_frame_rate: stream.avg_frame_rate,
+      time_base: stream.time_base,
+    })));
+    const expectedSignature = streamSignature(probes[0]);
+    if (!probes[0].streams?.some((stream) => stream.codec_type === "video") ||
+        !probes[0].streams?.some((stream) => stream.codec_type === "audio") ||
+        probes.some((probe) => streamSignature(probe) !== expectedSignature)) {
+      throw new Error("Các video có thông số video/audio khác nhau nên không thể ghép stream-copy. Không có video nào bị encode lại.");
+    }
+
+    const directory = this.requireDirectory(entries[0].job.id);
+    const safeBaseName = path.parse(entries[0].job.fileName).name
+      .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_")
+      .replace(/[. ]+$/g, "") || "video";
+    let outputPath = path.join(directory, `${safeBaseName}_joined.mp4`);
+    let suffix = 1;
+    while (fs.existsSync(outputPath)) outputPath = path.join(directory, `${safeBaseName}_joined (${suffix++}).mp4`);
+    const temporaryOutput = path.join(directory, `.joined-${randomBytes(8).toString("hex")}.mp4`);
+    const concatListPath = path.join(directory, `.concat-${randomBytes(8).toString("hex")}.txt`);
+    const quoteConcatPath = (filePath: string) => `file '${filePath.replace(/\\/g, "/").replace(/'/g, "'\\''")}'`;
+    await fs.promises.writeFile(concatListPath, `${entries.map(({ filePath }) => quoteConcatPath(filePath)).join("\n")}\n`, "utf8");
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const child = spawn(this.options.ffmpegPath, [
+          "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+          "-f", "concat", "-safe", "0", "-i", concatListPath,
+          "-map", "0", "-c", "copy", "-movflags", "+faststart", temporaryOutput,
+        ], { shell: false, windowsHide: true, stdio: ["ignore", "ignore", "pipe"] });
+        let stderr = "";
+        const timeout = setTimeout(() => child.kill(), MAX_MEDIA_TASK_MS);
+        child.stderr!.setEncoding("utf8");
+        child.stderr!.on("data", (chunk: string) => { stderr = (stderr + chunk).slice(-PROCESS_OUTPUT_LIMIT); });
+        child.once("error", (error) => { clearTimeout(timeout); reject(new Error(`Không thể chạy FFmpeg concat: ${error.message}`)); });
+        child.once("close", (code) => {
+          clearTimeout(timeout);
+          if (code === 0) resolve();
+          else reject(new Error(`FFmpeg không thể ghép video bằng stream copy${stderr ? `: ${stderr.trim()}` : "."}`));
+        });
+      });
+      this.assertOutputExists(temporaryOutput, "FFmpeg không tạo được video ghép nối.");
+      const outputProbe = await this.probe(temporaryOutput, active);
+      if (streamSignature(outputProbe) !== expectedSignature) throw new Error("Video ghép nối không vượt qua xác minh stream; file nguồn vẫn được giữ nguyên.");
+      await fs.promises.rename(temporaryOutput, outputPath);
+      return { jobId: entries[0].job.id, fileName: path.basename(outputPath), sizeBytes: fs.statSync(outputPath).size };
+    } finally {
+      await Promise.all([
+        fs.promises.rm(concatListPath, { force: true }),
+        fs.promises.rm(temporaryOutput, { force: true }),
+      ]);
+    }
+  }
+
+  getConcatenatedVideoPath(jobId: string, fileName: unknown): string | null {
+    if (typeof fileName !== "string" || path.basename(fileName) !== fileName || !fileName.endsWith(".mp4")) return null;
+    const directory = this.manager.getJobDirectory(jobId);
+    if (!directory) return null;
+    const filePath = path.resolve(directory, fileName);
+    if (!filePath.startsWith(`${path.resolve(directory)}${path.sep}`)) return null;
+    return fs.existsSync(filePath) && fs.statSync(filePath).isFile() && fs.statSync(filePath).size > 0
       ? filePath
       : null;
   }
@@ -2189,8 +2373,9 @@ export class VideoDubbingMediaCoordinator {
           "error",
           "-protocol_whitelist",
           "file,crypto,data",
+          "-show_data_hash", "sha256",
           "-show_entries",
-          "format=duration,size:stream=codec_type,codec_name,width,height,duration,sample_rate,channels,r_frame_rate,avg_frame_rate",
+          "format=duration,size:stream=codec_type,codec_name,width,height,duration,sample_rate,channels,channel_layout,r_frame_rate,avg_frame_rate,pix_fmt,profile,level,time_base,extradata_hash",
           "-of",
           "json",
           filePath,

@@ -10,6 +10,7 @@ const MAX_PROJECT_BYTES = 32 * 1024 * 1024;
 /** Durable project metadata. Media and generated artifacts remain owned by their existing job folders. */
 export class VideoDubbingProjects {
   private readonly projects = new Map<string, VideoDubbingProject>();
+  private readonly projectDirectories = new Map<string, string>();
   private readonly persistedSourceSrtContent = new Map<string, string>();
   private initialized?: Promise<void>;
   private readonly directory: string;
@@ -48,7 +49,10 @@ export class VideoDubbingProjects {
       createdAt: now,
       updatedAt: now,
     };
+    const directory = path.join(this.directory, this.folderName(project.name, project.id));
+    fs.mkdirSync(directory, { recursive: false });
     this.projects.set(project.id, project);
+    this.projectDirectories.set(project.id, directory);
     this.persist(project);
     return structuredClone(project);
   }
@@ -56,9 +60,16 @@ export class VideoDubbingProjects {
   async update(id: string, input: unknown): Promise<VideoDubbingProject> {
     await this.initialize();
     const project = this.require(id);
+    const previousName = project.name;
     if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Dữ liệu project không hợp lệ.");
     const value = input as Record<string, unknown>;
     if (value.name !== undefined) project.name = this.validateName(value.name);
+    if (value.logoFileName !== undefined) {
+      if (value.logoFileName !== null && (typeof value.logoFileName !== "string" || !/^overlay-logo\.(png|jpe?g|webp)$/.test(value.logoFileName))) {
+        throw new Error("Tên logo project không hợp lệ.");
+      }
+      project.logoFileName = (value.logoFileName as string | null) ?? undefined;
+    }
     if (value.jobIds !== undefined) {
       if (!Array.isArray(value.jobIds) || value.jobIds.length > 500 || value.jobIds.some((item) => typeof item !== "string" || !/^vd_[0-9a-f]{32}$/.test(item))) {
         throw new Error("Danh sách job trong project không hợp lệ.");
@@ -98,6 +109,14 @@ export class VideoDubbingProjects {
       else if (!value.workspace || typeof value.workspace !== "object" || Array.isArray(value.workspace) || Buffer.byteLength(JSON.stringify(value.workspace), "utf8") > MAX_PROJECT_BYTES) throw new Error("Settings project không hợp lệ hoặc vượt giới hạn dung lượng.");
       else project.workspace = value.workspace as Record<string, unknown>;
     }
+    if (project.name !== previousName) {
+      try {
+        await this.renameProjectDirectory(project);
+      } catch (error) {
+        project.name = previousName;
+        throw error;
+      }
+    }
     project.updatedAt = Date.now();
     this.persist(project);
     return structuredClone(project);
@@ -111,17 +130,34 @@ export class VideoDubbingProjects {
     for (const jobId of project.jobIds) await deleteJob(jobId);
     this.projects.delete(id);
     await fs.promises.rm(this.projectPath(id), { recursive: true, force: true });
+    this.projectDirectories.delete(id);
     return true;
+  }
+
+  getProjectDirectory(id: string): string | null {
+    if (!PROJECT_ID.test(id) || !this.projects.has(id)) return null;
+    return this.projectPath(id);
+  }
+
+  getProjectJobsDirectory(id: string): string | null {
+    const directory = this.getProjectDirectory(id);
+    return directory ? path.join(directory, "jobs") : null;
+  }
+
+  getProjectAssetsDirectory(id: string): string | null {
+    const directory = this.getProjectDirectory(id);
+    return directory ? path.join(directory, "assets") : null;
   }
 
   private async restore(): Promise<void> {
     await fs.promises.mkdir(this.directory, { recursive: true });
     for (const entry of await fs.promises.readdir(this.directory, { withFileTypes: true })) {
-      if (!entry.isDirectory() || !PROJECT_ID.test(entry.name)) continue;
+      if (!entry.isDirectory()) continue;
       try {
         const data = JSON.parse(await fs.promises.readFile(path.join(this.projectPath(entry.name), "project.json"), "utf8")) as VideoDubbingProject;
-        if (data.id !== entry.name || typeof data.name !== "string" || !Array.isArray(data.jobIds) || !Number.isFinite(data.createdAt) || !Number.isFinite(data.updatedAt)) continue;
-        this.projects.set(entry.name, data);
+        if (!PROJECT_ID.test(data.id) || typeof data.name !== "string" || !Array.isArray(data.jobIds) || !Number.isFinite(data.createdAt) || !Number.isFinite(data.updatedAt) || this.projects.has(data.id)) continue;
+        this.projects.set(data.id, data);
+        this.projectDirectories.set(data.id, path.join(this.directory, entry.name));
         for (const sourceSrt of data.sourceSrts || []) {
           if (typeof sourceSrt.id === "string" && /^[a-zA-Z0-9_-]{1,100}$/.test(sourceSrt.id) && typeof sourceSrt.content === "string") {
             this.persistSourceSrtFile(data.id, sourceSrt.id, sourceSrt.content);
@@ -142,7 +178,23 @@ export class VideoDubbingProjects {
     return value.trim();
   }
 
-  private projectPath(id: string): string { return path.join(this.directory, id); }
+  private projectPath(id: string): string {
+    return this.projectDirectories.get(id) || path.join(this.directory, id);
+  }
+
+  private folderName(name: string, id: string): string {
+    const slug = name.normalize("NFKD").replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64) || "project";
+    return `${slug}_${id}`;
+  }
+
+  private async renameProjectDirectory(project: VideoDubbingProject): Promise<void> {
+    const current = this.projectPath(project.id);
+    const next = path.join(this.directory, this.folderName(project.name, project.id));
+    if (path.resolve(current).toLowerCase() === path.resolve(next).toLowerCase()) return;
+    await fs.promises.rename(current, next);
+    this.projectDirectories.set(project.id, next);
+  }
 
   private persist(project: VideoDubbingProject): void {
     const dir = this.projectPath(project.id);

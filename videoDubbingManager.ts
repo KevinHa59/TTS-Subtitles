@@ -313,7 +313,7 @@ export class VideoDubbingManager {
       options.maxUploadBytes ?? configuredMaxUploadBytes();
   }
 
-  createJob(fileName: string, sizeBytes: number): VideoDubbingJob {
+  createJob(fileName: string, sizeBytes: number, projectJobsDirectory?: string): VideoDubbingJob {
     if (this.jobs.size >= MAX_JOBS) {
       throw new Error(
         "Đã đạt giới hạn 10 job Video Dubbing. Hãy bỏ bớt job đã kiểm tra.",
@@ -333,13 +333,21 @@ export class VideoDubbingManager {
     }
 
     const id = `vd_${randomBytes(16).toString("hex")}`;
-    const directory = path.resolve(this.options.storageDirectory, id);
     const root = path.resolve(this.options.storageDirectory);
+    let jobsRoot = root;
+    if (projectJobsDirectory) {
+      const projectsRoot = path.join(root, "projects");
+      jobsRoot = path.resolve(projectJobsDirectory);
+      if (!jobsRoot.startsWith(`${projectsRoot}${path.sep}`)) {
+        throw new Error("Thư mục lưu job phải nằm bên trong project.");
+      }
+    }
+    const directory = path.resolve(jobsRoot, id);
     if (!directory.startsWith(`${root}${path.sep}`)) {
       throw new Error("Không thể tạo thư mục job an toàn.");
     }
 
-    fs.mkdirSync(root, { recursive: true });
+    fs.mkdirSync(jobsRoot, { recursive: true });
     fs.mkdirSync(directory, { recursive: false });
     const now = Date.now();
     const state: VideoDubbingJob = {
@@ -427,6 +435,54 @@ export class VideoDubbingManager {
             : undefined,
         }
       : null;
+  }
+
+  getJobDirectory(jobId: string): string | null {
+    return this.findJob(jobId)?.directory || null;
+  }
+
+  isJobStorageBusy(jobId: string): boolean {
+    const job = this.findJob(jobId);
+    return Boolean(job?.uploadRequest || job?.probeProcess || job?.activeTask);
+  }
+
+  getJobIdsUnderDirectory(directory: string): string[] {
+    const root = path.resolve(directory);
+    return [...this.jobs.values()]
+      .filter((job) => path.resolve(job.directory).startsWith(`${root}${path.sep}`))
+      .map((job) => job.state.id);
+  }
+
+  async moveJobToProject(jobId: string, projectJobsDirectory: string): Promise<void> {
+    const job = this.findJob(jobId);
+    if (!job) throw new Error(`Không tìm thấy job ${jobId} để chuyển vào project.`);
+    const root = path.resolve(this.options.storageDirectory);
+    const projectsRoot = path.join(root, "projects");
+    const destinationRoot = path.resolve(projectJobsDirectory);
+    if (!destinationRoot.startsWith(`${projectsRoot}${path.sep}`)) {
+      throw new Error("Thư mục đích job nằm ngoài project.");
+    }
+    if (job.directory === path.join(destinationRoot, jobId)) return;
+    if (job.uploadRequest || job.probeProcess || job.activeTask) {
+      throw new Error("Không thể di chuyển job khi đang tải hoặc xử lý video.");
+    }
+    const destination = path.join(destinationRoot, jobId);
+    await fs.promises.mkdir(destinationRoot, { recursive: true });
+    if (fs.existsSync(destination)) throw new Error("Thư mục job đích đã tồn tại.");
+    await fs.promises.rename(job.directory, destination);
+    job.directory = destination;
+    job.videoPath = path.join(destination, "source.video");
+  }
+
+  relocateProjectJobs(oldProjectDirectory: string, newProjectDirectory: string): void {
+    const oldRoot = path.resolve(oldProjectDirectory);
+    const newRoot = path.resolve(newProjectDirectory);
+    for (const job of this.jobs.values()) {
+      const directory = path.resolve(job.directory);
+      if (!directory.startsWith(`${oldRoot}${path.sep}`)) continue;
+      job.directory = path.join(newRoot, path.relative(oldRoot, directory));
+      job.videoPath = path.join(job.directory, "source.video");
+    }
   }
 
   setAutoPipelineConfig(
@@ -610,10 +666,6 @@ export class VideoDubbingManager {
     this.persistJob(job);
   }
 
-  getJobDirectory(jobId: string): string | null {
-    return this.findJob(jobId)?.directory || null;
-  }
-
   updateOverlaySettings(
     jobId: string,
     settings: VideoDubbingOverlaySettings,
@@ -730,19 +782,60 @@ export class VideoDubbingManager {
     this.persistJob(job);
   }
 
+  setSharedOverlayLogo(jobId: string, fileName: string | undefined, forceInvalidateExport = false): void {
+    const job = this.findJob(jobId);
+    if (!job) throw new Error("Không tìm thấy job Video Dubbing.");
+    if (!fileName) {
+      this.setOverlayLogo(jobId, undefined);
+      return;
+    }
+    const localPath = path.join(job.directory, fileName);
+    if (job.state.overlaySettings?.logoFileName === fileName) {
+      fs.rmSync(localPath, { force: true });
+      if (forceInvalidateExport && job.state.videoExport?.sizeBytes) {
+        job.state.videoExport = {
+          ...job.state.videoExport,
+          status: "stale",
+          error: "Logo project đã thay đổi; hãy xuất lại MP4.",
+        };
+        if (job.state.autoPipeline) job.state.autoPipeline.artifacts.export = undefined;
+        job.state.updatedAt = Date.now();
+        this.persistJob(job);
+      }
+      return;
+    }
+    const wasEnabled = job.state.overlaySettings?.logoEnabled ?? false;
+    this.setOverlayLogo(jobId, fileName);
+    job.state.overlaySettings!.logoEnabled = wasEnabled;
+    fs.rmSync(localPath, { force: true });
+    this.persistJob(job);
+  }
+
   getOverlayLogoPath(jobId: string): string | null {
     const job = this.findJob(jobId);
     const fileName = job?.state.overlaySettings?.logoFileName;
     if (!job || !fileName || !/^overlay-logo\.(png|jpe?g|webp)$/.test(fileName)) {
       return null;
     }
-    const filePath = path.resolve(job.directory, fileName);
-    if (!filePath.startsWith(`${path.resolve(job.directory)}${path.sep}`)) {
-      return null;
-    }
+    const localPath = path.resolve(job.directory, fileName);
+    if (!localPath.startsWith(`${path.resolve(job.directory)}${path.sep}`)) return null;
     try {
-      const stats = fs.statSync(filePath);
-      return stats.isFile() && stats.size > 0 ? filePath : null;
+      const stats = fs.statSync(localPath);
+      if (stats.isFile() && stats.size > 0) return localPath;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+
+    const projectsRoot = path.resolve(this.options.storageDirectory, "projects");
+    const relativeJobPath = path.relative(projectsRoot, path.resolve(job.directory));
+    const parts = relativeJobPath.split(path.sep);
+    if (parts.length !== 3 || parts[1] !== "jobs" || parts[2] !== jobId) return null;
+    const projectDirectory = path.join(projectsRoot, parts[0]);
+    const sharedPath = path.resolve(projectDirectory, "assets", fileName);
+    if (!sharedPath.startsWith(`${path.resolve(projectDirectory)}${path.sep}`)) return null;
+    try {
+      const stats = fs.statSync(sharedPath);
+      return stats.isFile() && stats.size > 0 ? sharedPath : null;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       return null;
@@ -923,10 +1016,28 @@ export class VideoDubbingManager {
     const root = path.resolve(this.options.storageDirectory);
     await fs.promises.mkdir(root, { recursive: true });
     const entries = await fs.promises.readdir(root, { withFileTypes: true });
-    for (const entry of entries) {
-      if (!entry.isDirectory() || !JOB_ID_PATTERN.test(entry.name)) continue;
-      if (this.jobs.has(entry.name)) continue;
-      const directory = path.resolve(root, entry.name);
+    const jobDirectories = entries
+      .filter((entry) => entry.isDirectory() && JOB_ID_PATTERN.test(entry.name))
+      .map((entry) => path.join(root, entry.name));
+    const projectsRoot = path.join(root, "projects");
+    try {
+      for (const projectEntry of await fs.promises.readdir(projectsRoot, { withFileTypes: true })) {
+        if (!projectEntry.isDirectory()) continue;
+        const projectJobsDirectory = path.join(projectsRoot, projectEntry.name, "jobs");
+        try {
+          for (const jobEntry of await fs.promises.readdir(projectJobsDirectory, { withFileTypes: true })) {
+            if (jobEntry.isDirectory() && JOB_ID_PATTERN.test(jobEntry.name)) {
+              jobDirectories.push(path.join(projectJobsDirectory, jobEntry.name));
+            }
+          }
+        } catch { /* Older projects may not have a jobs directory yet. */ }
+      }
+    } catch { /* Project storage may not exist yet. */ }
+
+    for (const candidateDirectory of jobDirectories) {
+      const jobId = path.basename(candidateDirectory);
+      if (this.jobs.has(jobId)) continue;
+      const directory = path.resolve(candidateDirectory);
       if (!directory.startsWith(`${root}${path.sep}`)) continue;
       const videoPath = path.join(directory, "source.video");
       const metadataPath = path.join(directory, "job.json");
@@ -961,7 +1072,7 @@ export class VideoDubbingManager {
             await fs.promises.readFile(candidatePath, "utf8"),
           );
           if (
-            parsed?.id !== entry.name ||
+            parsed?.id !== jobId ||
             typeof parsed.fileName !== "string" ||
             !Number.isSafeInteger(parsed.sizeBytes) ||
             parsed.sizeBytes <= 0 ||
@@ -1083,7 +1194,7 @@ export class VideoDubbingManager {
           }
         }
         state = {
-          id: entry.name,
+          id: jobId,
           status: "interrupted",
           fileName: "video-restored.mp4",
           sizeBytes,
@@ -1142,7 +1253,7 @@ export class VideoDubbingManager {
         };
       }
       const job: InternalJob = { state, directory, videoPath };
-      this.jobs.set(entry.name, job);
+      this.jobs.set(jobId, job);
 
       try {
         const stats = await fs.promises.stat(videoPath);

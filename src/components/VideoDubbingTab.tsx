@@ -451,6 +451,8 @@ export default function VideoDubbingTab() {
   const [subtitleLineSpacingPx, setSubtitleLineSpacingPx] = useState(0);
   const [subtitlePaddingPx, setSubtitlePaddingPx] = useState(8);
   const [subtitleMarginPx, setSubtitleMarginPx] = useState(32);
+  const subtitleMarginSaveTimerRef = useRef<number | null>(null);
+  const pendingSubtitleMarginSaveRef = useRef<{ jobId: string; value: number } | null>(null);
   const [subtitlePosition, setSubtitlePosition] =
     useState<VideoDubbingOverlayPosition>("bottom-center");
   const [subtitleBackgroundImage, setSubtitleBackgroundImage] = useState<
@@ -494,6 +496,10 @@ export default function VideoDubbingTab() {
     Record<number, QueueItemState>
   >({});
   const [queueRunning, setQueueRunning] = useState(false);
+  const [joinAfterQueue, setJoinAfterQueue] = useState(false);
+  const [concatPreflight, setConcatPreflight] = useState<{ status: "idle" | "checking" | "compatible" | "incompatible"; message: string }>({ status: "idle", message: "" });
+  const [concatStatus, setConcatStatus] = useState<"idle" | "running" | "completed" | "failed" | "skipped">("idle");
+  const [joinedVideo, setJoinedVideo] = useState<{ jobId: string; fileName: string; sizeBytes: number } | null>(null);
   const [settingsSyncRunning, setSettingsSyncRunning] = useState(false);
   const [settingsSyncMessage, setSettingsSyncMessage] = useState<string | null>(null);
   const autoPipelineEnabled = true;
@@ -787,7 +793,7 @@ export default function VideoDubbingTab() {
     subtitleBold, subtitleItalic, subtitleUnderline, subtitleTextCase,
     subtitleOutlineEnabled, subtitleOutlineColor, subtitleOutlineWidthPx,
     subtitleCharacterSpacingPx, subtitleLineSpacingPx, subtitlePaddingPx,
-    subtitleMarginPx, subtitlePosition, subtitleBackgroundImage,
+    subtitlePosition, subtitleBackgroundImage,
     subtitleCueOverrides, textOverlays, subtitleTimelineZoom,
   });
 
@@ -895,7 +901,6 @@ export default function VideoDubbingTab() {
       if (typeof w.subtitleCharacterSpacingPx === "number") setSubtitleCharacterSpacingPx(w.subtitleCharacterSpacingPx);
       if (typeof w.subtitleLineSpacingPx === "number") setSubtitleLineSpacingPx(w.subtitleLineSpacingPx);
       if (typeof w.subtitlePaddingPx === "number") setSubtitlePaddingPx(w.subtitlePaddingPx);
-      if (typeof w.subtitleMarginPx === "number") setSubtitleMarginPx(w.subtitleMarginPx);
       if (typeof w.subtitlePosition === "string") setSubtitlePosition(w.subtitlePosition as VideoDubbingOverlayPosition);
       if (typeof w.subtitleBackgroundImage === "string" || w.subtitleBackgroundImage === null) setSubtitleBackgroundImage(w.subtitleBackgroundImage as string | null);
       if (Array.isArray(w.subtitleCueOverrides)) setSubtitleCueOverrides(w.subtitleCueOverrides as typeof subtitleCueOverrides);
@@ -932,19 +937,85 @@ export default function VideoDubbingTab() {
     finally { setProjectBusy(false); }
   };
 
-  const openHistoryJob = (item: VideoDubbingJobHistoryItem) => {
+  const renameProject = async (project: VideoDubbingProject) => {
+    const name = window.prompt("Tên project mới", project.name)?.trim();
+    if (!name || name === project.name) return;
+    setProjectBusy(true);
+    setProjectError(null);
+    ++projectSaveRequestRef.current;
+    try {
+      const response = await fetch(`/api/video-dubbing/projects/${project.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.project) throw new Error(result.error || "Không thể đổi tên project.");
+      const renamed = result.project as VideoDubbingProject;
+      setProjects((items) => items.map((item) => item.id === renamed.id ? renamed : item));
+      if (activeProject?.id === renamed.id) {
+        setActiveProject(renamed);
+        importProjectRef.current = renamed;
+      }
+    } catch (error) {
+      setProjectError(error instanceof Error ? error.message : "Không thể đổi tên project.");
+    } finally { setProjectBusy(false); }
+  };
+
+  const saveSubtitleMarginForJob = async (jobId: string, value: number) => {
+    try {
+      const response = await fetch(`/api/video-dubbing/jobs/${jobId}/overlay-settings`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ subtitleMarginPx: value }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.job) throw new Error(result.error || "Không thể lưu khoảng cách phụ đề.");
+      const savedJob = result.job as VideoDubbingJob;
+      setVideoFiles((items) => items.map((item) => item.job?.id === jobId ? { ...item, job: savedJob } : item));
+      setJobHistory((items) => items.map((item) => item.job.id === jobId ? { ...item, job: savedJob } : item));
+      setVideo((current) => current?.job?.id === jobId ? { ...current, job: savedJob } : current);
+    } catch (error) {
+      setMediaError(error instanceof Error ? error.message : "Không thể lưu khoảng cách phụ đề.");
+    }
+  };
+
+  const flushSubtitleMarginSave = () => {
+    if (subtitleMarginSaveTimerRef.current !== null) {
+      window.clearTimeout(subtitleMarginSaveTimerRef.current);
+      subtitleMarginSaveTimerRef.current = null;
+    }
+    const pending = pendingSubtitleMarginSaveRef.current;
+    pendingSubtitleMarginSaveRef.current = null;
+    if (pending) void saveSubtitleMarginForJob(pending.jobId, pending.value);
+  };
+
+  const scheduleSubtitleMarginSave = (jobId: string, value: number) => {
+    pendingSubtitleMarginSaveRef.current = { jobId, value };
+    if (subtitleMarginSaveTimerRef.current !== null) window.clearTimeout(subtitleMarginSaveTimerRef.current);
+    subtitleMarginSaveTimerRef.current = window.setTimeout(() => {
+      subtitleMarginSaveTimerRef.current = null;
+      const pending = pendingSubtitleMarginSaveRef.current;
+      pendingSubtitleMarginSaveRef.current = null;
+      if (pending) void saveSubtitleMarginForJob(pending.jobId, pending.value);
+    }, 350);
+  };
+
+  const openHistoryJob = (item: VideoDubbingJobHistoryItem | VideoDubbingJob) => {
+    flushSubtitleMarginSave();
+    const selectedJob = "job" in item ? item.job : item;
     videoGenerationRef.current++;
     uploadRef.current?.abort();
     uploadRef.current = null;
-    activeJobIdRef.current = item.job.id;
+    activeJobIdRef.current = selectedJob.id;
     setVideo({
-      fileName: item.job.fileName,
-      sizeBytes: item.job.sizeBytes,
+      fileName: selectedJob.fileName,
+      sizeBytes: selectedJob.sizeBytes,
       progress: 100,
-      job: item.job,
-      warning: item.warning,
+      job: selectedJob,
+      warning: "job" in item ? item.warning : undefined,
     });
-    if (!activeProject?.jobIds.includes(item.job.id)) {
+    if (!activeProject?.jobIds.includes(selectedJob.id)) {
       setSrt(null);
       setSrtContent("");
     }
@@ -952,6 +1023,67 @@ export default function VideoDubbingTab() {
     setMediaError(null);
     setSeparationError(null);
     if (srtInputRef.current) srtInputRef.current.value = "";
+  };
+
+  const previewSourceVideo = async (selectedJob: VideoDubbingJob) => {
+    if (selectedJob.status !== "completed" || queueRunning || settingsSyncRunning) return;
+    let project = importProjectRef.current || activeProject;
+    if (project && !project.jobIds.includes(selectedJob.id)) {
+      try {
+        project = await attachJobToProject(project, selectedJob.id);
+      } catch (error) {
+        setProjectError(error instanceof Error ? error.message : "Không thể mở preview của video trong project.");
+        return;
+      }
+    }
+
+    openHistoryJob(selectedJob);
+    setSubtitleCueOverrides(null);
+    const selectedSubtitle = pairVideoDubbingQueueRows(
+      [{ id: selectedJob.id, name: selectedJob.fileName, size: selectedJob.sizeBytes, job: selectedJob }],
+      subtitleFiles,
+    )[0]?.subtitle;
+    if (selectedSubtitle?.content && selectedSubtitle.analysis) {
+      setSrt({
+        fileName: selectedSubtitle.fileName,
+        sizeBytes: selectedSubtitle.sizeBytes,
+        content: selectedSubtitle.content,
+        analysis: selectedSubtitle.analysis,
+        error: selectedSubtitle.error,
+      });
+      setSrtContent(selectedSubtitle.content);
+    } else if (project?.activeJobId === selectedJob.id && project.srt) {
+      const analysis = analyzeSrtContent(project.srt.content);
+      setSrt({
+        fileName: project.srt.fileName,
+        sizeBytes: new Blob([project.srt.content]).size,
+        content: project.srt.content,
+        analysis,
+      });
+      setSrtContent(project.srt.content);
+    } else {
+      setSrt(null);
+      setSrtContent("");
+    }
+
+    const latestProject = importProjectRef.current || project;
+    if (latestProject?.jobIds.includes(selectedJob.id) && latestProject.activeJobId !== selectedJob.id) {
+      try {
+        const response = await fetch(`/api/video-dubbing/projects/${latestProject.id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ activeJobId: selectedJob.id }),
+        });
+        const result = await response.json();
+        if (!response.ok || !result.project) throw new Error(result.error || "Không thể lưu video preview hiện tại.");
+        const savedProject = result.project as VideoDubbingProject;
+        setActiveProject(savedProject);
+        importProjectRef.current = savedProject;
+        setProjects((items) => items.map((entry) => entry.id === savedProject.id ? savedProject : entry));
+      } catch (error) {
+        setProjectError(error instanceof Error ? error.message : "Không thể lưu video preview hiện tại.");
+      }
+    }
   };
 
   const deleteHistoryJob = async (item: VideoDubbingJobHistoryItem) => {
@@ -1224,7 +1356,6 @@ export default function VideoDubbingTab() {
     setSubtitleCharacterSpacingPx(settings?.subtitleCharacterSpacingPx ?? 0);
     setSubtitleLineSpacingPx(settings?.subtitleLineSpacingPx ?? 0);
     setSubtitlePaddingPx(settings?.subtitlePaddingPx ?? 8);
-    setSubtitleMarginPx(settings?.subtitleMarginPx ?? 32);
     setSubtitlePosition(settings?.subtitlePosition ?? "bottom-center");
     {
       const savedBackgroundImage = settings?.subtitleBackgroundImage ?? null;
@@ -1239,6 +1370,12 @@ export default function VideoDubbingTab() {
         normalizedBackgroundImage ?? current,
       );
     }
+  }, [video?.job?.id, activeProject?.id]);
+
+  // The subtitle margin is per-video even while the rest of the preview settings
+  // may be hydrated from a shared project workspace.
+  useEffect(() => {
+    setSubtitleMarginPx(video?.job?.overlaySettings?.subtitleMarginPx ?? 32);
   }, [video?.job?.id, activeProject?.id]);
 
   useEffect(() => {
@@ -1489,7 +1626,7 @@ export default function VideoDubbingTab() {
       const createResponse = await fetch("/api/video-dubbing/jobs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fileName: file.name, sizeBytes: file.size }),
+        body: JSON.stringify({ fileName: file.name, sizeBytes: file.size, projectId: activeProject?.id }),
       });
       const createResult = await createResponse.json();
       if (!createResponse.ok || !createResult.job) {
@@ -1665,10 +1802,13 @@ export default function VideoDubbingTab() {
   };
 
   const attachJobToProject = async (project: VideoDubbingProject, jobId: string): Promise<VideoDubbingProject> => {
-    const jobIds = [...new Set([...project.jobIds, jobId])];
-    const response = await fetch(`/api/video-dubbing/projects/${project.id}`, {
+    const latestProject = importProjectRef.current?.id === project.id
+      ? importProjectRef.current
+      : project;
+    const jobIds = [...new Set([...latestProject.jobIds, jobId])];
+    const response = await fetch(`/api/video-dubbing/projects/${latestProject.id}`, {
       method: "PUT", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ jobIds, activeJobId: project.activeJobId || jobId }),
+      body: JSON.stringify({ jobIds, activeJobId: latestProject.activeJobId || jobId }),
     });
     const result = await response.json();
     if (!response.ok || !result.project) throw new Error(result.error || "Không thể liên kết video với project.");
@@ -1696,7 +1836,7 @@ export default function VideoDubbingTab() {
         const project = await ensureImportProject(file.name);
         const createResponse = await fetch("/api/video-dubbing/jobs", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ fileName: file.name, sizeBytes: file.size }),
+          body: JSON.stringify({ fileName: file.name, sizeBytes: file.size, projectId: project.id }),
         });
         const createdResult = await createResponse.json();
         if (!createResponse.ok || !createdResult.job) throw new Error(createdResult.error || "Không thể khởi tạo vùng lưu video.");
@@ -2139,7 +2279,7 @@ export default function VideoDubbingTab() {
     const createResponse = await fetch("/api/video-dubbing/jobs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ fileName: file.name, sizeBytes: file.size }),
+      body: JSON.stringify({ fileName: file.name, sizeBytes: file.size, projectId: activeProject?.id }),
     });
     const createResult = await createResponse.json();
     if (!createResponse.ok || !createResult.job) {
@@ -2237,20 +2377,8 @@ export default function VideoDubbingTab() {
       throw new Error("Logo đang bật nhưng chưa có logo trong preview để áp dụng cho hàng đợi.");
     }
 
-    if (logoEnabled && sourceJob && targetJob.id !== sourceJob.id) {
-      const logoResponse = await fetch(`/api/video-dubbing/jobs/${sourceJob.id}/logo`);
-      if (!logoResponse.ok) throw new Error("Không thể đọc logo từ video preview để chia sẻ cho hàng đợi.");
-      const logoBlob = await logoResponse.blob();
-      const extension = /\.(png|jpe?g|webp)$/i.exec(sourceLogoName!)?.[0]?.toLowerCase();
-      if (!extension) throw new Error("Định dạng logo của video preview không hợp lệ.");
-      const uploadResponse = await fetch(`/api/video-dubbing/jobs/${targetJob.id}/logo?extension=${encodeURIComponent(extension)}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/octet-stream" },
-        body: logoBlob,
-      });
-      const uploadResult = await uploadResponse.json();
-      if (!uploadResponse.ok || !uploadResult.job) throw new Error(uploadResult.error || "Không thể sao chép logo vào video trong hàng đợi.");
-      targetJob = uploadResult.job as VideoDubbingJob;
+    if (activeProject && !activeProject.jobIds.includes(targetJob.id)) {
+      await attachJobToProject(activeProject, targetJob.id);
     }
 
     const duration = targetJob.metadata?.durationSeconds ?? Number.POSITIVE_INFINITY;
@@ -2361,9 +2489,55 @@ export default function VideoDubbingTab() {
     }
   };
 
+  const checkQueueConcatCompatibility = async (jobIds: string[]) => {
+    setConcatPreflight({ status: "checking", message: "Đang kiểm tra thông số video nguồn…" });
+    try {
+      const response = await fetch("/api/video-dubbing/exports/concat/preflight", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jobIds }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Không thể kiểm tra khả năng ghép video.");
+      const compatible = Boolean(result.compatible);
+      setConcatPreflight({ status: compatible ? "compatible" : "incompatible", message: result.message || "Không thể xác định khả năng ghép." });
+      return compatible;
+    } catch (error) {
+      setConcatPreflight({ status: "incompatible", message: error instanceof Error ? error.message : "Không thể kiểm tra khả năng ghép video." });
+      return false;
+    }
+  };
+
+  const toggleJoinAfterQueue = async () => {
+    if (joinAfterQueue) {
+      setJoinAfterQueue(false);
+      setConcatPreflight({ status: "idle", message: "" });
+      return;
+    }
+    const jobIds = queueRows.map((row) => row.video?.job?.id);
+    if (jobIds.length < 2 || jobIds.some((id) => !id)) {
+      setConcatPreflight({ status: "incompatible", message: "Hãy lưu ít nhất hai video vào project để kiểm tra khả năng ghép trước." });
+      return;
+    }
+    if (await checkQueueConcatCompatibility(jobIds as string[])) setJoinAfterQueue(true);
+  };
+
   const startQueue = async () => {
     if (!canStartQueue || !selectedVoice) return;
+    let shouldJoinAfterQueue = joinAfterQueue;
+    if (shouldJoinAfterQueue) {
+      const jobIds = queueRows.map((row) => row.video?.job?.id);
+      if (jobIds.length < 2 || jobIds.some((id) => !id) || !(await checkQueueConcatCompatibility(jobIds as string[]))) {
+        setJoinAfterQueue(false);
+        setMediaError("Preflight không xác nhận được khả năng ghép. Hàng đợi chưa chạy; có thể bỏ chọn ghép nối để export riêng từng video.");
+        return;
+      }
+    }
+    const completedJobIds: string[] = [];
+    let queueHadFailure = false;
     queueCancelRef.current = false;
+    setJoinedVideo(null);
+    setConcatStatus("idle");
     setQueueRunning(true);
     setAutoPipelineError(null);
     setQueueStates(
@@ -2379,6 +2553,7 @@ export default function VideoDubbingTab() {
         const file = row.video;
         const subtitle = row.subtitle;
         if (!file || !subtitle?.analysis) {
+          queueHadFailure = true;
           setQueueStates((current) => ({
             ...current,
             [index]: {
@@ -2524,6 +2699,7 @@ export default function VideoDubbingTab() {
           }
 
           if (completedJob) {
+            completedJobIds.push(completedJob.id);
             setQueueStates((current) => ({
               ...current,
               [index]: {
@@ -2535,6 +2711,7 @@ export default function VideoDubbingTab() {
             }));
           }
         } catch (error) {
+          queueHadFailure = true;
           const message =
             error instanceof Error ? error.message : "Không thể xử lý video.";
           setQueueStates((current) => ({
@@ -2549,6 +2726,33 @@ export default function VideoDubbingTab() {
           if (queueCancelRef.current) break;
         } finally {
           queueCurrentJobIdRef.current = null;
+        }
+      }
+      if (shouldJoinAfterQueue) {
+        if (queueCancelRef.current || queueHadFailure || completedJobIds.length !== queueRows.length) {
+          setConcatStatus("skipped");
+        } else if (completedJobIds.length < 2) {
+          setConcatStatus("failed");
+          setMediaError("Cần ít nhất hai video hoàn tất để ghép nối.");
+        } else {
+          setConcatStatus("running");
+          setMediaError(null);
+          try {
+            const response = await fetch("/api/video-dubbing/exports/concat", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ jobIds: completedJobIds }),
+            });
+            const result = await response.json();
+            if (!response.ok || !result.fileName || !result.jobId) {
+              throw new Error(result.error || "Không thể ghép video bằng stream copy.");
+            }
+            setJoinedVideo({ jobId: result.jobId, fileName: result.fileName, sizeBytes: result.sizeBytes });
+            setConcatStatus("completed");
+          } catch (error) {
+            setConcatStatus("failed");
+            setMediaError(error instanceof Error ? error.message : "Không thể ghép video bằng stream copy.");
+          }
         }
       }
     } finally {
@@ -2897,8 +3101,11 @@ export default function VideoDubbingTab() {
     }
     setLogoUploading(true);
     try {
+      const uploadUrl = activeProject
+        ? `/api/video-dubbing/projects/${activeProject.id}/logo?extension=${encodeURIComponent(extension)}`
+        : `/api/video-dubbing/jobs/${job.id}/logo?extension=${encodeURIComponent(extension)}`;
       const response = await fetch(
-        `/api/video-dubbing/jobs/${job.id}/logo?extension=${encodeURIComponent(extension)}`,
+        uploadUrl,
         {
           method: "PUT",
           headers: { "Content-Type": "application/octet-stream" },
@@ -2908,6 +3115,12 @@ export default function VideoDubbingTab() {
       const result = await response.json();
       if (!response.ok) {
         throw new Error(result.error || "Không thể tải logo lên.");
+      }
+      if (result.project) {
+        const project = result.project as VideoDubbingProject;
+        setActiveProject(project);
+        importProjectRef.current = project;
+        setProjects((items) => [project, ...items.filter((item) => item.id !== project.id)]);
       }
       if (result.job) {
         setVideo((current) =>
@@ -3529,7 +3742,7 @@ export default function VideoDubbingTab() {
             {projects.length === 0 ? <p className="rounded-xl border border-slate-800 p-4 text-sm text-slate-500">Chưa có project được lưu.</p> : <ul className="space-y-2">{projects.map((project) => (
               <li key={project.id} className={`flex flex-wrap items-center justify-between gap-3 rounded-xl border p-3 ${activeProject?.id === project.id ? "border-sky-500/40 bg-sky-950/15" : "border-slate-800 bg-slate-950/40"}`}>
                 <div className="min-w-0"><p className="truncate text-sm font-semibold text-white">{project.name}{defaultProjectId === project.id && <span className="ml-2 rounded-full border border-emerald-500/30 px-2 py-0.5 text-[10px] font-medium text-emerald-300">Mặc định</span>}</p><p className="mt-1 text-xs text-slate-500">{project.jobIds.length} video/job · cập nhật {new Date(project.updatedAt).toLocaleString()}</p></div>
-                <div className="flex flex-wrap gap-2"><button type="button" disabled={projectBusy} onClick={() => void openProject(project)} className="rounded-lg border border-sky-500/30 px-3 py-1.5 text-xs text-sky-200 disabled:opacity-50">Mở</button><button type="button" onClick={() => setDefaultProject(defaultProjectId === project.id ? null : project)} className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300">{defaultProjectId === project.id ? "Bỏ mặc định" : "Đặt mặc định"}</button><button type="button" disabled={projectBusy} onClick={() => void deleteProject(project)} className="rounded-lg border border-rose-500/30 px-3 py-1.5 text-xs text-rose-200 disabled:opacity-50">Xóa</button></div>
+                <div className="flex flex-wrap gap-2"><button type="button" disabled={projectBusy} onClick={() => void openProject(project)} className="rounded-lg border border-sky-500/30 px-3 py-1.5 text-xs text-sky-200 disabled:opacity-50">Mở</button><button type="button" disabled={projectBusy} onClick={() => void renameProject(project)} className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 disabled:opacity-50">Đổi tên</button><button type="button" onClick={() => setDefaultProject(defaultProjectId === project.id ? null : project)} className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300">{defaultProjectId === project.id ? "Bỏ mặc định" : "Đặt mặc định"}</button><button type="button" disabled={projectBusy} onClick={() => void deleteProject(project)} className="rounded-lg border border-rose-500/30 px-3 py-1.5 text-xs text-rose-200 disabled:opacity-50">Xóa</button></div>
               </li>
             ))}</ul>}
           </section>
@@ -3569,6 +3782,13 @@ export default function VideoDubbingTab() {
         <div className="flex flex-wrap items-center gap-2">
           <button type="button" onClick={() => void startFinalMix()} disabled={!canRenderFinalMix} className="inline-flex items-center gap-2 rounded-lg bg-cyan-400 px-3 py-2 text-xs font-bold text-slate-950 disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-500"><Volume2 className="h-4 w-4" />Render final mix</button>
           <button type="button" onClick={() => void startVideoExport()} disabled={!canExportVideo || logoUploading} className="inline-flex items-center gap-2 rounded-lg bg-sky-500 px-3 py-2 text-xs font-bold text-slate-950 disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-500"><Film className="h-4 w-4" />Export</button>
+          <div className="flex max-w-sm flex-col gap-1">
+            <label title="Sau khi tất cả video trong hàng đợi export thành công, ghép chúng bằng stream copy không encode lại." className={`inline-flex items-center gap-2 rounded-lg border border-slate-700 px-3 py-2 text-xs text-slate-200 ${queueRunning || queueRows.length < 2 || concatPreflight.status === "checking" ? "cursor-not-allowed opacity-50" : "cursor-pointer hover:border-sky-500/40"}`}>
+              <input type="checkbox" checked={joinAfterQueue} onChange={() => void toggleJoinAfterQueue()} disabled={queueRunning || queueRows.length < 2 || concatPreflight.status === "checking"} className="accent-sky-400" />
+              Ghép nối sau khi hàng đợi xong
+            </label>
+            {concatPreflight.status !== "idle" && <span className={`max-w-sm text-[10px] leading-relaxed ${concatPreflight.status === "incompatible" ? "text-rose-300" : concatPreflight.status === "compatible" ? "text-emerald-300" : "text-slate-400"}`}>{concatPreflight.message}</span>}
+          </div>
           <button type="button" onClick={() => void openExportFolder()} disabled={!job} className="inline-flex items-center gap-2 rounded-lg border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-200 hover:border-slate-500 disabled:opacity-40"><FolderOpen className="h-4 w-4" />Open Export Folder</button>
           <button type="button" onClick={() => { setProjectsExpanded(true); void loadProjects(); }} className="inline-flex items-center gap-2 rounded-lg border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-200 hover:border-sky-400/50"><FolderOpen className="h-4 w-4" />Project{activeProject ? ` · ${activeProject.name}` : ""}</button>
           <button type="button" onClick={() => setGuideOpen(true)} className="inline-flex items-center gap-2 rounded-lg border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-200 hover:border-cyan-400/50"><BookOpen className="h-4 w-4" />Hướng Dẫn</button>
@@ -3579,6 +3799,13 @@ export default function VideoDubbingTab() {
             <div className="space-y-2 rounded-xl border border-amber-500/25 bg-amber-950/20 p-3 text-xs text-amber-100">
               <div className="flex justify-between gap-2"><span className="font-semibold">Hàng đợi đang chạy</span><span>{Object.values(queueStates).filter((item) => item.status === "completed").length}/{queueRowCount}</span></div>
               <div role="progressbar" aria-label="Tiến trình hàng đợi video" aria-valuemin={0} aria-valuemax={queueRowCount} aria-valuenow={Object.values(queueStates).filter((item) => item.status === "completed").length} className="h-2 overflow-hidden rounded-full bg-slate-800"><div className="h-full bg-amber-400 transition-all" style={{ width: `${queueRowCount ? (Object.values(queueStates).filter((item) => item.status === "completed").length / queueRowCount) * 100 : 0}%` }} /></div>
+            </div>
+          )}
+          {concatStatus !== "idle" && (
+            <div className={`space-y-2 rounded-xl border p-3 text-xs ${concatStatus === "failed" ? "border-rose-500/25 bg-rose-950/20 text-rose-100" : "border-sky-500/25 bg-sky-950/20 text-sky-100"}`}>
+              <div className="font-semibold">{concatStatus === "running" ? "Đang ghép video · stream copy" : concatStatus === "completed" ? "Đã ghép video · không encode lại" : concatStatus === "skipped" ? "Không ghép video vì hàng đợi chưa hoàn tất toàn bộ" : "Không thể ghép video"}</div>
+              {joinedVideo && concatStatus === "completed" && <a href={`/api/video-dubbing/jobs/${joinedVideo.jobId}/concatenated-video?fileName=${encodeURIComponent(joinedVideo.fileName)}`} className="inline-flex items-center gap-2 rounded-lg border border-sky-400/30 px-2.5 py-1.5 font-semibold text-sky-100 hover:bg-sky-900/30">Tải {joinedVideo.fileName} · {formatFileSize(joinedVideo.sizeBytes)}</a>}
+              {concatStatus === "failed" && mediaError && <p className="text-rose-200">{mediaError}</p>}
             </div>
           )}
           {autoPipeline && (
@@ -4911,10 +5138,10 @@ export default function VideoDubbingTab() {
                   ? activeProject.srt?.fileName
                   : undefined;
                 return (
-                  <tr key={`saved-${item.job.id}`} className={job?.id === item.job.id ? "bg-sky-950/20" : "bg-slate-950/20"}>
-                    <td className="min-w-0 p-2"><button type="button" onClick={() => openHistoryJob(item)} className="flex w-full min-w-0 items-center gap-2 rounded-lg px-1 py-2 text-left hover:bg-slate-800/70"><Film className="h-4 w-4 shrink-0 text-sky-300" /><span className="min-w-0 flex-1 truncate text-sm text-slate-100">{item.job.fileName}</span></button></td>
+                  <tr key={`saved-${item.job.id}`} aria-current={job?.id === item.job.id ? "true" : undefined} className={job?.id === item.job.id ? "bg-sky-900/30 ring-1 ring-inset ring-sky-400/35" : "bg-slate-950/20"}>
+                    <td className="min-w-0 p-2"><button type="button" onClick={() => openHistoryJob(item)} className="flex w-full min-w-0 items-center gap-2 rounded-lg px-1 py-2 text-left hover:bg-slate-800/70"><Film className="h-4 w-4 shrink-0 text-sky-300" /><span className="min-w-0 flex-1 truncate text-sm text-slate-100">{item.job.fileName}</span>{job?.id === item.job.id && <span className="shrink-0 rounded-full bg-sky-400/15 px-2 py-0.5 text-[10px] font-semibold text-sky-200">Đang preview</span>}</button></td>
                     <td className="whitespace-nowrap p-2 text-center"><span title={srtName || (cues.length ? "Phụ đề đã lưu trong job" : "Chưa có SRT lưu cho job này")}><FileText className={`mx-auto h-4 w-4 ${srtName || cues.length ? "text-cyan-300" : "text-slate-600"}`} /></span>{cues.length > 0 && <div className="mt-1 text-[10px] text-slate-500">{cues.length} câu</div>}</td>
-                    <td className="min-w-0 p-2"><div className="flex flex-wrap items-center justify-end gap-2"><span className="text-[11px] text-slate-400">{statusLabel(item.job)}</span><button type="button" onClick={() => openHistoryJob(item)} className="rounded-lg border border-sky-500/30 px-2.5 py-1.5 text-xs text-sky-200 hover:bg-sky-950/30">Mở video</button></div></td>
+                    <td className="min-w-0 p-2"><div className="flex flex-wrap items-center justify-end gap-2"><span className="text-[11px] text-slate-400">{statusLabel(item.job)}</span><button type="button" onClick={() => void previewSourceVideo(item.job)} disabled={item.job.status !== "completed" || queueRunning || settingsSyncRunning} title={`Preview ${item.job.fileName}`} aria-label={`Preview ${item.job.fileName}`} className="rounded-lg border border-sky-500/30 p-2 text-sky-200 hover:bg-sky-950/30 disabled:cursor-not-allowed disabled:opacity-40"><Play className="h-4 w-4" /></button></div></td>
                   </tr>
                 );
               })}
@@ -4932,6 +5159,8 @@ export default function VideoDubbingTab() {
                   return (
                     <tr
                       key={`${file?.id || "no-video"}-${file?.name || ""}-${file?.size || 0}-${file?.lastModified || 0}-${subtitle?.id || "no-srt"}-${index}`}
+                      aria-current={file?.job?.id && job?.id === file.job.id ? "true" : undefined}
+                      className={file?.job?.id && job?.id === file.job.id ? "bg-sky-900/30 ring-1 ring-inset ring-sky-400/35" : undefined}
                     >
                       <td className="min-w-0 p-2">
                         <div
@@ -4957,6 +5186,7 @@ export default function VideoDubbingTab() {
                             <span className="min-w-0 flex-1 truncate text-sm text-slate-200">
                               {file?.name || "Chọn hoặc thả video"}
                             </span>
+                            {file?.job?.id === job?.id && <span className="shrink-0 rounded-full bg-sky-400/15 px-2 py-0.5 text-[10px] font-semibold text-sky-200">Đang preview</span>}
                             {file && !validVideo && (
                               <span className="text-[11px] text-rose-300">
                                 Định dạng không hỗ trợ
@@ -5002,6 +5232,18 @@ export default function VideoDubbingTab() {
                       </td>
                       <td className="min-w-0 p-2">
                         <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
+                          {file?.job && (
+                            <button
+                              type="button"
+                              onClick={() => void previewSourceVideo(file.job!)}
+                              disabled={file.job.status !== "completed" || file.uploading || queueRunning || settingsSyncRunning}
+                              title={`Preview ${file.name}`}
+                              aria-label={`Preview ${file.name}`}
+                              className="rounded-lg border border-sky-500/30 bg-sky-950/20 p-2 text-sky-200 hover:bg-sky-950/40 disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              <Play className="h-4 w-4" />
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={() => {
@@ -5804,8 +6046,14 @@ export default function VideoDubbingTab() {
                         step="4"
                         value={subtitleMarginPx}
                         onChange={(event) =>
-                          setSubtitleMarginPx(Number(event.target.value))
+                          (() => {
+                            const value = Number(event.target.value);
+                            setSubtitleMarginPx(value);
+                            if (job?.id) scheduleSubtitleMarginSave(job.id, value);
+                          })()
                         }
+                        onPointerUp={flushSubtitleMarginSave}
+                        onKeyUp={flushSubtitleMarginSave}
                         disabled={
                           !srt?.analysis?.items.length &&
                           !job?.overlaySettings?.subtitles.length

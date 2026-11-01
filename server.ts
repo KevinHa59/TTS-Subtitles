@@ -78,6 +78,7 @@ import {
   VideoDubbingMasterRequest,
 } from "./videoDubbingMaster";
 import { normalizeVieNeuAudioForTimeline } from "./videoDubbingAudio";
+import { vieneuWorkerPool } from "./vieneuWorkerPool";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -427,87 +428,24 @@ async function synthesizeVieNeuVoice(
   outputWavPath: string,
   speed = 1.0,
 ): Promise<{ success: boolean; duration: number }> {
-  const cleanVoice = voiceId.replace(/^vieneu:/, "").trim();
   const catalogVoice = AVAILABLE_MODELS.find(
     (voice) => voice.id === voiceId || voice.modelId === voiceId,
   );
   const vieneuVoice = catalogVoice
     ? catalogVoice.name.replace(/\s+\(VieNeu Turbo\)$/, "")
-    : cleanVoice;
-  const scriptPath = path.resolve(__dirname, "scripts", "generate_vieneu.py");
-  const vieneuVenvPython = path.resolve(
-    __dirname,
-    ".venv-vieneu",
-    process.platform === "win32" ? "Scripts/python.exe" : "bin/python",
-  );
-  const python =
-    process.env.VIENEU_PYTHON ||
-    (fs.existsSync(vieneuVenvPython)
-      ? vieneuVenvPython
-      : process.env.PYTHON ||
-        (process.platform === "win32" ? "python" : "python3"));
-
-  let stdout = "";
-  let stderr = "";
-  let exitCode: number | null;
+    : voiceId.replace(/^vieneu:/, "").trim();
   try {
-    ({ stdout, stderr, exitCode } = await runChildProcess(
-      python,
-      [
-        scriptPath,
-        "--text",
-        text,
-        "--voice",
-        vieneuVoice,
-        "--output",
-        outputWavPath,
-        "--speed",
-        String(speed),
-        "--model-dir",
-        path.relative(__dirname, VIENEU_MODELS_DIR),
-      ],
-      {
-        cwd: __dirname,
-        env: {
-          ...process.env,
-          PYTHONUTF8: "1",
-          PYTHONIOENCODING: "utf-8",
-        },
-      },
-    ));
+    await vieneuWorkerPool.synthesize(text, vieneuVoice, outputWavPath, speed);
   } catch (error) {
     throw new Error(
-      `Không thể khởi chạy VieNeu-TTS: ${error instanceof Error ? error.message : String(error)}`,
+      `Không thể tạo VieNeu-TTS: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
 
-  if (
-    exitCode === 0 &&
-    fs.existsSync(outputWavPath) &&
-    fs.statSync(outputWavPath).size > 44
-  ) {
-    const dur = getAudioDuration(outputWavPath) || 0;
-    return { success: true, duration: dur };
+  if (!fs.existsSync(outputWavPath) || fs.statSync(outputWavPath).size <= 44) {
+    throw new Error("VieNeu worker không tạo được WAV đầu ra hợp lệ.");
   }
-
-  let errorDetail = "";
-  if (stderr) {
-    try {
-      const parsed = JSON.parse(stderr.trim());
-      if (parsed.error) errorDetail = parsed.error;
-    } catch {
-      errorDetail = stderr.trim();
-    }
-  }
-
-  if (!errorDetail && stdout) {
-    errorDetail = stdout.trim();
-  }
-
-  throw new Error(
-    errorDetail ||
-      `Chưa tìm thấy mô hình VieNeu-TTS v3 Turbo hoặc chưa cài đặt thư viện 'vieneu'. Vui lòng mở file HD-VIENEU-TTS.md để xem hướng dẫn tải và vị trí đặt file mô hình tại 'models/vieneu/'.`,
-  );
+  return { success: true, duration: getAudioDuration(outputWavPath) || 0 };
 }
 
 function runChildProcess(

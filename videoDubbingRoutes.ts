@@ -120,6 +120,48 @@ export function createVideoDubbingRouter(
   const router = Router();
   const pipelineIsBusy = (jobId: string) =>
     pipelineCoordinator?.isBusy(jobId) === true;
+  const projectJobIsBusy = (jobId: string) =>
+    videoDubbingManager.isJobStorageBusy(jobId) ||
+    masterCoordinator?.isBusy(jobId) === true ||
+    mediaCoordinator?.isBusy(jobId) === true ||
+    separationCoordinator?.isBusy(jobId) === true ||
+    pipelineCoordinator?.isBusy(jobId) === true;
+
+  const ensureProjectLogo = async (inputProject: NonNullable<Awaited<ReturnType<VideoDubbingProjects["get"]>>>) => {
+    if (!projects) return inputProject;
+    let project = inputProject;
+    const assetsDirectory = projects.getProjectAssetsDirectory(project.id)!;
+    let fileName = project.logoFileName;
+    let sharedPath = fileName ? path.join(assetsDirectory, fileName) : null;
+    if (sharedPath && (!fs.existsSync(sharedPath) || fs.statSync(sharedPath).size <= 0)) {
+      fileName = undefined;
+      sharedPath = null;
+    }
+
+    if (!fileName) {
+      const sourceJob = project.jobIds
+        .map((jobId) => ({ jobId, job: videoDubbingManager.getJob(jobId) }))
+        .find(({ job }) => Boolean(job?.overlaySettings?.logoFileName && videoDubbingManager.getOverlayLogoPath(job.id)));
+      const legacyFileName = sourceJob?.job?.overlaySettings?.logoFileName;
+      const sourcePath = sourceJob?.job ? videoDubbingManager.getOverlayLogoPath(sourceJob.job.id) : null;
+      if (legacyFileName && sourcePath) {
+        await fs.promises.mkdir(assetsDirectory, { recursive: true });
+        const targetPath = path.join(assetsDirectory, legacyFileName);
+        if (path.resolve(sourcePath) !== path.resolve(targetPath)) {
+          await fs.promises.copyFile(sourcePath, targetPath);
+        }
+        fileName = legacyFileName;
+        project = await projects.update(project.id, { logoFileName: fileName });
+      }
+    }
+
+    if (fileName) {
+      for (const jobId of project.jobIds) {
+        if (videoDubbingManager.getJob(jobId)) videoDubbingManager.setSharedOverlayLogo(jobId, fileName);
+      }
+    }
+    return project;
+  };
 
   router.use(async (_req: Request, res: Response, next) => {
     try {
@@ -214,17 +256,79 @@ export function createVideoDubbingRouter(
 
   router.get("/projects/:projectId", async (req: Request, res: Response) => {
     if (!projects) return res.status(501).json({ error: "Project chưa được cấu hình." });
-    const project = await projects.get(req.params.projectId);
+    let project = await projects.get(req.params.projectId);
+    if (project) {
+      try {
+        const jobsDirectory = projects.getProjectJobsDirectory(project.id)!;
+        for (const jobId of project.jobIds) {
+          if (!projectJobIsBusy(jobId)) await videoDubbingManager.moveJobToProject(jobId, jobsDirectory);
+        }
+        project = await ensureProjectLogo(project);
+      } catch (error) {
+        console.error("[VideoDubbing] Không thể chuyển job cũ vào project:", error);
+        return res.status(500).json({ error: "Không thể sắp xếp dữ liệu job vào thư mục project." });
+      }
+    }
     return project ? res.json({ success: true, project }) : res.status(404).json({ error: "Không tìm thấy project." });
   });
 
   router.put("/projects/:projectId", async (req: Request, res: Response) => {
     if (!projects) return res.status(501).json({ error: "Project chưa được cấu hình." });
     try {
+      const current = await projects.get(req.params.projectId);
+      if (!current) return res.status(404).json({ error: "Không tìm thấy project." });
       const requestedJobIds = req.body?.jobIds;
       if (Array.isArray(requestedJobIds) && requestedJobIds.some((id: unknown) => typeof id !== "string" || !videoDubbingManager.getJob(id))) return res.status(400).json({ error: "Project chỉ có thể tham gia job còn tồn tại." });
-      return res.json({ success: true, project: await projects.update(req.params.projectId, req.body) });
+      const jobIds = Array.isArray(requestedJobIds) ? requestedJobIds as string[] : current.jobIds;
+      if (req.body?.name !== undefined && jobIds.some(projectJobIsBusy)) {
+        return res.status(409).json({ error: "Hãy chờ các tác vụ của project hoàn tất trước khi đổi tên thư mục." });
+      }
+      for (const jobId of jobIds) {
+        if (!current.jobIds.includes(jobId) && projectJobIsBusy(jobId)) {
+          return res.status(409).json({ error: "Không thể chuyển job khi video đang được tải lên hoặc xử lý." });
+        }
+      }
+      const oldDirectory = projects.getProjectDirectory(current.id)!;
+      let project = await projects.update(req.params.projectId, req.body);
+      const newDirectory = projects.getProjectDirectory(project.id)!;
+      if (oldDirectory !== newDirectory) videoDubbingManager.relocateProjectJobs(oldDirectory, newDirectory);
+      const jobsDirectory = projects.getProjectJobsDirectory(project.id)!;
+      for (const jobId of jobIds) await videoDubbingManager.moveJobToProject(jobId, jobsDirectory);
+      project = await ensureProjectLogo(project);
+      return res.json({ success: true, project });
     } catch (error) { return res.status(400).json({ error: error instanceof Error ? error.message : "Không thể lưu project." }); }
+  });
+
+  router.put("/projects/:projectId/logo", async (req: Request, res: Response) => {
+    if (!projects || !mediaCoordinator) return res.status(501).json({ error: "Logo project chưa được cấu hình." });
+    try {
+      let project = await projects.get(req.params.projectId);
+      if (!project) return res.status(404).json({ error: "Không tìm thấy project." });
+      if (!req.is("application/octet-stream")) {
+        return res.status(415).json({ error: "Logo phải được gửi dưới dạng luồng application/octet-stream." });
+      }
+      if (project.jobIds.some(projectJobIsBusy)) {
+        return res.status(409).json({ error: "Hãy chờ các tác vụ của project hoàn tất trước khi thay logo." });
+      }
+      const previousFileName = project.logoFileName;
+      const assetsDirectory = projects.getProjectAssetsDirectory(project.id)!;
+      const fileName = await mediaCoordinator.uploadProjectLogo(assetsDirectory, req, req.query.extension);
+      project = await projects.update(project.id, { logoFileName: fileName });
+      project = await ensureProjectLogo(project);
+      for (const jobId of project.jobIds) {
+        if (videoDubbingManager.getJob(jobId)) {
+          videoDubbingManager.setSharedOverlayLogo(jobId, fileName, true);
+        }
+      }
+      if (previousFileName && previousFileName !== fileName) {
+        await fs.promises.rm(path.join(assetsDirectory, previousFileName), { force: true });
+      }
+      return res.json({ success: true, project, job: project.activeJobId ? videoDubbingManager.getJob(project.activeJobId) : null });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Không thể tải logo project lên.";
+      console.error("[VideoDubbing] Lỗi tải logo project:", error);
+      if (!res.headersSent && !req.destroyed) return res.status(message.includes("Không tìm thấy") ? 404 : 400).json({ error: message });
+    }
   });
 
   router.delete("/projects/:projectId", async (req: Request, res: Response) => {
@@ -232,21 +336,39 @@ export function createVideoDubbingRouter(
     try {
       const project = await projects.get(req.params.projectId);
       if (!project) return res.status(404).json({ error: "Không tìm thấy project." });
-      for (const jobId of project.jobIds) {
+      const projectDirectory = projects.getProjectDirectory(project.id)!;
+      const jobIds = [...new Set([...project.jobIds, ...videoDubbingManager.getJobIdsUnderDirectory(projectDirectory)])];
+      for (const jobId of jobIds) {
         await pipelineCoordinator?.cancel(jobId);
         await separationCoordinator?.cancel(jobId);
         await mediaCoordinator?.cancel(jobId);
         await masterCoordinator?.cancel(jobId);
+      }
+      for (const jobId of jobIds) {
+        if (!project.jobIds.includes(jobId)) await videoDubbingManager.deleteJob(jobId);
       }
       const deleted = await projects.delete(req.params.projectId, (jobId) => videoDubbingManager.deleteJob(jobId));
       return deleted ? res.json({ success: true }) : res.status(404).json({ error: "Không tìm thấy project." });
     } catch (error) { console.error("[VideoDubbing] Lỗi xóa project:", error); return res.status(500).json({ error: "Không thể xóa toàn bộ dữ liệu project." }); }
   });
 
-  router.post("/jobs", (req: Request, res: Response) => {
+  router.post("/jobs", async (req: Request, res: Response) => {
     try {
-      const { fileName, sizeBytes } = req.body || {};
-      const job = videoDubbingManager.createJob(fileName, Number(sizeBytes));
+      const { fileName, sizeBytes, projectId } = req.body || {};
+      let projectJobsDirectory: string | undefined;
+      if (projectId !== undefined) {
+        let project = await projects?.get(String(projectId));
+        if (!project || !projects) return res.status(404).json({ error: "Không tìm thấy project để lưu video." });
+        projectJobsDirectory = projects.getProjectJobsDirectory(project.id) || undefined;
+        const job = videoDubbingManager.createJob(fileName, Number(sizeBytes), projectJobsDirectory);
+        project = await projects.update(project.id, {
+          jobIds: [...new Set([...project.jobIds, job.id])],
+          activeJobId: project.activeJobId || job.id,
+        });
+        project = await ensureProjectLogo(project);
+        return res.status(201).json({ success: true, job: videoDubbingManager.getJob(job.id), project });
+      }
+      const job = videoDubbingManager.createJob(fileName, Number(sizeBytes), projectJobsDirectory);
       res.status(201).json({ success: true, job });
     } catch (error) {
       const message =
@@ -805,6 +927,35 @@ export function createVideoDubbingRouter(
         error instanceof Error ? error.message : "Không thể bắt đầu xuất MP4.";
       return res.status(400).json({ error: message });
     }
+  });
+
+  router.post("/exports/concat", async (req: Request, res: Response) => {
+    if (!mediaCoordinator) return res.status(501).json({ error: "Ghép video chưa được cấu hình." });
+    try {
+      const result = await mediaCoordinator.concatExportedVideos(req.body?.jobIds);
+      return res.json({ success: true, ...result });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Không thể ghép video bằng stream copy.";
+      return res.status(400).json({ error: message });
+    }
+  });
+
+  router.post("/exports/concat/preflight", async (req: Request, res: Response) => {
+    if (!mediaCoordinator) return res.status(501).json({ error: "Kiểm tra ghép video chưa được cấu hình." });
+    try {
+      const result = await mediaCoordinator.checkExportConcatCompatibility(req.body?.jobIds);
+      return res.json(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Không thể kiểm tra khả năng ghép video.";
+      return res.status(400).json({ error: message });
+    }
+  });
+
+  router.get("/jobs/:jobId/concatenated-video", (req: Request, res: Response) => {
+    if (!videoDubbingManager.isValidJobId(req.params.jobId)) return res.status(400).json({ error: "ID job video không hợp lệ." });
+    const filePath = mediaCoordinator?.getConcatenatedVideoPath(req.params.jobId, req.query.fileName);
+    if (!filePath) return res.status(404).json({ error: "Không tìm thấy video đã ghép." });
+    streamVideoDubbingMp4(req, res, filePath, path.basename(filePath));
   });
 
   router.put("/jobs/:jobId/overlay-settings", (req: Request, res: Response) => {
