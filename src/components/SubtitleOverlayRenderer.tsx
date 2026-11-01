@@ -117,7 +117,7 @@ export default function SubtitleOverlayRenderer({
               width: "auto",
               maxWidth: "none",
               transform: "translateX(-50%)",
-              zIndex: 0,
+              zIndex: 1,
             }}
           />
           <span
@@ -147,7 +147,7 @@ export default function SubtitleOverlayRenderer({
               width: "auto",
               maxWidth: "none",
               transform: "translateX(50%)",
-              zIndex: 0,
+              zIndex: 1,
             }}
           />
         </>

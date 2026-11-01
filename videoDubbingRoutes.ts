@@ -943,7 +943,7 @@ export function createVideoDubbingRouter(
   router.post("/exports/concat/preflight", async (req: Request, res: Response) => {
     if (!mediaCoordinator) return res.status(501).json({ error: "Kiểm tra ghép video chưa được cấu hình." });
     try {
-      const result = await mediaCoordinator.checkExportConcatCompatibility(req.body?.jobIds);
+      const result = await mediaCoordinator.checkExportConcatCompatibility(req.body?.jobIds, req.body?.exportQuality, req.body?.willRenderVideo);
       return res.json(result);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Không thể kiểm tra khả năng ghép video.";

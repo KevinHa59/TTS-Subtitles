@@ -55,6 +55,8 @@ export type VideoDubbingOverlayPosition =
   | "bottom-center"
   | "bottom-right";
 
+export type VideoDubbingExportQuality = "source" | "low" | "medium" | "high";
+
 export interface VideoDubbingSubtitleCue {
   startTime: number;
   endTime: number;
@@ -84,6 +86,7 @@ export interface VideoDubbingTextOverlayCue extends VideoDubbingSubtitleCue {
 }
 
 export interface VideoDubbingOverlaySettings {
+  exportQuality?: VideoDubbingExportQuality;
   logoEnabled: boolean;
   logoFileName?: string;
   logoWidthPercent: number;

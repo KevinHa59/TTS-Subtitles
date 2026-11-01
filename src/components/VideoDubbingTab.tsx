@@ -31,6 +31,7 @@ import {
   VideoDubbingMixerSettings,
   VideoDubbingMixerTrack,
   VideoDubbingOverlayPosition,
+  VideoDubbingExportQuality,
   VideoDubbingSeparationAvailability,
   VideoDubbingTextOverlayCue,
   VideoDubbingProject,
@@ -451,6 +452,7 @@ export default function VideoDubbingTab() {
   const [subtitleLineSpacingPx, setSubtitleLineSpacingPx] = useState(0);
   const [subtitlePaddingPx, setSubtitlePaddingPx] = useState(8);
   const [subtitleMarginPx, setSubtitleMarginPx] = useState(32);
+  const [exportQuality, setExportQuality] = useState<VideoDubbingExportQuality>("high");
   const subtitleMarginSaveTimerRef = useRef<number | null>(null);
   const pendingSubtitleMarginSaveRef = useRef<{ jobId: string; value: number } | null>(null);
   const [subtitlePosition, setSubtitlePosition] =
@@ -458,6 +460,7 @@ export default function VideoDubbingTab() {
   const [subtitleBackgroundImage, setSubtitleBackgroundImage] = useState<
     string | null
   >(null);
+  const [subtitleBackgroundPickerOpen, setSubtitleBackgroundPickerOpen] = useState(false);
   const [subtitleBackgrounds, setSubtitleBackgrounds] = useState<string[]>([
     "bg1",
   ]);
@@ -793,7 +796,7 @@ export default function VideoDubbingTab() {
     subtitleBold, subtitleItalic, subtitleUnderline, subtitleTextCase,
     subtitleOutlineEnabled, subtitleOutlineColor, subtitleOutlineWidthPx,
     subtitleCharacterSpacingPx, subtitleLineSpacingPx, subtitlePaddingPx,
-    subtitlePosition, subtitleBackgroundImage,
+    subtitlePosition, subtitleBackgroundImage, exportQuality,
     subtitleCueOverrides, textOverlays, subtitleTimelineZoom,
   });
 
@@ -901,6 +904,7 @@ export default function VideoDubbingTab() {
       if (typeof w.subtitleCharacterSpacingPx === "number") setSubtitleCharacterSpacingPx(w.subtitleCharacterSpacingPx);
       if (typeof w.subtitleLineSpacingPx === "number") setSubtitleLineSpacingPx(w.subtitleLineSpacingPx);
       if (typeof w.subtitlePaddingPx === "number") setSubtitlePaddingPx(w.subtitlePaddingPx);
+      setExportQuality(w.exportQuality === "source" || w.exportQuality === "low" || w.exportQuality === "medium" || w.exportQuality === "high" ? w.exportQuality : "high");
       if (typeof w.subtitlePosition === "string") setSubtitlePosition(w.subtitlePosition as VideoDubbingOverlayPosition);
       if (typeof w.subtitleBackgroundImage === "string" || w.subtitleBackgroundImage === null) setSubtitleBackgroundImage(w.subtitleBackgroundImage as string | null);
       if (Array.isArray(w.subtitleCueOverrides)) setSubtitleCueOverrides(w.subtitleCueOverrides as typeof subtitleCueOverrides);
@@ -1325,6 +1329,7 @@ export default function VideoDubbingTab() {
     }
     const settings = video?.job?.overlaySettings;
     setTextOverlays(settings?.textOverlays ?? []);
+    setExportQuality(settings?.exportQuality ?? "high");
     setSelectedTextOverlay(null);
     setLogoEnabled(settings?.logoEnabled ?? false);
     setLogoWidthPercent(settings?.logoWidthPercent ?? 15);
@@ -2390,6 +2395,7 @@ export default function VideoDubbingTab() {
       .map((cue) => ({ ...cue, endTime: Math.min(cue.endTime, duration) }))
       .filter((cue) => cue.endTime > cue.startTime);
     const settings = {
+      exportQuality,
       logoEnabled: logoEnabled && Boolean(sourceLogoName),
       logoWidthPercent,
       logoPaddingPx,
@@ -2495,7 +2501,15 @@ export default function VideoDubbingTab() {
       const response = await fetch("/api/video-dubbing/exports/concat/preflight", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ jobIds }),
+        body: JSON.stringify({
+          jobIds,
+          exportQuality,
+          willRenderVideo: Boolean(
+            (logoEnabled && job?.overlaySettings?.logoFileName) ||
+            (subtitlesEnabled && (subtitleCueOverrides?.length || srt?.analysis?.items.length || job?.overlaySettings?.subtitles.length)) ||
+            textOverlays.length,
+          ),
+        }),
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || "Không thể kiểm tra khả năng ghép video.");
@@ -2919,6 +2933,14 @@ export default function VideoDubbingTab() {
     if (!job || !autoPipelineConfig) return;
     setAutoPipelineError(null);
     try {
+      const overlayResponse = await fetch(`/api/video-dubbing/jobs/${job.id}/overlay-settings`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ exportQuality }),
+      });
+      const overlayResult = await overlayResponse.json();
+      if (!overlayResponse.ok || !overlayResult.job) throw new Error(overlayResult.error || "Không thể lưu mức chất lượng export.");
+      setVideo((current) => current?.job?.id === job.id ? { ...current, job: overlayResult.job } : current);
       const response = await fetch(
         `/api/video-dubbing/jobs/${job.id}/auto-pipeline`,
         {
@@ -3147,6 +3169,7 @@ export default function VideoDubbingTab() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          exportQuality,
           logoEnabled:
             logoEnabled && Boolean(job.overlaySettings?.logoFileName),
           logoWidthPercent,
@@ -3577,9 +3600,40 @@ export default function VideoDubbingTab() {
     videoPreviewReady && job?.metadata && previewVideoRef.current
       ? previewVideoRef.current.clientWidth / job.metadata.width
       : 1;
+  const subtitleBackgroundSliceUrl = (background: string, slice: "left" | "center" | "right") =>
+    `/assets/subtitle/${encodeURIComponent(`${background}-${slice}.png`)}`;
 
   return (
     <section className={`grid w-full max-w-none grid-cols-1 items-start gap-5 px-3 py-4 text-slate-200 sm:px-5 ${settingsCollapsed ? "xl:grid-cols-[52px_minmax(0,1fr)]" : "xl:grid-cols-[minmax(320px,0.8fr)_minmax(0,1.8fr)]"}`}>
+      {subtitleBackgroundPickerOpen && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/75 p-3 sm:p-6" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setSubtitleBackgroundPickerOpen(false); }}>
+          <section role="dialog" aria-modal="true" aria-labelledby="subtitle-background-picker-title" className="max-h-[88vh] w-full max-w-4xl space-y-4 overflow-y-auto rounded-2xl border border-slate-700 bg-slate-900 p-4 shadow-2xl sm:p-5">
+            <header className="flex items-center justify-between gap-3">
+              <div><h3 id="subtitle-background-picker-title" className="font-semibold text-white">Chọn ảnh nền phụ đề</h3><p className="mt-1 text-xs text-slate-400">Preview cách ghép ba slice left, center và right.</p></div>
+              <button type="button" onClick={() => setSubtitleBackgroundPickerOpen(false)} className="rounded-lg border border-slate-700 p-2 text-slate-300 hover:bg-slate-800" aria-label="Đóng chọn ảnh nền"><X className="h-4 w-4" /></button>
+            </header>
+            {subtitleBackgrounds.length === 0 ? (
+              <p className="rounded-xl border border-slate-800 bg-slate-950/50 p-4 text-sm text-slate-400">Chưa tìm thấy bộ ảnh nền 3-slice hợp lệ.</p>
+            ) : (
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {subtitleBackgrounds.map((background) => {
+                  const selected = subtitleBackgroundImage === background;
+                  return (
+                    <button key={background} type="button" aria-pressed={selected} onClick={() => { setSubtitleBackgroundImage(background); setSubtitleBackgroundPickerOpen(false); }} className={`rounded-xl border p-3 text-left transition-colors ${selected ? "border-sky-400/70 bg-sky-950/30" : "border-slate-700 bg-slate-950/60 hover:border-slate-500"}`}>
+                      <div className="mx-auto flex h-20 w-full items-center justify-center overflow-hidden rounded-lg bg-slate-800">
+                        <img aria-hidden="true" src={subtitleBackgroundSliceUrl(background, "left")} alt="" className="h-full w-auto shrink-0 object-contain" />
+                        <img aria-hidden="true" src={subtitleBackgroundSliceUrl(background, "center")} alt="" className="h-full w-auto shrink-0 object-contain" />
+                        <img aria-hidden="true" src={subtitleBackgroundSliceUrl(background, "right")} alt="" className="h-full w-auto shrink-0 object-contain" />
+                      </div>
+                      <span className="mt-2 flex items-center justify-between gap-2 text-xs font-medium text-slate-200"><span className="truncate">{background.replace(/\.(png|webp)$/i, "")}</span>{selected && <span className="shrink-0 text-sky-300">Đang chọn</span>}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+        </div>
+      )}
       <header className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 xl:col-span-2">
         <div className="flex items-center gap-3">
           <div className="w-11 h-11 rounded-2xl bg-amber-500/15 text-amber-400 border border-amber-500/25 flex items-center justify-center">
@@ -3781,6 +3835,15 @@ export default function VideoDubbingTab() {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <button type="button" onClick={() => void startFinalMix()} disabled={!canRenderFinalMix} className="inline-flex items-center gap-2 rounded-lg bg-cyan-400 px-3 py-2 text-xs font-bold text-slate-950 disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-500"><Volume2 className="h-4 w-4" />Render final mix</button>
+          <label title="Theo nguồn dùng codec và bitrate video gốc. Low khoảng 70%, Medium 90% bitrate gốc. High giữ cấu hình chất lượng hiện tại." className="inline-flex items-center gap-2 rounded-lg border border-slate-700 px-2.5 py-2 text-xs text-slate-300">
+            Chất lượng
+            <select value={exportQuality} onChange={(event) => setExportQuality(event.target.value as VideoDubbingExportQuality)} className="rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-100 focus:border-sky-400 focus:outline-none">
+              <option value="source">Theo nguồn</option>
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+            </select>
+          </label>
           <button type="button" onClick={() => void startVideoExport()} disabled={!canExportVideo || logoUploading} className="inline-flex items-center gap-2 rounded-lg bg-sky-500 px-3 py-2 text-xs font-bold text-slate-950 disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-500"><Film className="h-4 w-4" />Export</button>
           <div className="flex max-w-sm flex-col gap-1">
             <label title="Sau khi tất cả video trong hàng đợi export thành công, ghép chúng bằng stream copy không encode lại." className={`inline-flex items-center gap-2 rounded-lg border border-slate-700 px-3 py-2 text-xs text-slate-200 ${queueRunning || queueRows.length < 2 || concatPreflight.status === "checking" ? "cursor-not-allowed opacity-50" : "cursor-pointer hover:border-sky-500/40"}`}>
@@ -5990,28 +6053,21 @@ export default function VideoDubbingTab() {
                         </label>
                       )}
                       {subtitleBackgroundMode === "image" && (
-                        <label className="flex items-center justify-between gap-2 text-xs text-slate-300">
-                          Ảnh nền {subtitleBackgroundImage}
-                          <select
-                            value={subtitleBackgroundImage ?? ""}
-                            onChange={(event) =>
-                              setSubtitleBackgroundImage(
-                                event.target.value || null,
-                              )
-                            }
+                        <div className="flex items-center justify-between gap-2 text-xs text-slate-300">
+                          <span>Ảnh nền</span>
+                          <button
+                            type="button"
+                            onClick={() => setSubtitleBackgroundPickerOpen(true)}
                             disabled={
-                              !srt?.analysis?.items.length &&
-                              !job?.overlaySettings?.subtitles.length
+                              (!srt?.analysis?.items.length && !job?.overlaySettings?.subtitles.length) ||
+                              subtitleBackgrounds.length === 0
                             }
-                            className="min-w-0 rounded-lg border border-slate-700 bg-slate-900 px-2 py-2 text-xs text-slate-100"
+                            className="flex min-w-0 items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-2 py-2 text-xs text-slate-100 hover:border-sky-500/50 disabled:cursor-not-allowed disabled:opacity-50"
                           >
-                            {subtitleBackgrounds.map((background) => (
-                              <option key={background} value={background}>
-                                {background.replace(/\.(png|webp)$/i, "")}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
+                            <span className="max-w-32 truncate">{subtitleBackgroundImage?.replace(/\.(png|webp)$/i, "") || "Chọn nền"}</span>
+                            <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                          </button>
+                        </div>
                       )}
                     </div>
                     <label className="block space-y-1.5 text-xs text-slate-300">

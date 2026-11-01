@@ -11,6 +11,7 @@ import sharp from "sharp";
 import puppeteer, { Browser, Page } from "puppeteer-core";
 import SubtitleOverlayRenderer from "./src/components/SubtitleOverlayRenderer";
 import {
+  VideoDubbingExportQuality,
   VideoDubbingFinalMixTask,
   VideoDubbingJob,
   VideoDubbingMixerSettings,
@@ -37,6 +38,7 @@ type TextCaseValue = "none" | "uppercase" | "lowercase" | "capitalize";
 const VIDEO_EXPORT_PREPARATION_PROGRESS = 10;
 const VIDEO_EXPORT_FFMPEG_PROGRESS_SPAN = 84;
 const DEFAULT_OVERLAY_SETTINGS: VideoDubbingOverlaySettings = {
+  exportQuality: "high",
   logoEnabled: false,
   logoWidthPercent: 15,
   logoPaddingPx: 24,
@@ -94,6 +96,7 @@ interface ProbeStream {
   time_base?: string;
   channel_layout?: string;
   extradata_hash?: string;
+  bit_rate?: string;
 }
 
 interface MediaProbe {
@@ -287,7 +290,7 @@ export class VideoDubbingMediaCoordinator {
     const task = this.createTask(jobId, "videoExport", {
       status: "running",
       phase:
-        settings.logoEnabled || settings.subtitlesEnabled || Boolean(settings.textOverlays?.length)
+        settings.logoEnabled || settings.subtitlesEnabled || Boolean(settings.textOverlays?.length) || settings.exportQuality === "low" || settings.exportQuality === "medium"
           ? "rendering"
           : "remuxing",
       progressPercent: 0,
@@ -448,12 +451,16 @@ export class VideoDubbingMediaCoordinator {
       : null;
   }
 
-  async checkExportConcatCompatibility(jobIdsInput: unknown): Promise<{ compatible: boolean; message: string }> {
+  async checkExportConcatCompatibility(jobIdsInput: unknown, qualityInput: unknown = "high", willRenderVideoInput = true): Promise<{ compatible: boolean; message: string }> {
     if (!Array.isArray(jobIdsInput) || jobIdsInput.length < 2 || jobIdsInput.some((id) => typeof id !== "string")) {
       throw new Error("Cần ít nhất hai video đã lưu để kiểm tra khả năng ghép.");
     }
     const jobIds = [...new Set(jobIdsInput as string[])];
     if (jobIds.length !== jobIdsInput.length) throw new Error("Danh sách video kiểm tra bị trùng.");
+    const quality: VideoDubbingExportQuality = qualityInput === "source" || qualityInput === "low" || qualityInput === "medium" || qualityInput === "high"
+      ? qualityInput
+      : "high";
+    const willRenderVideo = willRenderVideoInput !== false;
     const jobs = jobIds.map((jobId) => {
       const job = this.manager.getJob(jobId);
       if (!job || job.status !== "completed" || !job.metadata) {
@@ -475,12 +482,25 @@ export class VideoDubbingMediaCoordinator {
     }
     for (let index = 1; index < probes.length; index++) {
       const candidate = probes[index].streams?.find((stream) => stream.codec_type === "video");
+      const expectedCodec = (probe: MediaProbe) => {
+        const codec = probe.streams?.find((stream) => stream.codec_type === "video")?.codec_name;
+        if (quality === "high" && !willRenderVideo) return codec || "unknown";
+        return quality === "high" ? "h264" : codec === "hevc" || codec === "h265" ? "hevc" : "h264";
+      };
       if (!candidate || candidate.width !== baseline.width || candidate.height !== baseline.height ||
           candidate.r_frame_rate !== baseline.r_frame_rate || candidate.avg_frame_rate !== baseline.avg_frame_rate ||
-          candidate.time_base !== baseline.time_base) {
+          candidate.time_base !== baseline.time_base || expectedCodec(probes[index]) !== expectedCodec(probes[0])) {
         return {
           compatible: false,
-          message: `${jobs[index].fileName} khác độ phân giải, FPS hoặc time base so với ${jobs[0].fileName}; ghép stream-copy có thể không chính xác.`,
+          message: `${jobs[index].fileName} khác codec đầu ra dự kiến, độ phân giải, FPS hoặc time base so với ${jobs[0].fileName}; ghép stream-copy có thể không chính xác.`,
+        };
+      }
+      if (quality === "high" && !willRenderVideo &&
+          (candidate.pix_fmt !== baseline.pix_fmt || candidate.profile !== baseline.profile ||
+           candidate.level !== baseline.level || candidate.extradata_hash !== baseline.extradata_hash)) {
+        return {
+          compatible: false,
+          message: `${jobs[index].fileName} có cấu hình codec nguồn khác ${jobs[0].fileName}; ghép stream-copy có thể không chính xác.`,
         };
       }
     }
@@ -745,6 +765,10 @@ export class VideoDubbingMediaCoordinator {
     if (typeof logoEnabled !== "boolean" || typeof subtitlesEnabled !== "boolean") {
       throw new Error("Trạng thái bật/tắt logo hoặc phụ đề không hợp lệ.");
     }
+    const exportQualityValue = values.exportQuality ?? saved.exportQuality ?? "high";
+    if (!["source", "low", "medium", "high"].includes(String(exportQualityValue))) {
+      throw new Error("Chất lượng export không hợp lệ.");
+    }
     const subtitleFontFamily =
       values.subtitleFontFamily ?? saved.subtitleFontFamily ?? "Arial";
     if (
@@ -851,6 +875,7 @@ export class VideoDubbingMediaCoordinator {
     });
     if (textOverlays.some((cue) => cue.endTime <= cue.startTime)) throw new Error("Thời điểm kết thúc text phải sau thời điểm bắt đầu.");
     return {
+      exportQuality: exportQualityValue as VideoDubbingExportQuality,
       logoEnabled,
       logoFileName: saved.logoFileName,
       logoWidthPercent: numberInRange(
@@ -1890,6 +1915,8 @@ export class VideoDubbingMediaCoordinator {
     const duration = job.metadata!.durationSeconds;
     const finalMixInput = path.extname(mixedAudioPath).toLowerCase() === ".wav";
     const renderVideo = settings.logoEnabled || settings.subtitlesEnabled || Boolean(settings.textOverlays?.length);
+    const encodeForQuality = settings.exportQuality === "low" || settings.exportQuality === "medium";
+    const encodeVideo = renderVideo || encodeForQuality;
     const logoPath = settings.logoEnabled ? this.manager.getOverlayLogoPath(active.jobId) : null;
     const audioCodecArgs = finalMixInput
       ? ["-c:a", "aac", "-b:a", "192k", "-ar", String(AUDIO_SAMPLE_RATE), "-ac", "2"]
@@ -1931,7 +1958,18 @@ export class VideoDubbingMediaCoordinator {
         ? this.createSubtitleOverlayStream(subtitleOverlays, job, duration)
         : null;
 
-      const useQsv = renderVideo &&
+      const sourceProbe = encodeVideo
+        ? await this.probe(this.requireVideoPath(active.jobId), active)
+        : null;
+      const sourceVideoStream = sourceProbe?.streams?.find((stream) => stream.codec_type === "video");
+      const sourceCodec = sourceVideoStream?.codec_name || job.metadata!.videoCodec;
+      const sourceBitrate = Number(sourceVideoStream?.bit_rate) ||
+        Math.max(250_000, Math.round((job.sizeBytes * 8 / duration) * 0.94));
+      const bitrateMultiplier = settings.exportQuality === "low" ? 0.7 : settings.exportQuality === "medium" ? 0.9 : 1;
+      const targetVideoBitrate = Math.max(250_000, Math.round(sourceBitrate * bitrateMultiplier / 10_000) * 10_000);
+      const useHevc = sourceCodec === "hevc" || sourceCodec === "h265";
+      const preserveCurrentHighQuality = settings.exportQuality === "high";
+      const useQsv = encodeVideo &&
         job.metadata!.width % 2 === 0 &&
         job.metadata!.height % 2 === 0;
       const qsvDeviceArgs = useQsv
@@ -1990,22 +2028,30 @@ export class VideoDubbingMediaCoordinator {
       }
       ffmpegArgs.push("-map", "1:a:0", "-map_metadata", "0", "-map_chapters", "0");
 
-      const qsvEncoderArgs = [
-        "-c:v", "h264_qsv",
-        "-preset", DEFAULT_QSV_PRESET,
-        "-global_quality", String(DEFAULT_QSV_GLOBAL_QUALITY),
-        "-pix_fmt", "yuv420p",
-      ];
-      const softwareEncoderArgs = [
-        "-c:v", "libx264", "-threads:v", String(this.getX264ThreadCount()),
-        "-preset", "medium", "-crf", "18",
-        "-pix_fmt",
-        job.metadata!.width % 2 === 0 && job.metadata!.height % 2 === 0
-          ? "yuv420p"
-          : "yuv444p",
-      ];
+      const qsvEncoderArgs = preserveCurrentHighQuality
+        ? [
+            "-c:v", "h264_qsv", "-preset", DEFAULT_QSV_PRESET,
+            "-global_quality", String(DEFAULT_QSV_GLOBAL_QUALITY), "-pix_fmt", "yuv420p",
+          ]
+        : [
+            "-c:v", useHevc ? "hevc_qsv" : "h264_qsv", "-preset", DEFAULT_QSV_PRESET,
+            "-b:v", String(targetVideoBitrate), "-maxrate", String(Math.round(targetVideoBitrate * 1.5)),
+            "-bufsize", String(targetVideoBitrate * 2), "-pix_fmt", "yuv420p",
+          ];
+      const softwareEncoderArgs = preserveCurrentHighQuality
+        ? [
+            "-c:v", "libx264", "-threads:v", String(this.getX264ThreadCount()),
+            "-preset", "medium", "-crf", "18", "-pix_fmt",
+            job.metadata!.width % 2 === 0 && job.metadata!.height % 2 === 0 ? "yuv420p" : "yuv444p",
+          ]
+        : [
+            "-c:v", useHevc ? "libx265" : "libx264", "-threads:v", String(this.getX264ThreadCount()),
+            "-preset", "medium", "-b:v", String(targetVideoBitrate),
+            "-maxrate", String(Math.round(targetVideoBitrate * 1.5)), "-bufsize", String(targetVideoBitrate * 2),
+            "-pix_fmt", job.metadata!.width % 2 === 0 && job.metadata!.height % 2 === 0 ? "yuv420p" : "yuv444p",
+          ];
       ffmpegArgs.push(
-        ...(renderVideo
+        ...(encodeVideo
           ? useQsv ? qsvEncoderArgs : softwareEncoderArgs
           : ["-c:v", "copy"]),
         ...audioCodecArgs,
@@ -2024,6 +2070,8 @@ export class VideoDubbingMediaCoordinator {
           ? "Đang composite overlay phụ đề và logo lên video gốc"
           : logoPath
             ? "Đang composite logo lên video gốc"
+            : encodeForQuality
+              ? `Đang mã hóa video theo mức ${settings.exportQuality}`
             : "Đang ghép audio final mix vào video nguồn",
       );
       try {
@@ -2031,7 +2079,7 @@ export class VideoDubbingMediaCoordinator {
           active,
           ffmpegArgs,
           duration,
-          renderVideo ? "rendering" : "remuxing",
+        encodeVideo ? "rendering" : "remuxing",
           VIDEO_EXPORT_PREPARATION_PROGRESS,
           VIDEO_EXPORT_FFMPEG_PROGRESS_SPAN,
           subtitleOverlayStream ?? undefined,
@@ -2040,7 +2088,7 @@ export class VideoDubbingMediaCoordinator {
         if (!useQsv || !this.isQsvEncoderError(error)) throw error;
         this.assertNotCancelled(active);
         console.warn(
-          "[VideoDubbing] Intel Quick Sync không khởi chạy được; chuyển sang libx264:",
+          "[VideoDubbing] Intel Quick Sync không khởi chạy được; chuyển sang encoder CPU tương ứng:",
           error,
         );
         await fs.promises.rm(tempOutput, { force: true });
@@ -2375,7 +2423,7 @@ export class VideoDubbingMediaCoordinator {
           "file,crypto,data",
           "-show_data_hash", "sha256",
           "-show_entries",
-          "format=duration,size:stream=codec_type,codec_name,width,height,duration,sample_rate,channels,channel_layout,r_frame_rate,avg_frame_rate,pix_fmt,profile,level,time_base,extradata_hash",
+          "format=duration,size:stream=codec_type,codec_name,width,height,duration,sample_rate,channels,channel_layout,r_frame_rate,avg_frame_rate,pix_fmt,profile,level,time_base,extradata_hash,bit_rate",
           "-of",
           "json",
           filePath,
