@@ -29,20 +29,38 @@ if not errorlevel 1 goto FFMPEG_OK
 if exist "%~dp0ffmpeg.exe" goto FFMPEG_LOCAL
 if exist "%~dp0bin\ffmpeg.exe" goto FFMPEG_LOCAL
 if exist "%~dp0ffmpeg\bin\ffmpeg.exe" goto FFMPEG_LOCAL
+if exist "%LOCALAPPDATA%\Microsoft\WinGet\Links\ffmpeg.exe" goto FFMPEG_LOCAL
 
-echo [CANH BAO] Chua tim thay FFmpeg.
-echo Neu khong co FFmpeg, chuc nang chinh toc do va xu ly audio
-echo va tao dataset Voice Clone tu MP4 co the that bai.
-echo Hay cai dat FFmpeg hoac dat ffmpeg.exe trong thu muc ung dung.
-echo Tham khao: https://www.gyan.dev/ffmpeg/builds/
-goto FFMPEG_DONE
+echo Chua tim thay FFmpeg. Dang thu cai dat tu dong bang winget...
+where winget >nul 2>&1
+if errorlevel 1 goto FFMPEG_INSTALL_UNAVAILABLE
+winget install --id Gyan.FFmpeg --exact --scope user --silent --accept-package-agreements --accept-source-agreements
+if errorlevel 1 goto FFMPEG_INSTALL_FAILED
+set "PATH=%LOCALAPPDATA%\Microsoft\WinGet\Links;%PATH%"
+if exist "%LOCALAPPDATA%\Microsoft\WinGet\Links\ffmpeg.exe" goto FFMPEG_LOCAL
+where ffmpeg >nul 2>&1
+if not errorlevel 1 goto FFMPEG_OK
+goto FFMPEG_INSTALL_FAILED
 
 :FFMPEG_LOCAL
-echo Da tim thay ffmpeg.exe trong thu muc ung dung.
+echo Da tim thay FFmpeg trong thu muc ung dung hoac WinGet.
 goto FFMPEG_DONE
 
 :FFMPEG_OK
 echo Da tim thay FFmpeg trong PATH.
+goto FFMPEG_DONE
+
+:FFMPEG_INSTALL_UNAVAILABLE
+echo [CANH BAO] May nay chua co winget de cai FFmpeg tu dong.
+goto FFMPEG_MANUAL
+
+:FFMPEG_INSTALL_FAILED
+echo [CANH BAO] Cai FFmpeg bang winget that bai hoac khong tim thay ffmpeg.exe sau khi cai.
+goto FFMPEG_MANUAL
+
+:FFMPEG_MANUAL
+echo Chuc nang tao dataset Voice Clone tu MP4 va xu ly audio can FFmpeg.
+echo Cai dat thu cong tai: https://www.gyan.dev/ffmpeg/builds/
 
 :FFMPEG_DONE
 echo.

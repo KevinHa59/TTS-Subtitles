@@ -69,11 +69,12 @@ Mở **More → Transfer File** trên cả hai PC, kết nối cùng mạng Wi-F
     - Tải file **`espeak-ng-X64.msi`** và cài đặt vào thư mục mặc định (`C:\Program Files\eSpeak NG`).
     - `Start-App.bat` và máy chủ sẽ tự động phát hiện đường dẫn này mà không cần bạn cấu hình thủ công.
 - **FFmpeg/FFprobe (Bắt buộc cho Join Audio; khuyến nghị để nén MP3 và tăng tốc đọc `atempo`)**:
-  - **Cách 1 (Tự động qua winget)**:
+  - `Setup.bat` tự cài FFmpeg qua `winget` nếu chưa tìm thấy trên máy.
+  - **Cài thủ công qua winget**:
     ```cmd
-    winget install Gyan.FFmpeg
+    winget install --id Gyan.FFmpeg --exact --scope user
     ```
-  - **Cách 2**: Tải bản giải nén từ [gyan.dev/ffmpeg/builds](https://www.gyan.dev/ffmpeg/builds/) rồi chép trực tiếp file `ffmpeg.exe` (và `ffprobe.exe`) vào cùng thư mục với dự án này, `bin/`, hoặc `ffmpeg/bin/`. Chức năng tạo dataset Voice Clone từ MP4 cũng cần FFmpeg; nếu cài FFmpeg sau khi đã mở ứng dụng, hãy khởi động lại ứng dụng để cập nhật `PATH`.
+  - **Cài thủ công bằng file**: Tải bản giải nén từ [gyan.dev/ffmpeg/builds](https://www.gyan.dev/ffmpeg/builds/) rồi chép trực tiếp file `ffmpeg.exe` (và `ffprobe.exe`) vào cùng thư mục với dự án này, `bin/`, hoặc `ffmpeg/bin/`. Chức năng tạo dataset Voice Clone từ MP4 cũng cần FFmpeg.
 
 ---
 

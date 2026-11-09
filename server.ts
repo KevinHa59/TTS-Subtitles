@@ -172,6 +172,7 @@ function resolveFfmpegPath(): string {
     path.resolve(__dirname, "ffmpeg.exe"),
     path.resolve(__dirname, "bin", "ffmpeg.exe"),
     path.resolve(__dirname, "ffmpeg", "bin", "ffmpeg.exe"),
+    path.join(process.env.LOCALAPPDATA || "", "Microsoft", "WinGet", "Links", "ffmpeg.exe"),
   ];
   for (const c of winCandidates) {
     if (fs.existsSync(c)) return c;
@@ -187,6 +188,7 @@ function resolveFfprobePath(): string {
     path.resolve(__dirname, "ffprobe.exe"),
     path.resolve(__dirname, "bin", "ffprobe.exe"),
     path.resolve(__dirname, "ffmpeg", "bin", "ffprobe.exe"),
+    path.join(process.env.LOCALAPPDATA || "", "Microsoft", "WinGet", "Links", "ffprobe.exe"),
   ];
   for (const c of winCandidates) {
     if (fs.existsSync(c)) return c;
