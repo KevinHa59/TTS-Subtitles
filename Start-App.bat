@@ -95,6 +95,16 @@ set "HOST=127.0.0.1"
 set "PIPER_ESPEAK_BRIDGE=0"
 set "OPEN_BROWSER=1"
 
+if exist "%~dp0.venv-bgm\Scripts\python.exe" (
+    set "BGM_PYTHON=%~dp0.venv-bgm\Scripts\python.exe"
+)
+if exist "%~dp0.venv-video-dubbing\Scripts\python.exe" (
+    set "VIDEO_DUBBING_SEPARATION_PYTHON=%~dp0.venv-video-dubbing\Scripts\python.exe"
+)
+if exist "%~dp0.venv-vieneu\Scripts\python.exe" (
+    set "VIENEU_PYTHON=%~dp0.venv-vieneu\Scripts\python.exe"
+)
+
 if exist "%ProgramFiles%\eSpeak NG\espeak-ng.exe" (
     set "PATH=%ProgramFiles%\eSpeak NG;!PATH!"
     if exist "%ProgramFiles%\eSpeak NG\espeak-ng-data" (
