@@ -1,13 +1,51 @@
-# Hướng Dẫn Cài Đặt & Sử Dụng Hoài My Piper TTS Trên Windows
+# TTS-Subtitles — Core Package & Hướng Dẫn Cài Đặt Windows
 
-Ứng dụng chuyển đổi phụ đề SRT/TXT thành Audio TTS tiếng Việt chất lượng cao với nhiều giọng Piper hoạt động 100% Offline, bao gồm **Hoài My** (`local:hoaimy-vietnamese-vi-medium-ljkjhi`) và 5 giọng **CSA Voice v3**: Ngọc Lan, Minh Anh, Quang Huy, Thu Hà và Yến Nhi. Tất cả mô hình nạp trực tiếp từ thư mục `models/` không cần kết nối internet. Ứng dụng tự động điều chỉnh tốc độ đọc theo timestamp, ghép nối timeline âm thanh, giữ lại audio từng câu và dọn dữ liệu khi người dùng yêu cầu.
+Ứng dụng xử lý phụ đề/video, tạo TTS, chuẩn bị dữ liệu giọng nói, dịch phụ đề, OCR phụ đề cứng, tạo nhạc nền và Video Dubbing. Gói `TTS-Subtitles-Core.zip` chỉ chứa mã nguồn, giao diện, tài liệu và script; **không chứa model, whisper.cpp binary/source, thư viện cài sẵn, môi trường Python hay dữ liệu người dùng**. Sau khi giải nén trên PC khác, cài runtime và chỉ tải các model cho tính năng bạn muốn dùng.
+
+Các model lớn không cần được tải cùng lúc. Whisper và OCR có thể cài/tải từ giao diện ứng dụng; phần lớn model TTS, dịch, nhạc và tách giọng được tải riêng theo hướng dẫn bên dưới. Chức năng TTS Piper chạy local sau khi có file model. Một số chức năng tùy chọn cần Internet trong bước cài/tải model hoặc cần API key.
+
+## Gói Core gồm gì?
+
+- Mã nguồn hiện tại, frontend assets, tests, scripts, `package.json`/lockfile và tài liệu.
+- `Setup.bat`, `Start-App.bat`, `Stop-App.bat`, `.env.example`.
+- Worker OCR `tools/subtitle-ocr/worker.py` (chỉ mã nguồn worker, không kèm runtime hay model).
+- Không gồm `.git/`, `node_modules/`, `dist/`, `.venv*/`, `tools/whisper.cpp/`, `models/`, checkpoint/model weights, file media, cache, hoặc các thư mục dữ liệu như `datasets_storage/`, `jobs_storage/`, `video_dubbing_storage/`, `bgm_storage/`, `stories_storage/`, `join_audio_storage/` và `join_split_video_storage/`.
+
+## Model và runtime theo từng tính năng
+
+| Tính năng | Model/runtime cần thiết | Lựa chọn và vị trí |
+|---|---|---|
+| **TTS từ SRT/TXT, đọc văn bản, kể chuyện, TTS Master trong Video Dubbing** | Piper ONNX voice: mỗi giọng cần file `<voice>.onnx` cùng `<voice>.onnx.json`; eSpeak NG để đọc tiếng Việt có dấu. | Đặt file trong `models/`. Mặc định là `hoaimy-vietnamese-vi-medium-ljkjhi.onnx` và file JSON cùng tên. CSA Voice v3 dùng một model `vi_VN-csa-voice-piper-v3-medium.onnx` cho 5 speaker ID 0–4. Các model Piper khác đã khai báo trong `voice-catalog.ts` gồm Hoài My (các biến thể), Ban Mai, Thanh Niên Tự Tin, Việt Thảo, Huyền Ngọc, Duy Onyx, Doanh Doanh, Dung Dien, Yan 3D, Ngọc Ngạn, Ngọc Huyền, Ngô Không, USLT Ngô Không và các bản News Flash; model custom cũng được hỗ trợ. **Piper weights không tự tải trong app**: chép model và file JSON tương ứng từ PC cũ hoặc tải từ nguồn phát hành của từng giọng; có thể dùng trang nạp model để thêm model custom. |
+| **TTS VieNeu** | VieNeu-TTS v3 Turbo; Python package `vieneu` trong môi trường riêng `.venv-vieneu`. | Chọn một file model trong `models/vieneu/`, khuyến nghị `vieneu-v3-turbo-q8_0.gguf` (~1.25 GB); bản BF16 lớn hơn là lựa chọn thay thế. `denoiser.onnx` là tùy chọn. Xem [HD-VIENEU-TTS.md](./HD-VIENEU-TTS.md). |
+| **Nhận diện tiếng nói / chuẩn bị dataset Voice Clone** | Whisper.cpp binary và một Whisper GGML model. | Mô hình có thể chọn/tải trong tab quản lý Whisper: `ggml-base.bin` (~142 MB, nhẹ), `ggml-small.bin` (~466 MB, khuyên dùng tiếng Việt), `ggml-medium.bin` (~1.53 GB), hoặc `ggml-large-v3-turbo.bin` (~1.59 GB). Cần tối thiểu base hoặc small để phiên âm. Whisper.cpp được cài riêng bằng `npm run init:tools` hoặc từ phần quản lý công cụ trong ứng dụng. |
+| **OCR phụ đề từ video** | PaddlePaddle CPU 3.3.1, PaddleOCR 3.7.0, OpenCC; hai model PP-OCRv5 mobile: `PP-OCRv5_mobile_det` (detection) và `PP-OCRv5_mobile_rec` (recognition). | Cài từ trang OCR trong ứng dụng; runtime và model được tải vào `%LOCALAPPDATA%/PiperTTSStudio/subtitle-ocr/`, không cần chép vào project. |
+| **Dịch phụ đề local** | llama.cpp Vulkan server + một model Qwen3 GGUF quantized Q4_K_M. | Cài engine và tải model từ trang dịch. Mặc định/khuyên dùng `Qwen3-4B-Q4_K_M.gguf` (~2.5 GB); `Qwen3-8B-Q4_K_M.gguf` (~5 GB) và `Qwen3-14B-Q4_K_M.gguf` (~9 GB) cần nhiều RAM/VRAM hơn. Dữ liệu ở `%LOCALAPPDATA%/PiperTTSStudio/subtitle-translation/`. |
+| **Dịch qua Gemini** | Không cần model local; cần `GEMINI_API_KEY`. | Cấu hình trong `.env` theo `.env.example` (nếu dùng ngoài môi trường tự cấp secret). Cần Internet và API key hợp lệ. |
+| **Nhạc nền procedural** | Không cần AI model; cần FFmpeg cho các thao tác encode/ghép. | Có thể dùng ngay sau khi cài FFmpeg. |
+| **Nhạc nền AI — MusicGen** | Python, PyTorch và `requirements-bgm.txt`; model `facebook/musicgen-small` (~2.2 GiB). | Tải theo yêu cầu trong giao diện; cache/project model ở `models/music/musicgen-small`. CPU chạy được nhưng chậm. |
+| **Nhạc nền AI — AudioLDM Soundscape** | Python, PyTorch, Diffusers và `requirements-bgm.txt`; toàn bộ pipeline AudioLDM S-Full-v2 (~1.57 GiB). | Tải theo yêu cầu vào `models/music/audioldm-soundscape`. |
+| **Tách giọng/nhạc trong Video Dubbing — Demucs** | Python, PyTorch, Demucs 4.1.0 và model `htdemucs` trong cache Hugging Face/Demucs. | Cài dependencies trong môi trường Python riêng; chạy lần đầu cần có model cache. Có thể chạy CPU hoặc CUDA. |
+| **Tách giọng/nhạc — MDX DirectML (tùy chọn)** | `audio-separator==0.48.0`, `onnxruntime-directml==1.23.0`, Demucs 4.1.0 làm fallback; model `UVR-MDX-NET-Inst_HQ_3.onnx`. | Cài `requirements-video-dubbing-mdx.txt`, tải model riêng và cấu hình `VIDEO_DUBBING_MDX_MODEL_PATH`. Xem mục Video Dubbing bên dưới. |
+| **Huấn luyện Piper Voice Clone** | Notebook Colab tải/cài training engine và base checkpoint riêng; cần dataset ZIP do ứng dụng tạo. | Không cần các training weights trong gói core. Đưa file `.onnx` và `.onnx.json` đã export về `models/` để dùng trong ứng dụng. |
+
+**Model không được gói kèm.** Giấy phép và quyền sử dụng model/weights do nhà phát hành model quy định; hãy kiểm tra điều khoản trước khi sử dụng hoặc phân phối, nhất là cho mục đích thương mại.
+
+## Cài đặt trên PC mới
+
+1. Giải nén `TTS-Subtitles-Core.zip` vào một thư mục không bị hạn chế quyền ghi.
+2. Cài Node.js LTS (20.19+ hoặc 22.12+), FFmpeg/FFprobe và eSpeak NG; sau đó chạy `Setup.bat`.
+3. Chạy `Start-App.bat`. Mở các trang quản lý model để cài Whisper/OCR hoặc tải model theo nhu cầu.
+4. Để dùng Piper TTS, chép file model `.onnx` **và** file `.onnx.json` tương ứng vào `models/`. Để dùng VieNeu, làm theo [HD-VIENEU-TTS.md](./HD-VIENEU-TTS.md).
+5. Các chức năng AI Python là tùy chọn và nên dùng môi trường riêng; cài đúng file `requirements-*.txt` cho tính năng muốn kích hoạt.
+
+Để chạy Whisper bằng tay sau khi giải nén: `npm run init:tools`. Trên Windows, ứng dụng cũng có thể tự tải Whisper binary; thao tác này không tải model Whisper nếu chưa chọn/tải model trong ứng dụng.
 
 ---
 
 ## 1. Yêu cầu hệ thống
 
 - **Hệ điều hành**: Windows 10 hoặc Windows 11 (64-bit).
-- **Node.js**: Phiên bản LTS 18.x, 20.x hoặc mới hơn.
+- **Node.js**: Phiên bản 20.19+ hoặc 22.12+ (khuyến nghị bản LTS hiện hành).
   - Tải tại: [https://nodejs.org/](https://nodejs.org/) (Chọn bản LTS và cài đặt mặc định).
 - **eSpeak NG (BẮT BUỘC để phát âm tiếng Việt CÓ DẤU và thanh điệu chuẩn xác)**:
   - *Tại sao cần eSpeak NG?* PiperTTS sử dụng eSpeak NG để phân tích ngữ âm tiếng Việt (các nguyên âm có dấu `á, à, ả, ã, ạ, ă, â, đ, ê, ô, ơ, ư` và 6 thanh điệu). Nếu thiếu eSpeak NG, mô hình sẽ không đọc được dấu hoặc chỉ đọc được chữ không dấu.

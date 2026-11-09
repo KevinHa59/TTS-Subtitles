@@ -96,6 +96,7 @@ function createPipeline(
   manager: VideoDubbingManager,
   onMasterRun: () => void,
   processDelayMs = 0,
+  demucsAvailable = false,
 ): VideoDubbingPipelineCoordinator {
   const master = new VideoDubbingMasterCoordinator(manager, {
     isVoiceAvailable: () => true,
@@ -166,17 +167,38 @@ function createPipeline(
     },
     ffmpegPath: "ffmpeg",
   });
-  const unavailable: VideoDubbingSeparationAvailability = {
-    status: "unavailable",
-    model: "htdemucs",
-    message: "Demucs intentionally disabled in this test.",
-  };
+  const availability: VideoDubbingSeparationAvailability = demucsAvailable
+    ? {
+        status: "ready",
+        backend: "demucs",
+        model: "htdemucs",
+        message: "Demucs test backend ready.",
+      }
+    : {
+        status: "unavailable",
+        model: "htdemucs",
+        message: "Demucs intentionally disabled in this test.",
+      };
   const separation = new VideoDubbingSeparationCoordinator(manager, {
     pythonPath: "python",
     ffmpegPath: "ffmpeg",
     ffprobePath: "ffprobe",
     isMediaBusy: () => false,
-    checkAvailability: async () => unavailable,
+    checkAvailability: async () => availability,
+    runInference: demucsAvailable
+      ? async (inputPath, outputDirectory) => {
+          const modelOutput = path.join(outputDirectory, "htdemucs", "input");
+          fs.mkdirSync(modelOutput, { recursive: true });
+          await fs.promises.copyFile(
+            inputPath,
+            path.join(modelOutput, "vocals.wav"),
+          );
+          await fs.promises.copyFile(
+            inputPath,
+            path.join(modelOutput, "no_vocals.wav"),
+          );
+        }
+      : undefined,
   });
   const media = new VideoDubbingMediaCoordinator(manager, {
     ffmpegPath: "ffmpeg",
@@ -193,6 +215,7 @@ function createPipeline(
 function createConfig(): VideoDubbingAutoPipelineConfig {
   return {
     enabled: true,
+    ttsMasterEnabled: true,
     master: {
       items: [
         {
@@ -279,7 +302,7 @@ test("runs and reuses a complete local pipeline with original audio fallback", a
   );
   assert.ok(first.videoExport?.status === "completed");
   assert.equal(
-    fs.existsSync(path.join(manager.getJobDirectory(jobId)!, "output.mp4")),
+    fs.existsSync(path.join(manager.getJobDirectory(jobId)!, "source_merged.mp4")),
     true,
   );
 
@@ -297,9 +320,69 @@ test("runs and reuses a complete local pipeline with original audio fallback", a
   assert.equal(afterDisable.finalMix?.status, beforeDisable.finalMix?.status);
   assert.equal(afterDisable.videoExport?.status, beforeDisable.videoExport?.status);
   assert.equal(
-    fs.existsSync(path.join(manager.getJobDirectory(jobId)!, "output.mp4")),
+    fs.existsSync(path.join(manager.getJobDirectory(jobId)!, "source_merged.mp4")),
     true,
   );
+});
+
+test("TTS run creates only the master and skips mixing and export", async () => {
+  const root = await createTemporaryDirectory();
+  const manager = new VideoDubbingManager({
+    storageDirectory: path.join(root, "jobs"),
+    ffprobePath: "ffprobe",
+  });
+  let masterRuns = 0;
+  const pipeline = createPipeline(manager, () => masterRuns++);
+  const jobId = await createReadyJob(manager, root);
+
+  await pipeline.startTts(jobId, createConfig());
+  await waitForPipeline(manager, jobId, "completed");
+
+  const job = manager.getJob(jobId)!;
+  assert.equal(masterRuns, 1);
+  assert.equal(job.masterGeneration?.status, "completed");
+  assert.equal(job.finalMix, undefined);
+  assert.equal(job.videoExport, undefined);
+  assert.equal(
+    fs.existsSync(path.join(manager.getJobDirectory(jobId)!, "mixed-audio.wav")),
+    false,
+  );
+  assert.equal(
+    fs.existsSync(path.join(manager.getJobDirectory(jobId)!, "source_merged.mp4")),
+    false,
+  );
+  assert.deepEqual(job.autoPipeline?.completedStages, ["master"]);
+});
+
+test("runs Demucs-only Auto Pipeline without creating or mixing a TTS Master", async () => {
+  const root = await createTemporaryDirectory();
+  const manager = new VideoDubbingManager({
+    storageDirectory: path.join(root, "jobs"),
+    ffprobePath: "ffprobe",
+  });
+  let masterRuns = 0;
+  const pipeline = createPipeline(manager, () => masterRuns++, 0, true);
+  const jobId = await createReadyJob(manager, root);
+  const config = createConfig();
+  config.ttsMasterEnabled = false;
+  config.demucsEnabled = true;
+  config.mixerSettings = {
+    vocals: { volumePercent: 100, muted: false },
+    instrumental: { volumePercent: 100, muted: false },
+    ttsMaster: { volumePercent: 100, muted: false },
+  };
+
+  await pipeline.start(jobId, config);
+  await waitForPipeline(manager, jobId, "completed");
+
+  const completed = manager.getJob(jobId)!;
+  assert.equal(masterRuns, 0);
+  assert.equal(completed.masterGeneration?.status, "idle");
+  assert.deepEqual(
+    completed.finalMix?.includedTracks?.sort(),
+    ["instrumental", "vocals"].sort(),
+  );
+  assert.equal(completed.videoExport?.status, "completed");
 });
 
 test("cancels the active stage and persists the cancelled pipeline state", async () => {
@@ -369,6 +452,16 @@ test("persists mixer settings before audio tracks exist and refuses disabled sta
   assert.deepEqual(manager.getJob(jobId)?.mixerSettings, config.mixerSettings);
   assert.equal(manager.getJob(jobId)?.separation?.status, undefined);
   await assert.rejects(() => pipeline.start(jobId, config), /bật Auto Pipeline/i);
+  await assert.rejects(
+    () =>
+      pipeline.start(jobId, {
+        ...config,
+        enabled: true,
+        ttsMasterEnabled: false,
+        demucsEnabled: false,
+      }),
+    /TTS Master hoặc Demucs/i,
+  );
   assert.equal(masterRuns, 0);
   assert.equal(manager.getJob(jobId)?.masterGeneration?.status, "idle");
 });
@@ -476,6 +569,18 @@ test("exposes persisted pipeline configuration and execution through job-scoped 
       config: VideoDubbingAutoPipelineConfig;
     };
     assert.equal(configResult.success, true);
+
+    const ttsResponse = await fetch(`${baseUrl}/tts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(createConfig()),
+    });
+    assert.equal(ttsResponse.status, 202);
+    await waitForPipeline(manager, jobId, "completed");
+    const ttsOnlyJob = manager.getJob(jobId)!;
+    assert.equal(ttsOnlyJob.masterGeneration?.status, "completed");
+    assert.equal(ttsOnlyJob.finalMix, undefined);
+    assert.equal(ttsOnlyJob.videoExport, undefined);
 
     const startResponse = await fetch(baseUrl, {
       method: "POST",

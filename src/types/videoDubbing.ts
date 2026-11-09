@@ -29,6 +29,8 @@ export interface VideoDubbingJob {
   uploadedBytes: number;
   metadata?: VideoDubbingMetadata;
   masterGeneration?: VideoDubbingMasterGeneration;
+  masterEditSegments?: VideoDubbingMasterEditSegment[];
+  masterEdit?: VideoDubbingMasterEditState;
   audioMix?: VideoDubbingMediaTask;
   finalMix?: VideoDubbingFinalMixTask;
   mixerSettings?: VideoDubbingMixerSettings;
@@ -44,6 +46,28 @@ export interface VideoDubbingJob {
   updatedAt: number;
 }
 
+export interface VideoDubbingMasterEditClip {
+  id: string;
+  fileName: string;
+  startTime: number;
+  durationSeconds: number;
+  text: string;
+}
+
+export interface VideoDubbingMasterEditSegment {
+  startTime: number;
+  durationSeconds: number;
+  text: string;
+}
+
+export interface VideoDubbingMasterEditState {
+  status: "ready" | "merging" | "failed";
+  durationSeconds: number;
+  clips: VideoDubbingMasterEditClip[];
+  error?: string;
+  updatedAt: number;
+}
+
 export type VideoDubbingOverlayPosition =
   | "top-left"
   | "top-center"
@@ -56,6 +80,7 @@ export type VideoDubbingOverlayPosition =
   | "bottom-right";
 
 export type VideoDubbingExportQuality = "source" | "low" | "medium" | "high";
+export type VideoDubbingTextAlignment = "left" | "center" | "right";
 
 export interface VideoDubbingSubtitleCue {
   startTime: number;
@@ -64,6 +89,11 @@ export interface VideoDubbingSubtitleCue {
 }
 
 export interface VideoDubbingTextOverlayCue extends VideoDubbingSubtitleCue {
+  extendToVideoEnd?: boolean;
+  isTitle?: boolean;
+  enabled?: boolean;
+  trackId?: string;
+  textAlign?: VideoDubbingTextAlignment;
   fontSize: number;
   fontFamily: string;
   color: string;
@@ -133,6 +163,7 @@ export interface VideoDubbingAutoPipelineConfig {
       speedPriority: "balanced" | "strict" | "natural";
     };
   };
+  ttsMasterEnabled: boolean;
   demucsEnabled: boolean;
   mixerSettings: VideoDubbingMixerSettings;
   originalAudioVolumePercent: number;
@@ -219,6 +250,9 @@ export interface VideoDubbingJobHistoryItem {
 export interface VideoDubbingProject {
   id: string;
   name: string;
+  /** Filesystem paths added to API responses; not persisted in project metadata. */
+  storagePath?: string;
+  jobsDirectory?: string;
   logoFileName?: string;
   jobIds: string[];
   activeJobId?: string;
@@ -245,6 +279,7 @@ export interface VideoDubbingMasterGeneration {
   totalSentences: number;
   durationSeconds?: number;
   sizeBytes?: number;
+  audioVersion?: number;
   error?: string;
 }
 

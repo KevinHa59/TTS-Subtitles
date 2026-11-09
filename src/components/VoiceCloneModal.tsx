@@ -61,6 +61,8 @@ interface SystemJob {
 interface SystemToolsStatus {
   isWhisperInstalled: boolean;
   whisperCliPath: string | null;
+  whisperBackend?: "vulkan" | "cpu" | null;
+  whisperVulkanBuildReady?: boolean;
   modelsDir: string;
   models: SystemModelItem[];
   activeJob: SystemJob;
@@ -141,7 +143,7 @@ export default function VoiceCloneModal({
   const [datasetVoiceName, setDatasetVoiceName] = useState<string>("giong_moi");
   const [whisperModel, setWhisperModel] = useState<string>("small");
   const [minDuration, setMinDuration] = useState<number>(1.0);
-  const [maxDuration, setMaxDuration] = useState<number>(12.0);
+  const [maxDuration, setMaxDuration] = useState<number>(10.0);
   const [availableModels, setAvailableModels] = useState<WhisperModelItem[]>([]);
   const [isProcessingDataset, setIsProcessingDataset] = useState<boolean>(false);
   const [datasetFeedback, setDatasetFeedback] = useState<{
@@ -1166,7 +1168,7 @@ export default function VoiceCloneModal({
                           min="5"
                           max="20"
                           value={maxDuration}
-                          onChange={(e) => setMaxDuration(parseFloat(e.target.value) || 12.0)}
+                          onChange={(e) => setMaxDuration(parseFloat(e.target.value) || 10.0)}
                           className="w-full px-2 py-1.5 text-xs rounded-lg bg-slate-900 border border-slate-700 text-white"
                         />
                       </div>
@@ -1525,9 +1527,16 @@ export default function VoiceCloneModal({
                       </h4>
                       <p className="text-xs text-slate-400 mt-0.5">
                         {systemStatus?.isWhisperInstalled
-                          ? `Đường dẫn: ${systemStatus.whisperCliPath}`
+                          ? `Đường dẫn: ${systemStatus.whisperCliPath} · Backend: ${systemStatus.whisperBackend === "vulkan" ? "Vulkan GPU" : "CPU"}`
                           : "Chưa có file thực thi. Cần khởi tạo để cắt lát âm thanh và phiên âm offline."}
                       </p>
+                      {systemStatus?.whisperBackend === "cpu" && (
+                        <p className="text-[11px] text-amber-300 mt-1">
+                          {systemStatus.whisperVulkanBuildReady
+                            ? "Có thể build backend Vulkan; dùng nút bên phải để cài bản GPU, bản CPU hiện tại vẫn được giữ dự phòng."
+                            : "Muốn build Vulkan cho GPU cần CMake, Vulkan SDK và bộ công cụ C++ của Visual Studio."}
+                        </p>
+                      )}
                     </div>
                   </div>
 
@@ -1540,7 +1549,9 @@ export default function VoiceCloneModal({
                     <RefreshCw className={`w-3.5 h-3.5 ${isOperatingTools ? "animate-spin" : ""}`} />
                     <span>
                       {systemStatus?.isWhisperInstalled
-                        ? "Biên dịch lại Whisper.cpp"
+                        ? systemStatus.whisperBackend === "cpu" && systemStatus.whisperVulkanBuildReady
+                          ? "Build Whisper Vulkan (GPU)"
+                          : "Biên dịch lại Whisper.cpp"
                         : "Khởi tạo Whisper.cpp (1-Click)"}
                     </span>
                   </button>

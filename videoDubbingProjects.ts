@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { spawn } from "node:child_process";
 import { VideoDubbingProject } from "./src/types/videoDubbing";
 
 const PROJECT_ID = /^vdp_[0-9a-f]{32}$/;
@@ -12,6 +13,7 @@ export class VideoDubbingProjects {
   private readonly projects = new Map<string, VideoDubbingProject>();
   private readonly projectDirectories = new Map<string, string>();
   private readonly persistedSourceSrtContent = new Map<string, string>();
+  private readonly updateQueues = new Map<string, Promise<void>>();
   private initialized?: Promise<void>;
   private readonly directory: string;
 
@@ -58,6 +60,25 @@ export class VideoDubbingProjects {
   }
 
   async update(id: string, input: unknown): Promise<VideoDubbingProject> {
+    const previousUpdate = this.updateQueues.get(id);
+    let releaseUpdate!: () => void;
+    const queuedUpdate = new Promise<void>((resolve) => {
+      releaseUpdate = resolve;
+    });
+    this.updateQueues.set(id, queuedUpdate);
+    if (previousUpdate) await previousUpdate;
+
+    try {
+      return await this.applyUpdate(id, input);
+    } finally {
+      releaseUpdate();
+      if (this.updateQueues.get(id) === queuedUpdate) {
+        this.updateQueues.delete(id);
+      }
+    }
+  }
+
+  private async applyUpdate(id: string, input: unknown): Promise<VideoDubbingProject> {
     await this.initialize();
     const project = this.require(id);
     const previousName = project.name;
@@ -137,6 +158,27 @@ export class VideoDubbingProjects {
   getProjectDirectory(id: string): string | null {
     if (!PROJECT_ID.test(id) || !this.projects.has(id)) return null;
     return this.projectPath(id);
+  }
+
+  openProjectFolder(id: string): void {
+    const directory = this.getProjectDirectory(id);
+    if (!directory || !fs.existsSync(directory) || !fs.statSync(directory).isDirectory()) {
+      throw new Error("Không tìm thấy thư mục project.");
+    }
+    const command = process.platform === "win32"
+      ? "explorer.exe"
+      : process.platform === "darwin"
+        ? "open"
+        : "xdg-open";
+    const child = spawn(command, [directory], {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    child.once("error", (error) => {
+      console.error("[VideoDubbing] Không mở được thư mục project:", error);
+    });
+    child.unref();
   }
 
   getProjectJobsDirectory(id: string): string | null {

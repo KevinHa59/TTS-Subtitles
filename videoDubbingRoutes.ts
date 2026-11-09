@@ -1,4 +1,5 @@
 import { Request, Response, Router } from "express";
+import { ZipArchive } from "archiver";
 import path from "node:path";
 import fs from "node:fs";
 import { VideoDubbingMasterCoordinator } from "./videoDubbingMaster";
@@ -8,6 +9,8 @@ import { VideoDubbingSeparationCoordinator } from "./videoDubbingSeparation";
 import { VideoDubbingPipelineCoordinator } from "./videoDubbingPipeline";
 import { DEFAULT_SUBTITLE_FONT_FAMILIES, getSubtitleFontFaces } from "./videoDubbingFonts";
 import { VideoDubbingProjects } from "./videoDubbingProjects";
+import { VideoDubbingMasterEditCoordinator } from "./videoDubbingMasterEdit";
+import type { VideoDubbingProject } from "./src/types/videoDubbing";
 
 function streamVideoDubbingMp4(
   req: Request,
@@ -116,6 +119,7 @@ export function createVideoDubbingRouter(
   separationCoordinator?: VideoDubbingSeparationCoordinator,
   pipelineCoordinator?: VideoDubbingPipelineCoordinator,
   projects?: VideoDubbingProjects,
+  masterEditCoordinator?: VideoDubbingMasterEditCoordinator,
 ): Router {
   const router = Router();
   const pipelineIsBusy = (jobId: string) =>
@@ -125,7 +129,15 @@ export function createVideoDubbingRouter(
     masterCoordinator?.isBusy(jobId) === true ||
     mediaCoordinator?.isBusy(jobId) === true ||
     separationCoordinator?.isBusy(jobId) === true ||
-    pipelineCoordinator?.isBusy(jobId) === true;
+    pipelineCoordinator?.isBusy(jobId) === true ||
+    masterEditCoordinator?.isBusy(jobId) === true;
+  const masterEditIsBusy = (jobId: string) =>
+    masterEditCoordinator?.isBusy(jobId) === true;
+  const withProjectLocation = (project: VideoDubbingProject) => ({
+    ...project,
+    storagePath: projects?.getProjectDirectory(project.id) ?? undefined,
+    jobsDirectory: projects?.getProjectJobsDirectory(project.id) ?? undefined,
+  });
 
   const ensureProjectLogo = async (inputProject: NonNullable<Awaited<ReturnType<VideoDubbingProjects["get"]>>>) => {
     if (!projects) return inputProject;
@@ -244,13 +256,28 @@ export function createVideoDubbingRouter(
 
   router.get("/projects", async (_req: Request, res: Response) => {
     if (!projects) return res.status(501).json({ error: "Project chưa được cấu hình." });
-    try { return res.json({ success: true, projects: await projects.list() }); }
+    try { return res.json({ success: true, projects: (await projects.list()).map(withProjectLocation) }); }
     catch (error) { console.error("[VideoDubbing] Không thể tải project:", error); return res.status(500).json({ error: "Không thể tải danh sách project." }); }
+  });
+
+  router.post("/projects/:projectId/open-folder", async (req: Request, res: Response) => {
+    if (!projects) return res.status(501).json({ error: "Project chưa được cấu hình." });
+    try {
+      if (!await projects.get(req.params.projectId)) {
+        return res.status(404).json({ error: "Không tìm thấy project." });
+      }
+      projects.openProjectFolder(req.params.projectId);
+      return res.json({ success: true });
+    } catch (error) {
+      return res.status(404).json({
+        error: error instanceof Error ? error.message : "Không thể mở thư mục project.",
+      });
+    }
   });
 
   router.post("/projects", async (req: Request, res: Response) => {
     if (!projects) return res.status(501).json({ error: "Project chưa được cấu hình." });
-    try { return res.status(201).json({ success: true, project: await projects.create(req.body?.name) }); }
+    try { return res.status(201).json({ success: true, project: withProjectLocation(await projects.create(req.body?.name)) }); }
     catch (error) { return res.status(400).json({ error: error instanceof Error ? error.message : "Không thể tạo project." }); }
   });
 
@@ -269,7 +296,7 @@ export function createVideoDubbingRouter(
         return res.status(500).json({ error: "Không thể sắp xếp dữ liệu job vào thư mục project." });
       }
     }
-    return project ? res.json({ success: true, project }) : res.status(404).json({ error: "Không tìm thấy project." });
+    return project ? res.json({ success: true, project: withProjectLocation(project) }) : res.status(404).json({ error: "Không tìm thấy project." });
   });
 
   router.put("/projects/:projectId", async (req: Request, res: Response) => {
@@ -293,10 +320,17 @@ export function createVideoDubbingRouter(
       const newDirectory = projects.getProjectDirectory(project.id)!;
       if (oldDirectory !== newDirectory) videoDubbingManager.relocateProjectJobs(oldDirectory, newDirectory);
       const jobsDirectory = projects.getProjectJobsDirectory(project.id)!;
-      for (const jobId of jobIds) await videoDubbingManager.moveJobToProject(jobId, jobsDirectory);
+      for (const jobId of jobIds) {
+        if (!projectJobIsBusy(jobId)) {
+          await videoDubbingManager.moveJobToProject(jobId, jobsDirectory);
+        }
+      }
       project = await ensureProjectLogo(project);
-      return res.json({ success: true, project });
-    } catch (error) { return res.status(400).json({ error: error instanceof Error ? error.message : "Không thể lưu project." }); }
+      return res.json({ success: true, project: withProjectLocation(project) });
+    } catch (error) {
+      console.error("[VideoDubbing] Lỗi lưu project:", error);
+      return res.status(400).json({ error: error instanceof Error ? error.message : "Không thể lưu project." });
+    }
   });
 
   router.put("/projects/:projectId/logo", async (req: Request, res: Response) => {
@@ -323,7 +357,7 @@ export function createVideoDubbingRouter(
       if (previousFileName && previousFileName !== fileName) {
         await fs.promises.rm(path.join(assetsDirectory, previousFileName), { force: true });
       }
-      return res.json({ success: true, project, job: project.activeJobId ? videoDubbingManager.getJob(project.activeJobId) : null });
+      return res.json({ success: true, project: withProjectLocation(project), job: project.activeJobId ? videoDubbingManager.getJob(project.activeJobId) : null });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Không thể tải logo project lên.";
       console.error("[VideoDubbing] Lỗi tải logo project:", error);
@@ -485,6 +519,30 @@ export function createVideoDubbingRouter(
     }
   });
 
+  router.post("/jobs/:jobId/auto-pipeline/tts", async (req: Request, res: Response) => {
+    if (!pipelineCoordinator) {
+      return res.status(501).json({ error: "Tạo TTS chưa được cấu hình." });
+    }
+    if (!videoDubbingManager.isValidJobId(req.params.jobId)) {
+      return res.status(400).json({ error: "ID job video không hợp lệ." });
+    }
+    if (!videoDubbingManager.getJob(req.params.jobId)) {
+      return res.status(404).json({ error: "Không tìm thấy job Video Dubbing." });
+    }
+    try {
+      const state = await pipelineCoordinator.startTts(req.params.jobId, req.body);
+      return res.status(202).json({ success: true, state });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Không thể bắt đầu tạo TTS.";
+      const unavailable =
+        message.includes("chưa sẵn sàng") ||
+        message.includes("chưa được cấu hình") ||
+        message.includes("không khả dụng");
+      return res.status(unavailable ? 503 : 400).json({ error: message });
+    }
+  });
+
   router.post(
     "/jobs/:jobId/auto-pipeline/cancel",
     async (req: Request, res: Response) => {
@@ -638,6 +696,7 @@ export function createVideoDubbingRouter(
       if (!filePath) {
         return res.status(404).json({ error: "TTS Master chưa được tạo." });
       }
+      res.setHeader("Cache-Control", "no-store, must-revalidate");
       res.type("audio/wav");
       return res.sendFile(filePath, (error) => {
         if (error && !res.headersSent) {
@@ -647,6 +706,122 @@ export function createVideoDubbingRouter(
       });
     },
   );
+
+  router.get("/jobs/:jobId/master-edit/preview", (req: Request, res: Response) => {
+    if (!masterEditCoordinator) {
+      return res.status(501).json({ error: "Preview chỉnh sửa TTS chưa được cấu hình." });
+    }
+    if (!videoDubbingManager.isValidJobId(req.params.jobId)) {
+      return res.status(400).json({ error: "ID job video không hợp lệ." });
+    }
+    if (!videoDubbingManager.getJob(req.params.jobId)) {
+      return res.status(404).json({ error: "Không tìm thấy job Video Dubbing." });
+    }
+    try {
+      const wav = masterEditCoordinator.createPreviewWav(req.params.jobId);
+      res.setHeader("Cache-Control", "no-store, must-revalidate");
+      res.type("audio/wav");
+      return res.send(wav);
+    } catch (error) {
+      return res.status(400).json({
+        error: error instanceof Error ? error.message : "Không thể tạo preview TTS đã chỉnh.",
+      });
+    }
+  });
+
+  router.post("/jobs/:jobId/master-edit/split", (req: Request, res: Response) => {
+    if (!masterEditCoordinator) {
+      return res.status(501).json({ error: "Chỉnh sửa TTS Master chưa được cấu hình." });
+    }
+    const { jobId } = req.params;
+    if (!videoDubbingManager.isValidJobId(jobId)) {
+      return res.status(400).json({ error: "ID job video không hợp lệ." });
+    }
+    if (!videoDubbingManager.getJob(jobId)) {
+      return res.status(404).json({ error: "Không tìm thấy job Video Dubbing." });
+    }
+    if (
+      videoDubbingManager.isJobStorageBusy(jobId) ||
+      masterCoordinator?.isBusy(jobId) ||
+      mediaCoordinator?.isBusy(jobId) ||
+      separationCoordinator?.isBusy(jobId) ||
+      pipelineIsBusy(jobId) ||
+      masterEditIsBusy(jobId)
+    ) {
+      return res.status(409).json({ error: "Job đang xử lý; hãy thử lại sau." });
+    }
+    try {
+      const state = masterEditCoordinator.split(jobId);
+      return res.json({ success: true, state, job: videoDubbingManager.getJob(jobId) });
+    } catch (error) {
+      return res.status(400).json({
+        error: error instanceof Error ? error.message : "Không thể tách TTS Master.",
+      });
+    }
+  });
+
+  router.put("/jobs/:jobId/master-edit/clips", (req: Request, res: Response) => {
+    if (!masterEditCoordinator) {
+      return res.status(501).json({ error: "Chỉnh sửa TTS Master chưa được cấu hình." });
+    }
+    const { jobId } = req.params;
+    if (!videoDubbingManager.isValidJobId(jobId)) {
+      return res.status(400).json({ error: "ID job video không hợp lệ." });
+    }
+    if (!videoDubbingManager.getJob(jobId)) {
+      return res.status(404).json({ error: "Không tìm thấy job Video Dubbing." });
+    }
+    if (
+      videoDubbingManager.isJobStorageBusy(jobId) ||
+      masterCoordinator?.isBusy(jobId) ||
+      mediaCoordinator?.isBusy(jobId) ||
+      separationCoordinator?.isBusy(jobId) ||
+      pipelineIsBusy(jobId) ||
+      masterEditIsBusy(jobId)
+    ) {
+      return res.status(409).json({ error: "Job đang xử lý; hãy thử lại sau." });
+    }
+    try {
+      const state = masterEditCoordinator.updateClips(jobId, req.body?.clips);
+      return res.json({ success: true, state, job: videoDubbingManager.getJob(jobId) });
+    } catch (error) {
+      return res.status(400).json({
+        error: error instanceof Error ? error.message : "Không thể cập nhật vị trí clip.",
+      });
+    }
+  });
+
+  router.post("/jobs/:jobId/master-edit/merge", (req: Request, res: Response) => {
+    if (!masterEditCoordinator) {
+      return res.status(501).json({ error: "Chỉnh sửa TTS Master chưa được cấu hình." });
+    }
+    const { jobId } = req.params;
+    if (!videoDubbingManager.isValidJobId(jobId)) {
+      return res.status(400).json({ error: "ID job video không hợp lệ." });
+    }
+    if (!videoDubbingManager.getJob(jobId)) {
+      return res.status(404).json({ error: "Không tìm thấy job Video Dubbing." });
+    }
+    if (
+      videoDubbingManager.isJobStorageBusy(jobId) ||
+      masterCoordinator?.isBusy(jobId) ||
+      mediaCoordinator?.isBusy(jobId) ||
+      separationCoordinator?.isBusy(jobId) ||
+      pipelineIsBusy(jobId) ||
+      masterEditIsBusy(jobId)
+    ) {
+      return res.status(409).json({ error: "Job đang xử lý; hãy thử lại sau." });
+    }
+    try {
+      const state = masterEditCoordinator.merge(jobId);
+      return res.json({ success: true, state, job: videoDubbingManager.getJob(jobId) });
+    } catch (error) {
+      return res.status(400).json({
+        error: error instanceof Error ? error.message : "Không thể gộp TTS Master.",
+        job: videoDubbingManager.getJob(jobId),
+      });
+    }
+  });
 
   router.get("/jobs/:jobId/separation", (req: Request, res: Response) => {
     if (!videoDubbingManager.isValidJobId(req.params.jobId)) {
@@ -1066,6 +1241,87 @@ export function createVideoDubbingRouter(
       return;
     },
   );
+
+  router.get("/exports/download-all", (req: Request, res: Response) => {
+    if (!mediaCoordinator) {
+      return res.status(501).json({ error: "Tải MP4 chưa được cấu hình." });
+    }
+    if (typeof req.query.jobIds !== "string") {
+      return res.status(400).json({ error: "Danh sách job video không hợp lệ." });
+    }
+    const jobIds = req.query.jobIds.split(",");
+    if (
+      jobIds.length === 0 ||
+      jobIds.some((jobId) => !videoDubbingManager.isValidJobId(jobId)) ||
+      new Set(jobIds).size !== jobIds.length
+    ) {
+      return res.status(400).json({ error: "Danh sách job video không hợp lệ." });
+    }
+
+    const entries: Array<{ filePath: string; fileName: string }> = [];
+    for (const jobId of jobIds) {
+      const job = videoDubbingManager.getJob(jobId);
+      if (!job || job.status !== "completed" || job.videoExport?.status !== "completed") {
+        return res.status(400).json({
+          error: `Job ${jobId} chưa có video export hoàn tất.`,
+        });
+      }
+      const filePath = mediaCoordinator.getVideoExportPath(jobId);
+      if (!filePath) {
+        return res.status(404).json({
+          error: `Không tìm thấy MP4 đã export của job ${jobId}.`,
+        });
+      }
+      entries.push({ filePath, fileName: path.basename(filePath) });
+    }
+
+    const usedNames = new Set<string>();
+    for (const entry of entries) {
+      const extension = path.extname(entry.fileName);
+      const baseName = path.basename(entry.fileName, extension);
+      let candidate = entry.fileName;
+      let suffix = 2;
+      while (usedNames.has(candidate.toLowerCase())) {
+        candidate = `${baseName} (${suffix})${extension}`;
+        suffix += 1;
+      }
+      entry.fileName = candidate;
+      usedNames.add(candidate.toLowerCase());
+    }
+
+    const archive = new ZipArchive({ store: true });
+    archive.on("error", (error) => {
+      console.error("[VideoDubbing] Lỗi khi tạo ZIP video:", error);
+      if (res.headersSent) {
+        res.destroy(error);
+      } else {
+        res.status(500).json({ error: "Không thể đóng gói các video đã export." });
+      }
+    });
+    res.on("close", () => {
+      if (!res.writableEnded) archive.destroy();
+    });
+    res.status(200);
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader(
+      "Content-Disposition",
+      'attachment; filename="video-dubbing-exports.zip"',
+    );
+    res.setHeader("Cache-Control", "no-store");
+    archive.pipe(res);
+    for (const entry of entries) {
+      archive.file(entry.filePath, { name: entry.fileName });
+    }
+    void archive.finalize().catch((error: unknown) => {
+      console.error("[VideoDubbing] Lỗi khi hoàn tất ZIP video:", error);
+      if (res.headersSent) {
+        res.destroy(error instanceof Error ? error : undefined);
+      } else {
+        res.status(500).json({ error: "Không thể đóng gói các video đã export." });
+      }
+    });
+    return;
+  });
 
   router.post("/jobs/:jobId/open-export-folder", (req: Request, res: Response) => {
     if (!mediaCoordinator) {

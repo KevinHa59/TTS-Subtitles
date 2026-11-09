@@ -104,3 +104,19 @@ test("seeking after a track has ended resumes it when its duration permits", asy
   assert.equal(track.paused, false);
   controller.dispose();
 });
+
+test("plays and seeks the source video when no audio tracks are available", async () => {
+  const video = new FakeMediaElement(10);
+  const controller = createController(video, []);
+
+  await controller.play();
+  assert.equal(video.paused, false);
+
+  controller.seek(4.5);
+  assert.equal(video.currentTime, 4.5);
+  assert.equal(video.paused, false);
+
+  controller.pause();
+  assert.equal(video.paused, true);
+  controller.dispose();
+});

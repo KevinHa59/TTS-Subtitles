@@ -22,6 +22,9 @@ export interface SubtitleOverlayRendererProps {
   backgroundImage?: string | null;
   paddingPx: number;
   position: VideoDubbingOverlayPosition;
+  textAlign?: CSSProperties["textAlign"];
+  wrap?: boolean;
+  maxWidth?: CSSProperties["maxWidth"];
   assetUrlFor?: (imageName: string) => string;
 }
 
@@ -56,6 +59,9 @@ export default function SubtitleOverlayRenderer({
   backgroundImage,
   paddingPx,
   position,
+  textAlign,
+  wrap = true,
+  maxWidth,
   assetUrlFor,
 }: SubtitleOverlayRendererProps) {
   const imageBaseUrl = assetUrlFor
@@ -93,11 +99,13 @@ export default function SubtitleOverlayRenderer({
     textTransform: textCase,
     textDecorationLine: underline ? "underline" : "none",
     textShadow,
-    textAlign: getSubtitleTextAlignment(position),
+    textAlign: textAlign ?? getSubtitleTextAlignment(position),
+    display: textAlign ? "block" : undefined,
+    width: textAlign ? "max-content" : undefined,
     position: "relative",
     overflow: "visible",
-    whiteSpace: "pre-line",
-    maxWidth: "90%",
+    whiteSpace: wrap ? "pre-line" : "pre",
+    maxWidth: maxWidth ?? (wrap ? "90%" : "none"),
   };
 
   return (

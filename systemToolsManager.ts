@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { spawn, execSync } from "child_process";
+import { spawn, spawnSync, execSync } from "child_process";
 import https from "https";
 import http from "http";
 import AdmZip from "adm-zip";
@@ -68,6 +68,75 @@ export const WHISPER_MODEL_SPECS = [
 const TOOLS_DIR = path.resolve(__dirname, "tools");
 const WHISPER_DIR = path.resolve(TOOLS_DIR, "whisper.cpp");
 const MODELS_DIR = path.resolve(WHISPER_DIR, "models");
+const WHISPER_VULKAN_BUILD_DIR = path.resolve(WHISPER_DIR, "build-vulkan");
+const WHISPER_VULKAN_READY_FILE = path.resolve(WHISPER_VULKAN_BUILD_DIR, "whisper-vulkan-ready.json");
+
+export type WhisperBackend = "vulkan" | "cpu" | null;
+
+function getVulkanCliPath(): string | null {
+  if (!fs.existsSync(WHISPER_VULKAN_READY_FILE)) return null;
+
+  const names = process.platform === "win32"
+    ? ["whisper-cli.exe", "main.exe", "whisper-cli", "main"]
+    : ["whisper-cli", "main", "whisper-cli.exe", "main.exe"];
+  const searchDirs = [
+    path.resolve(WHISPER_VULKAN_BUILD_DIR, "bin"),
+    path.resolve(WHISPER_VULKAN_BUILD_DIR, "bin", "Release"),
+  ];
+
+  for (const dir of searchDirs) {
+    for (const name of names) {
+      const candidate = path.resolve(dir, name);
+      if (
+        fs.existsSync(candidate) &&
+        fs.existsSync(path.resolve(dir, "ggml-vulkan.dll"))
+      ) {
+        return candidate;
+      }
+    }
+  }
+
+  return null;
+}
+
+function getVulkanSdkPath(): string | null {
+  const candidates = [process.env.VULKAN_SDK];
+  const programFiles = process.env.ProgramFiles || "C:\\Program Files";
+  const sdkRoots = [path.resolve(programFiles, "VulkanSDK"), "C:\\VulkanSDK"];
+
+  for (const sdkRoot of sdkRoots) {
+    if (!fs.existsSync(sdkRoot)) continue;
+    try {
+      candidates.push(
+        ...fs.readdirSync(sdkRoot, { withFileTypes: true })
+          .filter((entry) => entry.isDirectory())
+          .map((entry) => path.resolve(sdkRoot, entry.name))
+          .sort((a, b) => b.localeCompare(a, undefined, { numeric: true })),
+      );
+    } catch {}
+  }
+
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const resolved = path.resolve(candidate);
+    if (
+      fs.existsSync(path.resolve(resolved, "Include", "vulkan", "vulkan.h")) &&
+      fs.existsSync(path.resolve(resolved, "Lib", "vulkan-1.lib"))
+    ) {
+      return resolved;
+    }
+  }
+
+  return null;
+}
+
+export function getWhisperBackend(cliPath: string | null): WhisperBackend {
+  if (!cliPath) return null;
+  const vulkanCliPath = getVulkanCliPath();
+  return vulkanCliPath && path.resolve(vulkanCliPath) === path.resolve(cliPath)
+    ? "vulkan"
+    : "cpu";
+}
 
 // Ensure base directories exist
 if (!fs.existsSync(TOOLS_DIR)) {
@@ -96,7 +165,89 @@ function commandExists(cmd: string): boolean {
   }
 }
 
-export function getWhisperCliPath(): string | null {
+function getCmakePath(): string | null {
+  try {
+    const found = execSync("where cmake", { stdio: "pipe" })
+      .toString()
+      .split(/\r?\n/)
+      .map((entry) => entry.trim())
+      .find((entry) => entry && fs.existsSync(entry));
+    if (found) return found;
+  } catch {}
+
+  const candidates = [
+    "C:\\Program Files\\CMake\\bin\\cmake.exe",
+    process.env.VSINSTALLDIR
+      ? path.resolve(process.env.VSINSTALLDIR, "Common7", "IDE", "CommonExtensions", "Microsoft", "CMake", "CMake", "bin", "cmake.exe")
+      : null,
+  ];
+  return candidates.find((candidate): candidate is string => !!candidate && fs.existsSync(candidate)) || null;
+}
+
+function getVisualStudioInstallPath(): string | null {
+  const environmentPath = process.env.VSINSTALLDIR;
+  if (
+    environmentPath &&
+    fs.existsSync(path.resolve(environmentPath, "VC", "Auxiliary", "Build", "vcvars64.bat"))
+  ) {
+    return path.resolve(environmentPath);
+  }
+
+  const programFilesX86 = process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)";
+  const vswhere = path.resolve(
+    programFilesX86,
+    "Microsoft Visual Studio",
+    "Installer",
+    "vswhere.exe",
+  );
+  if (!fs.existsSync(vswhere)) return null;
+
+  const probe = spawnSync(
+    vswhere,
+    ["-latest", "-products", "*", "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64", "-property", "installationPath"],
+    { encoding: "utf8", windowsHide: true },
+  );
+  const installPath = probe.status === 0 ? probe.stdout?.trim() : "";
+  return installPath && fs.existsSync(path.resolve(installPath, "VC", "Auxiliary", "Build", "vcvars64.bat"))
+    ? path.resolve(installPath)
+    : null;
+}
+
+function hasWindowsCppToolchain(): boolean {
+  if (process.platform !== "win32") return false;
+  return commandExists("cl") || !!getVisualStudioInstallPath();
+}
+
+function getWindowsCppEnvironment(): NodeJS.ProcessEnv | null {
+  if (process.platform !== "win32") return null;
+  const installPath = getVisualStudioInstallPath();
+  if (!installPath) return commandExists("cl") ? process.env : null;
+
+  const vcvars = path.resolve(installPath, "VC", "Auxiliary", "Build", "vcvars64.bat");
+  const command = `call "${vcvars}" && set`;
+  const result = spawnSync("cmd.exe", ["/d", "/s", "/c", command], {
+    encoding: "utf8",
+    windowsHide: true,
+    // Node normally escapes embedded quotes for the Windows C runtime. cmd.exe
+    // needs the batch path quotes passed verbatim, otherwise it tries to run a
+    // command whose name literally starts with a quote.
+    windowsVerbatimArguments: true,
+    maxBuffer: 4 * 1024 * 1024,
+  });
+  if (result.status !== 0 || !result.stdout) return null;
+
+  const environment: NodeJS.ProcessEnv = {};
+  for (const line of result.stdout.split(/\r?\n/)) {
+    const separator = line.indexOf("=");
+    if (separator <= 0) continue;
+    const name = line.slice(0, separator);
+    const value = line.slice(separator + 1);
+    if (name) environment[name] = value;
+  }
+  return environment.PATH && environment.INCLUDE && environment.LIB ? environment : null;
+}
+
+export function getCpuWhisperCliPath(): string | null {
   const isWin = process.platform === "win32";
   const names = isWin
     ? ["whisper-cli.exe", "main.exe", "whisper-cli", "main"]
@@ -130,6 +281,10 @@ export function getWhisperCliPath(): string | null {
   return null;
 }
 
+export function getWhisperCliPath(): string | null {
+  return getVulkanCliPath() || getCpuWhisperCliPath();
+}
+
 export function getSystemToolsStatus() {
   const cliPath = getWhisperCliPath();
   const isWhisperInstalled = !!cliPath;
@@ -159,6 +314,13 @@ export function getSystemToolsStatus() {
   return {
     isWhisperInstalled,
     whisperCliPath: cliPath,
+    whisperBackend: getWhisperBackend(cliPath),
+    whisperVulkanBuildReady:
+      process.platform === "win32" &&
+      !!getCmakePath() &&
+      hasWindowsCppToolchain() &&
+      !!getVulkanSdkPath() &&
+      fs.existsSync(path.resolve(WHISPER_DIR, "CMakeLists.txt")),
     modelsDir: MODELS_DIR,
     models,
     activeJob: currentJob,
@@ -186,11 +348,16 @@ function runProcessAsync(
   cmd: string,
   args: string[],
   cwd: string,
-  onLine: (line: string) => void
+  onLine: (line: string) => void,
+  env?: NodeJS.ProcessEnv,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     const isWin = process.platform === "win32";
-    const proc = spawn(cmd, args, { cwd, shell: isWin });
+    const proc = spawn(cmd, args, {
+      cwd,
+      shell: isWin,
+      ...(env ? { env: { ...process.env, ...env } } : {}),
+    });
     let stdoutBuffer = "";
     let stderrBuffer = "";
 
@@ -406,10 +573,22 @@ export async function startCompileWhisperCpp(forceRebuild = false): Promise<bool
     throw new Error(`Hệ thống đang bận: ${currentJob.message}`);
   }
 
+  const isWindows = process.platform === "win32";
+  const cmakePath = getCmakePath();
+  const hasCmake = !!cmakePath;
+  const vulkanSdkPath = isWindows ? getVulkanSdkPath() : null;
   const existingCli = getWhisperCliPath();
+  const canBuildVulkan =
+    isWindows &&
+    hasCmake &&
+    hasWindowsCppToolchain() &&
+    !!vulkanSdkPath &&
+    fs.existsSync(path.resolve(WHISPER_DIR, "CMakeLists.txt"));
+  const shouldUpgradeToVulkan =
+    canBuildVulkan && existingCli !== null && getWhisperBackend(existingCli) !== "vulkan";
 
   // If already compiled and user did not request forceRebuild, immediately verify and complete
-  if (existingCli && !forceRebuild) {
+  if (existingCli && !forceRebuild && !shouldUpgradeToVulkan) {
     const status = getSystemToolsStatus();
     const hasAnyModel = status.models.some((m) => m.isDownloaded);
 
@@ -437,8 +616,132 @@ export async function startCompileWhisperCpp(forceRebuild = false): Promise<bool
     return true;
   }
 
-  const isWindows = process.platform === "win32";
-  const hasCmake = commandExists("cmake");
+  if (canBuildVulkan) {
+    currentJob = {
+      id: `compile_whisper_vulkan_${Date.now()}`,
+      type: "compile_whisper",
+      target: "whisper.cpp-vulkan",
+      status: "running",
+      progressPercent: 5,
+      message: "[5%] Đang chuẩn bị build Whisper.cpp với Vulkan cho GPU...",
+      logs: [
+        `Phát hiện Vulkan SDK: ${vulkanSdkPath}`,
+        "Build riêng vào tools/whisper.cpp/build-vulkan để giữ nguyên bản CPU dự phòng.",
+      ],
+      startTime: Date.now(),
+    };
+
+    (async () => {
+      try {
+        const cppEnvironment = getWindowsCppEnvironment();
+        if (!cppEnvironment) {
+          throw new Error("Không thể nạp môi trường MSVC x64 từ vcvars64.bat.");
+        }
+        const buildEnvironment = {
+          ...cppEnvironment,
+          VULKAN_SDK: vulkanSdkPath,
+        };
+        const onLine = (line: string) => {
+          currentJob.logs.push(line);
+          if (currentJob.logs.length > 40) currentJob.logs.shift();
+        };
+        const buildDirName = path.basename(WHISPER_VULKAN_BUILD_DIR);
+
+        currentJob.progressPercent = 12;
+        currentJob.message = "[12%] Đang cấu hình backend Vulkan...";
+        await runProcessAsync(
+          cmakePath,
+          [
+            "-S", ".",
+            "-B", buildDirName,
+            "-G", "NMake Makefiles",
+            "-DCMAKE_BUILD_TYPE=Release",
+            "-DGGML_VULKAN=ON",
+            "-DGGML_BACKEND_DL=ON",
+            "-DGGML_NATIVE=OFF",
+            "-DGGML_CPU_ALL_VARIANTS=ON",
+            "-DWHISPER_BUILD_TESTS=OFF",
+          ],
+          WHISPER_DIR,
+          onLine,
+          buildEnvironment,
+        );
+
+        currentJob.progressPercent = 28;
+        currentJob.message = "[28%] Đang build whisper-cli và backend Vulkan...";
+        await runProcessAsync(
+          cmakePath,
+          ["--build", buildDirName, "--config", "Release", "--target", "whisper-cli", "-j2"],
+          WHISPER_DIR,
+          onLine,
+          buildEnvironment,
+        );
+
+        const candidateDirs = [
+          path.resolve(WHISPER_VULKAN_BUILD_DIR, "bin"),
+          path.resolve(WHISPER_VULKAN_BUILD_DIR, "bin", "Release"),
+        ];
+        const executableNames = ["whisper-cli.exe", "main.exe", "whisper-cli", "main"];
+        const vulkanCli = candidateDirs
+          .flatMap((dir) => executableNames.map((name) => path.resolve(dir, name)))
+          .find((candidate) => fs.existsSync(candidate));
+
+        if (!vulkanCli) {
+          throw new Error("Build xong nhưng không tìm thấy whisper-cli trong build-vulkan/bin.");
+        }
+
+        const vulkanDll = path.resolve(path.dirname(vulkanCli), "ggml-vulkan.dll");
+        if (!fs.existsSync(vulkanDll)) {
+          throw new Error("Bản build thiếu ggml-vulkan.dll; giữ nguyên bản CPU dự phòng.");
+        }
+
+        currentJob.progressPercent = 92;
+        currentJob.message = "[92%] Đang xác minh backend Vulkan trong whisper-cli...";
+        const probe = spawnSync(vulkanCli, ["--help"], {
+          encoding: "utf8",
+          timeout: 20_000,
+          maxBuffer: 4 * 1024 * 1024,
+          windowsHide: true,
+        });
+        const probeOutput = `${probe.stdout || ""}\n${probe.stderr || ""}`;
+        if (probe.error || probe.status !== 0 || !/usage:/i.test(probeOutput)) {
+          throw new Error(
+            `Không thể khởi chạy whisper-cli để xác minh bản build: ${probe.error?.message || probeOutput.slice(-1200)}`,
+          );
+        }
+
+        fs.writeFileSync(
+          WHISPER_VULKAN_READY_FILE,
+          JSON.stringify({ cliPath: vulkanCli, builtAt: new Date().toISOString(), backend: "vulkan" }, null, 2),
+          "utf8",
+        );
+        currentJob.logs.push(`Đã build whisper-cli và backend Vulkan: ${vulkanDll}`);
+
+        const status = getSystemToolsStatus();
+        if (!status.models.some((model) => model.isDownloaded)) {
+          currentJob.logs.push("Chưa có mô hình nào, đang tự động tải mô hình Whisper Small...");
+          await startDownloadWhisperModel("small");
+          return;
+        }
+
+        currentJob.progressPercent = 100;
+        currentJob.status = "completed";
+        currentJob.message = "Whisper.cpp Vulkan đã sẵn sàng; tác vụ phiên âm sẽ ưu tiên GPU.";
+        currentJob.logs.push(`Whisper CLI: ${vulkanCli}`);
+      } catch (err: any) {
+        console.error("[SystemTools] Lỗi build Whisper.cpp Vulkan:", err);
+        currentJob.status = "error";
+        currentJob.error = err.message || "Lỗi build Vulkan";
+        currentJob.message = `Build Whisper.cpp Vulkan thất bại: ${err.message}`;
+        currentJob.logs.push(`Lỗi: ${err.message}`);
+        if (existingCli) {
+          currentJob.logs.push(`Bản CPU dự phòng vẫn còn: ${existingCli}`);
+        }
+      }
+    })();
+
+    return true;
+  }
 
   // On Windows, or if CMake is not installed on the system, download official prebuilt binary release!
   if (isWindows || !hasCmake) {
@@ -458,6 +761,18 @@ export async function startCompileWhisperCpp(forceRebuild = false): Promise<bool
       ],
       startTime: Date.now(),
     };
+
+    if (isWindows && !canBuildVulkan) {
+      const missing = [
+        !hasCmake ? "CMake" : null,
+        !hasWindowsCppToolchain() ? "Visual Studio C++ Build Tools" : null,
+        !vulkanSdkPath ? "Vulkan SDK" : null,
+        !fs.existsSync(path.resolve(WHISPER_DIR, "CMakeLists.txt")) ? "mã nguồn Whisper.cpp" : null,
+      ].filter((item): item is string => !!item);
+      currentJob.logs.push(
+        `Chưa thể build backend GPU Vulkan (thiếu: ${missing.join(", ") || "điều kiện build C++"}); đang cài binary CPU chính thức để giữ khả năng phiên âm.`,
+      );
+    }
 
     (async () => {
       try {

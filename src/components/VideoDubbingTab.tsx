@@ -1,4 +1,4 @@
-import { ChangeEvent, DragEvent, PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, DragEvent, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   AudioLines,
@@ -6,11 +6,13 @@ import {
   CheckCircle2,
   ChevronDown,
   Clock3,
+  Download,
   FileText,
   Film,
   FolderOpen,
   HardDrive,
   History,
+  Info,
   LoaderCircle,
   Pause,
   Play,
@@ -33,18 +35,28 @@ import {
   VideoDubbingOverlayPosition,
   VideoDubbingExportQuality,
   VideoDubbingSeparationAvailability,
+  VideoDubbingSubtitleCue,
   VideoDubbingTextOverlayCue,
   VideoDubbingProject,
+  VideoDubbingMasterEditClip,
 } from "../types/videoDubbing";
+import { SubtitleItem } from "../types/subtitles";
 import { formatSecondsToSrtTime } from "../utils/srtParser";
-import { analyzeSrtContent } from "../utils/videoDubbingSrt";
+import { createSrtZip } from "../utils/srtFromText";
+import type { ExtractedSrtFile } from "../utils/srtFromText";
+import { analyzeSrtContent, formatVideoDubbingSrt } from "../utils/videoDubbingSrt";
 import { VideoDubbingPreviewController } from "../utils/videoDubbingPreview";
 import {
   hasMatchedVideoDubbingQueueInputs,
   pairVideoDubbingQueueRows,
+  replaceVideoDubbingSubtitleSources,
+  resolveVideoDubbingTtsItems,
 } from "../utils/videoDubbingQueue";
+import { fitTextOverlaysToVideoDuration } from "../utils/videoDubbingOverlays";
+import { adjustSubtitleCueTimings } from "../utils/videoDubbingSubtitleTiming";
 import { getAvailableVideoDubbingVoices } from "../utils/videoDubbingVoices";
 import SubtitleOverlayRenderer from "./SubtitleOverlayRenderer";
+import VideoDubbingAudioTimeline from "./VideoDubbingAudioTimeline";
 
 interface SelectedVideo {
   fileName: string;
@@ -95,6 +107,18 @@ interface QueueItemState {
   error?: string;
 }
 
+type AllVideosActionName = "tts" | "demucs" | "mix" | "render" | "download";
+
+interface AllVideosActionProgress {
+  action: AllVideosActionName;
+  status: "running" | "completed";
+  currentIndex: number;
+  total: number;
+  currentFileName?: string;
+  completed: number;
+  errors: string[];
+}
+
 interface SubtitleTimelineDrag {
   cueIndex: number;
   track: "subtitle" | "text";
@@ -110,7 +134,7 @@ interface TextOverlayPreviewDrag {
   cueIndex: number;
   pointerX: number;
   pointerY: number;
-  centerX: number;
+  anchorX: number;
   centerY: number;
   stageLeft: number;
   stageTop: number;
@@ -119,6 +143,17 @@ interface TextOverlayPreviewDrag {
   overlayWidth: number;
   overlayHeight: number;
 }
+
+interface VideoDubbingTextTrack {
+  id: string;
+  name: string;
+}
+
+const DEFAULT_TEXT_TRACK_ID = "text-track-1";
+const DEFAULT_TEXT_TRACK: VideoDubbingTextTrack = {
+  id: DEFAULT_TEXT_TRACK_ID,
+  name: "TEXT 1",
+};
 
 interface VideoDubbingVoice {
   id: string;
@@ -301,6 +336,59 @@ interface PreviewTrackNode {
   gain: GainNode;
 }
 
+function getJobProcessingProgress(job: VideoDubbingJob): {
+  label: string;
+  progressPercent?: number;
+  colorClass: string;
+} | null {
+  if (job.autoPipeline?.status === "running") {
+    const separating =
+      job.autoPipeline.phase === "separation" &&
+      job.separation?.status === "processing";
+    return {
+      label: separating
+        ? "Đang tách audio"
+        : job.autoPipeline.phase === "master"
+          ? "Đang tạo TTS"
+          : `Đang xử lý ${job.autoPipeline.phase}`,
+      progressPercent: separating
+        ? job.separation?.progressPercent
+        : job.autoPipeline.progressPercent,
+      colorClass: "bg-indigo-400",
+    };
+  }
+  if (job.masterGeneration?.status === "generating") {
+    return {
+      label: "Đang tạo TTS Master",
+      progressPercent: job.masterGeneration.progressPercent,
+      colorClass: "bg-indigo-400",
+    };
+  }
+  if (job.separation?.status === "processing") {
+    return {
+      label: "Đang tách audio",
+      progressPercent: job.separation.progressPercent,
+      colorClass: "bg-violet-400",
+    };
+  }
+  if (job.finalMix?.status === "running" || job.audioMix?.status === "running") {
+    const task = job.finalMix?.status === "running" ? job.finalMix : job.audioMix;
+    return {
+      label: "Đang Mix Audio",
+      progressPercent: task?.progressPercent,
+      colorClass: "bg-cyan-400",
+    };
+  }
+  if (job.videoExport?.status === "running") {
+    return {
+      label: "Đang Render",
+      progressPercent: job.videoExport.progressPercent,
+      colorClass: "bg-sky-400",
+    };
+  }
+  return null;
+}
+
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -390,13 +478,15 @@ function MetadataGrid({ metadata }: { metadata: VideoDubbingMetadata }) {
 export default function VideoDubbingTab() {
   const [video, setVideo] = useState<SelectedVideo | null>(null);
   const [srt, setSrt] = useState<SelectedSrt | null>(null);
-  const [subtitleCueOverrides, setSubtitleCueOverrides] = useState<Array<{
-    startTime: number;
-    endTime: number;
-    text: string;
-  }> | null>(null);
+  const [subtitleCueOverridesByVideoId, setSubtitleCueOverridesByVideoId] = useState<
+    Record<string, VideoDubbingSubtitleCue[]>
+  >({});
+  const [selectedSubtitleCue, setSelectedSubtitleCue] = useState<number | null>(null);
   const [textOverlays, setTextOverlays] = useState<VideoDubbingTextOverlayCue[]>([]);
+  const [textTracks, setTextTracks] = useState<VideoDubbingTextTrack[]>([DEFAULT_TEXT_TRACK]);
+  const [activeTextTrackId, setActiveTextTrackId] = useState(DEFAULT_TEXT_TRACK_ID);
   const [selectedTextOverlay, setSelectedTextOverlay] = useState<number | null>(null);
+  const [logoTitleCollapsed, setLogoTitleCollapsed] = useState(false);
   const [settingsCollapsed, setSettingsCollapsed] = useState(false);
   const [leftPanelTab, setLeftPanelTab] = useState<"settings" | "sources">("settings");
   const [voices, setVoices] = useState<VideoDubbingVoice[]>([]);
@@ -421,6 +511,7 @@ export default function VideoDubbingTab() {
     "stopped" | "playing" | "paused"
   >("stopped");
   const [previewCurrentTime, setPreviewCurrentTime] = useState(0);
+  const [subtitleTimelineCursorTime, setSubtitleTimelineCursorTime] = useState(0);
   const [videoPreviewReady, setVideoPreviewReady] = useState(false);
   const [mediaError, setMediaError] = useState<string | null>(null);
   const [logoEnabled, setLogoEnabled] = useState(false);
@@ -487,7 +578,13 @@ export default function VideoDubbingTab() {
   const [projectsExpanded, setProjectsExpanded] = useState(false);
   const [guideOpen, setGuideOpen] = useState(false);
   const [videoWorkspaceTab, setVideoWorkspaceTab] = useState<"preview" | "merged">("preview");
+  const [timelineWorkspaceTab, setTimelineWorkspaceTab] = useState<"subtitle" | "audio">("subtitle");
   const [subtitleTimelineZoom, setSubtitleTimelineZoom] = useState(18);
+  const [subtitleTimingAdjustmentsMs, setSubtitleTimingAdjustmentsMs] = useState({
+    start: 100,
+    end: 100,
+    move: 100,
+  });
   const [subtitleTimelineDrag, setSubtitleTimelineDrag] = useState<SubtitleTimelineDrag | null>(null);
   const [textOverlayPreviewDrag, setTextOverlayPreviewDrag] = useState<TextOverlayPreviewDrag | null>(null);
   const [exportClockNow, setExportClockNow] = useState(() => Date.now());
@@ -505,11 +602,16 @@ export default function VideoDubbingTab() {
   const [joinedVideo, setJoinedVideo] = useState<{ jobId: string; fileName: string; sizeBytes: number } | null>(null);
   const [settingsSyncRunning, setSettingsSyncRunning] = useState(false);
   const [settingsSyncMessage, setSettingsSyncMessage] = useState<string | null>(null);
+  const [srtDownloadMessage, setSrtDownloadMessage] = useState<string | null>(null);
+  const [allVideosAction, setAllVideosAction] =
+    useState<AllVideosActionProgress | null>(null);
   const autoPipelineEnabled = true;
   const [autoPipelineExpanded, setAutoPipelineExpanded] = useState(true);
   const [masterPanelExpanded, setMasterPanelExpanded] = useState(false);
   const [separationPanelExpanded, setSeparationPanelExpanded] = useState(false);
   const [mixerPanelExpanded, setMixerPanelExpanded] = useState(true);
+  const [autoPipelineTtsMasterEnabled, setAutoPipelineTtsMasterEnabled] =
+    useState(true);
   const [autoPipelineDemucsEnabled, setAutoPipelineDemucsEnabled] =
     useState(false);
   const [originalAudioVolumePercent, setOriginalAudioVolumePercent] =
@@ -526,6 +628,7 @@ export default function VideoDubbingTab() {
   const previewVideoRef = useRef<HTMLVideoElement | null>(null);
   const previewStageRef = useRef<HTMLDivElement | null>(null);
   const subtitleTimelineTrackRef = useRef<HTMLDivElement | null>(null);
+  const subtitleTimelineScrollRef = useRef<HTMLDivElement | null>(null);
   const srtInputRef = useRef<HTMLInputElement | null>(null);
   const subtitleBrowseTargetRef = useRef<string | null>(null);
   const logoInputRef = useRef<HTMLInputElement | null>(null);
@@ -535,6 +638,7 @@ export default function VideoDubbingTab() {
   const activeJobIdRef = useRef<string | null>(null);
   const mixerSettingsTimerRef = useRef<number | null>(null);
   const mixerSettingsRequestRef = useRef(0);
+  const mixerSettingsVersionRef = useRef(0);
   const mixerSaveChainRef = useRef(Promise.resolve());
   const mixerTouchedRef = useRef(false);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -569,6 +673,7 @@ export default function VideoDubbingTab() {
     if (updateUi) {
       setPreviewStatus("stopped");
       setPreviewCurrentTime(0);
+      setSubtitleTimelineCursorTime(0);
       if (previewVideoRef.current && videoPreviewReady) {
         previewVideoRef.current.currentTime = 0;
       }
@@ -588,6 +693,12 @@ export default function VideoDubbingTab() {
       previewVideoRef.current.currentTime = seekTo;
     }
     setPreviewCurrentTime(seekTo);
+    setSubtitleTimelineCursorTime(seekTo);
+  };
+
+  const seekSubtitleTimeline = (time: number) => {
+    const maximum = job?.metadata?.durationSeconds ?? subtitleTimelineDuration;
+    seekMixerPreview(Math.max(0, Math.min(time, maximum)));
   };
 
   const restartMixerPreview = async () => {
@@ -617,6 +728,7 @@ export default function VideoDubbingTab() {
     track: VideoDubbingMixerTrack,
     patch: Partial<VideoDubbingMixerSettings[VideoDubbingMixerTrack]>,
   ) => {
+    mixerSettingsVersionRef.current++;
     mixerTouchedRef.current = true;
     setMixerSettingsSaved(false);
     setMixerSettings((current) => ({
@@ -643,7 +755,9 @@ export default function VideoDubbingTab() {
     ) {
       availableTracks.push({
         track: "ttsMaster",
-        url: `/api/video-dubbing/jobs/${job.id}/master-audio`,
+        url: job.masterEdit?.clips.length
+          ? `/api/video-dubbing/jobs/${job.id}/master-edit/preview?v=${job.masterEdit.updatedAt}`
+          : `/api/video-dubbing/jobs/${job.id}/master-audio?v=${job.masterGeneration.audioVersion || job.masterGeneration.sizeBytes}`,
       });
     }
     if (job.separation?.vocalsSizeBytes) {
@@ -658,16 +772,8 @@ export default function VideoDubbingTab() {
         url: `/api/video-dubbing/jobs/${job.id}/separation/instrumental`,
       });
     }
-    const included = availableTracks.filter(
-      ({ track }) =>
-        !mixerSettings[track].muted && mixerSettings[track].volumePercent > 0,
-    );
-    if (included.length === 0 || !videoPreviewReady) {
-      if (!videoPreviewReady) {
-        setPreviewError("Video chưa sẵn sàng để xem trước.");
-        return;
-      }
-      setPreviewError("Bật ít nhất một track có sẵn để nghe thử.");
+    if (!videoPreviewReady) {
+      setPreviewError("Video chưa sẵn sàng để xem trước.");
       return;
     }
     setPreviewError(null);
@@ -717,6 +823,7 @@ export default function VideoDubbingTab() {
           durationSeconds,
           (time) => {
             setPreviewCurrentTime(time);
+            setSubtitleTimelineCursorTime(time);
             if (time >= durationSeconds - 0.04) {
               setPreviewStatus("stopped");
             }
@@ -789,15 +896,19 @@ export default function VideoDubbingTab() {
   const makeProjectWorkspace = () => ({
     version: 1,
     mixerSettings, selectedVoiceId, minSpeed, maxSpeed, speedPriority,
-    autoPipelineDemucsEnabled, originalAudioVolumePercent,
+    autoPipelineTtsMasterEnabled, autoPipelineDemucsEnabled, originalAudioVolumePercent,
     logoEnabled, logoWidthPercent, logoPaddingPx, logoPosition,
     subtitlesEnabled, subtitleFontSize, subtitleFontFamily, subtitleColor,
+    subtitleMarginPx,
     subtitleBackgroundColor, subtitleBackgroundTransparent, subtitleBackgroundMode,
     subtitleBold, subtitleItalic, subtitleUnderline, subtitleTextCase,
     subtitleOutlineEnabled, subtitleOutlineColor, subtitleOutlineWidthPx,
     subtitleCharacterSpacingPx, subtitleLineSpacingPx, subtitlePaddingPx,
     subtitlePosition, subtitleBackgroundImage, exportQuality,
-    subtitleCueOverrides, textOverlays, subtitleTimelineZoom,
+    subtitleCueOverrides: video?.job?.id
+      ? subtitleCueOverridesByVideoId[video.job.id] ?? null
+      : null,
+    subtitleCueOverridesByVideoId, textOverlays, textTracks, subtitleTimelineZoom,
   });
 
   const createProject = async () => {
@@ -864,7 +975,13 @@ export default function VideoDubbingTab() {
       } else { setSrt(null); setSrtContent(""); }
       const projectJobs = loaded.jobIds
         .map((id) => history.find((entry) => entry.job.id === id)?.job)
-        .filter((item): item is VideoDubbingJob => Boolean(item));
+        .filter((item): item is VideoDubbingJob => Boolean(item))
+        .sort((left, right) =>
+          left.fileName.localeCompare(right.fileName, undefined, {
+            numeric: true,
+            sensitivity: "base",
+          }),
+        );
       setVideoFiles(projectJobs.map((item) => ({
         id: item.id, name: item.fileName, size: item.sizeBytes, job: item,
       })));
@@ -875,12 +992,19 @@ export default function VideoDubbingTab() {
         const analysis = analyzeSrtContent(item.content);
         return { id: item.id, fileName: item.fileName, sizeBytes: new Blob([item.content]).size, content: item.content, analysis, videoId: item.videoId, matchByName: item.matchByName };
       }));
+      setSelectedSubtitleCue(null);
       const w = loaded.workspace || {};
+      if (typeof w.subtitleMarginPx === "number") setSubtitleMarginPx(w.subtitleMarginPx);
       if (w.mixerSettings) setMixerSettings(w.mixerSettings as VideoDubbingMixerSettings);
       if (typeof w.selectedVoiceId === "string") setSelectedVoiceId(w.selectedVoiceId);
       if (typeof w.minSpeed === "number") setMinSpeed(w.minSpeed);
       if (typeof w.maxSpeed === "number") setMaxSpeed(w.maxSpeed);
       if (w.speedPriority === "balanced" || w.speedPriority === "strict" || w.speedPriority === "natural") setSpeedPriority(w.speedPriority);
+      setAutoPipelineTtsMasterEnabled(
+        typeof w.autoPipelineTtsMasterEnabled === "boolean"
+          ? w.autoPipelineTtsMasterEnabled
+          : true,
+      );
       if (typeof w.autoPipelineDemucsEnabled === "boolean") setAutoPipelineDemucsEnabled(w.autoPipelineDemucsEnabled);
       if (typeof w.originalAudioVolumePercent === "number") setOriginalAudioVolumePercent(w.originalAudioVolumePercent);
       if (typeof w.logoEnabled === "boolean") setLogoEnabled(w.logoEnabled);
@@ -907,8 +1031,30 @@ export default function VideoDubbingTab() {
       setExportQuality(w.exportQuality === "source" || w.exportQuality === "low" || w.exportQuality === "medium" || w.exportQuality === "high" ? w.exportQuality : "high");
       if (typeof w.subtitlePosition === "string") setSubtitlePosition(w.subtitlePosition as VideoDubbingOverlayPosition);
       if (typeof w.subtitleBackgroundImage === "string" || w.subtitleBackgroundImage === null) setSubtitleBackgroundImage(w.subtitleBackgroundImage as string | null);
-      if (Array.isArray(w.subtitleCueOverrides)) setSubtitleCueOverrides(w.subtitleCueOverrides as typeof subtitleCueOverrides);
-      if (Array.isArray(w.textOverlays)) setTextOverlays(w.textOverlays as VideoDubbingTextOverlayCue[]);
+      if (w.subtitleCueOverridesByVideoId && typeof w.subtitleCueOverridesByVideoId === "object" && !Array.isArray(w.subtitleCueOverridesByVideoId)) {
+        setSubtitleCueOverridesByVideoId(w.subtitleCueOverridesByVideoId as Record<string, VideoDubbingSubtitleCue[]>);
+      } else if (loaded.activeJobId && Array.isArray(w.subtitleCueOverrides)) {
+        setSubtitleCueOverridesByVideoId({
+          [loaded.activeJobId]: w.subtitleCueOverrides as VideoDubbingSubtitleCue[],
+        });
+      } else {
+        setSubtitleCueOverridesByVideoId({});
+      }
+      const loadedTextTracks = Array.isArray(w.textTracks)
+        ? w.textTracks.filter((track): track is VideoDubbingTextTrack =>
+            Boolean(track && typeof track.id === "string" && typeof track.name === "string"),
+          )
+        : [];
+      setTextTracks(loadedTextTracks.length ? loadedTextTracks : [DEFAULT_TEXT_TRACK]);
+      setActiveTextTrackId(loadedTextTracks[0]?.id || DEFAULT_TEXT_TRACK_ID);
+      if (Array.isArray(w.textOverlays)) {
+        setTextOverlays((w.textOverlays as VideoDubbingTextOverlayCue[]).map((cue) => ({
+          ...cue,
+          trackId: cue.trackId || DEFAULT_TEXT_TRACK_ID,
+        })));
+      } else {
+        setTextOverlays([]);
+      }
       if (typeof w.subtitleTimelineZoom === "number") setSubtitleTimelineZoom(w.subtitleTimelineZoom);
       setActiveProject(loaded);
       setProjects((items) => [loaded, ...items.filter((item) => item.id !== loaded.id)]);
@@ -1031,20 +1177,50 @@ export default function VideoDubbingTab() {
 
   const previewSourceVideo = async (selectedJob: VideoDubbingJob) => {
     if (selectedJob.status !== "completed" || queueRunning || settingsSyncRunning) return;
+    let currentJob = selectedJob;
+    try {
+      const response = await fetch(`/api/video-dubbing/jobs/${selectedJob.id}`);
+      const result = await response.json();
+      if (!response.ok || !result.job) {
+        throw new Error(result.error || "Không thể tải trạng thái video mới nhất.");
+      }
+      currentJob = result.job as VideoDubbingJob;
+      if (currentJob.status !== "completed") {
+        throw new Error("Video hiện chưa sẵn sàng để mở preview.");
+      }
+      setVideoFiles((items) =>
+        items.map((item) =>
+          item.job?.id === currentJob.id ? { ...item, job: currentJob } : item,
+        ),
+      );
+      setJobHistory((items) =>
+        items.map((item) =>
+          item.job.id === currentJob.id ? { ...item, job: currentJob } : item,
+        ),
+      );
+    } catch (error) {
+      setMediaError(
+        error instanceof Error
+          ? error.message
+          : "Không thể tải trạng thái video mới nhất.",
+      );
+      return;
+    }
+
     let project = importProjectRef.current || activeProject;
-    if (project && !project.jobIds.includes(selectedJob.id)) {
+    if (project && !project.jobIds.includes(currentJob.id)) {
       try {
-        project = await attachJobToProject(project, selectedJob.id);
+        project = await attachJobToProject(project, currentJob.id);
       } catch (error) {
         setProjectError(error instanceof Error ? error.message : "Không thể mở preview của video trong project.");
         return;
       }
     }
 
-    openHistoryJob(selectedJob);
-    setSubtitleCueOverrides(null);
+    openHistoryJob(currentJob);
+    setSelectedSubtitleCue(null);
     const selectedSubtitle = pairVideoDubbingQueueRows(
-      [{ id: selectedJob.id, name: selectedJob.fileName, size: selectedJob.sizeBytes, job: selectedJob }],
+      [{ id: currentJob.id, name: currentJob.fileName, size: currentJob.sizeBytes, job: currentJob }],
       subtitleFiles,
     )[0]?.subtitle;
     if (selectedSubtitle?.content && selectedSubtitle.analysis) {
@@ -1056,7 +1232,7 @@ export default function VideoDubbingTab() {
         error: selectedSubtitle.error,
       });
       setSrtContent(selectedSubtitle.content);
-    } else if (project?.activeJobId === selectedJob.id && project.srt) {
+    } else if (project?.activeJobId === currentJob.id && project.srt) {
       const analysis = analyzeSrtContent(project.srt.content);
       setSrt({
         fileName: project.srt.fileName,
@@ -1071,12 +1247,12 @@ export default function VideoDubbingTab() {
     }
 
     const latestProject = importProjectRef.current || project;
-    if (latestProject?.jobIds.includes(selectedJob.id) && latestProject.activeJobId !== selectedJob.id) {
+    if (latestProject?.jobIds.includes(currentJob.id) && latestProject.activeJobId !== currentJob.id) {
       try {
         const response = await fetch(`/api/video-dubbing/projects/${latestProject.id}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ activeJobId: selectedJob.id }),
+          body: JSON.stringify({ activeJobId: currentJob.id }),
         });
         const result = await response.json();
         if (!response.ok || !result.project) throw new Error(result.error || "Không thể lưu video preview hiện tại.");
@@ -1140,7 +1316,7 @@ export default function VideoDubbingTab() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [activeProject?.id]);
 
   const setDefaultProject = (project: VideoDubbingProject | null) => {
     if (project) window.localStorage.setItem("video-dubbing-default-project", project.id);
@@ -1155,13 +1331,9 @@ export default function VideoDubbingTab() {
     const requestId = ++projectSaveRequestRef.current;
     setProjectSaveState("saving");
     const timer = window.setTimeout(() => {
-      const currentJobId = video?.job?.id;
-      const jobIds = [...new Set([...activeProject.jobIds, ...(currentJobId ? [currentJobId] : [])])];
       void fetch(`/api/video-dubbing/projects/${projectId}`, {
         method: "PUT", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          jobIds,
-          activeJobId: currentJobId && jobIds.includes(currentJobId) ? currentJobId : activeProject.activeJobId || null,
           srt: srtContent ? { fileName: srt?.fileName || "subtitles.srt", content: srtContent } : null,
           workspace: JSON.parse(projectWorkspaceSnapshot),
         }),
@@ -1198,7 +1370,9 @@ export default function VideoDubbingTab() {
         const defaultVoice = availableVoices.find(
           (voice) => voice.modelId === result.defaultModel,
         );
-        setSelectedVoiceId(defaultVoice?.id || availableVoices[0]?.id || "");
+        if (typeof activeProject?.workspace?.selectedVoiceId !== "string") {
+          setSelectedVoiceId(defaultVoice?.id || availableVoices[0]?.id || "");
+        }
         if (availableVoices.length === 0) {
           setVoicesError("Không tìm thấy mô hình giọng đọc khả dụng trên máy.");
         }
@@ -1273,6 +1447,16 @@ export default function VideoDubbingTab() {
         setVideo((current) =>
           current?.job?.id === jobId ? { ...current, job } : current,
         );
+        setVideoFiles((current) =>
+          current.map((item) =>
+            item.job?.id === jobId ? { ...item, job } : item,
+          ),
+        );
+        setJobHistory((current) =>
+          current.map((item) =>
+            item.job.id === jobId ? { ...item, job } : item,
+          ),
+        );
       } catch (error) {
         console.error("Không thể cập nhật trạng thái kiểm tra video:", error);
       }
@@ -1296,10 +1480,9 @@ export default function VideoDubbingTab() {
     video?.job?.videoExport?.status,
   ]);
 
-  const serverMixerSettingsKey = JSON.stringify(
-    video?.job?.mixerSettings || null,
-  );
   const localMixerSettingsKey = JSON.stringify(mixerSettings);
+  const mixerSettingsRef = useRef(mixerSettings);
+  mixerSettingsRef.current = mixerSettings;
 
   useEffect(() => {
     releasePreviewGraph();
@@ -1318,17 +1501,41 @@ export default function VideoDubbingTab() {
   ]);
 
   useEffect(() => {
-    const savedSettings = video?.job?.mixerSettings;
+    const currentJob = video?.job;
+    if (mixerTouchedRef.current) return;
+    if (
+      activeProject &&
+      (!currentJob || !activeProject.jobIds.includes(currentJob.id))
+    ) {
+      return;
+    }
+    const projectSettings = activeProject?.workspace?.mixerSettings;
+    const savedSettings =
+      currentJob?.mixerSettings ||
+      currentJob?.autoPipeline?.config?.mixerSettings ||
+      (projectSettings &&
+      typeof projectSettings === "object" &&
+      !Array.isArray(projectSettings)
+        ? projectSettings as VideoDubbingMixerSettings
+        : undefined);
     setMixerSettings(savedSettings || DEFAULT_MIXER_SETTINGS);
     setMixerSettingsSaved(Boolean(savedSettings));
-  }, [video?.job?.id, serverMixerSettingsKey, video?.job?.mixSelection]);
+  }, [
+    activeProject?.id,
+    video?.job?.id,
+  ]);
 
   useEffect(() => {
-    if (video?.job?.id && activeProject?.jobIds.includes(video.job.id)) {
+    if (activeProject && (!video?.job?.id || activeProject.jobIds.includes(video.job.id))) {
       return;
     }
     const settings = video?.job?.overlaySettings;
-    setTextOverlays(settings?.textOverlays ?? []);
+    setTextTracks([DEFAULT_TEXT_TRACK]);
+    setActiveTextTrackId(DEFAULT_TEXT_TRACK_ID);
+    setTextOverlays((settings?.textOverlays ?? []).map((cue) => ({
+      ...cue,
+      trackId: cue.trackId || DEFAULT_TEXT_TRACK_ID,
+    })));
     setExportQuality(settings?.exportQuality ?? "high");
     setSelectedTextOverlay(null);
     setLogoEnabled(settings?.logoEnabled ?? false);
@@ -1378,10 +1585,16 @@ export default function VideoDubbingTab() {
   }, [video?.job?.id, activeProject?.id]);
 
   // The subtitle margin is per-video even while the rest of the preview settings
-  // may be hydrated from a shared project workspace.
+  // may be hydrated from a shared project workspace. Prefer the project value
+  // when present so project reload cannot reset the synchronized margin.
   useEffect(() => {
+    const projectMargin = activeProject?.workspace?.subtitleMarginPx;
+    if (typeof projectMargin === "number") {
+      setSubtitleMarginPx(projectMargin);
+      return;
+    }
     setSubtitleMarginPx(video?.job?.overlaySettings?.subtitleMarginPx ?? 32);
-  }, [video?.job?.id, activeProject?.id]);
+  }, [video?.job?.id, activeProject?.id, activeProject?.workspace?.subtitleMarginPx]);
 
   useEffect(() => {
     void fetch("/api/video-dubbing/subtitle-backgrounds")
@@ -1441,9 +1654,25 @@ export default function VideoDubbingTab() {
     setMixerPanelExpanded(true);
     const config = job.autoPipeline?.config;
     autoPipelineSavedConfigKeyRef.current = config
-      ? JSON.stringify(config)
+      ? JSON.stringify({ ...config, mixerSettings: undefined })
       : null;
+    const workspace = activeProject?.workspace;
+    const hasProjectPipelineSettings = Boolean(
+      workspace &&
+        [
+          "selectedVoiceId",
+          "minSpeed",
+          "maxSpeed",
+          "speedPriority",
+          "autoPipelineTtsMasterEnabled",
+          "autoPipelineDemucsEnabled",
+          "originalAudioVolumePercent",
+          "mixerSettings",
+        ].some((key) => Object.prototype.hasOwnProperty.call(workspace, key)),
+    );
+    if (hasProjectPipelineSettings) return;
     if (!config) {
+      setAutoPipelineTtsMasterEnabled(true);
       setAutoPipelineDemucsEnabled(false);
       setOriginalAudioVolumePercent(100);
       setMixerSettings(DEFAULT_MIXER_SETTINGS);
@@ -1452,6 +1681,7 @@ export default function VideoDubbingTab() {
       setMaxSpeed(1.5);
       return;
     }
+    setAutoPipelineTtsMasterEnabled(config.ttsMasterEnabled !== false);
     setAutoPipelineDemucsEnabled(config.demucsEnabled);
     setOriginalAudioVolumePercent(config.originalAudioVolumePercent);
     setMixerSettings(config.mixerSettings);
@@ -1473,9 +1703,10 @@ export default function VideoDubbingTab() {
       },
     });
     setSubtitlesEnabled(true);
-  }, [video?.job?.id, video?.job?.autoPipeline?.config, queueRunning]);
+  }, [video?.job?.id, video?.job?.autoPipeline?.config, queueRunning, activeProject?.id]);
 
   useEffect(() => {
+    if (activeProject?.workspace && typeof activeProject.workspace.selectedVoiceId === "string") return;
     const savedModel = video?.job?.autoPipeline?.config?.master;
     if (!savedModel) return;
     const voice = voices.find(
@@ -1484,7 +1715,7 @@ export default function VideoDubbingTab() {
         candidate.speakerId === savedModel.speakerId,
     );
     if (voice) setSelectedVoiceId(voice.id);
-  }, [video?.job?.id, video?.job?.autoPipeline?.config?.master, voices]);
+  }, [video?.job?.id, video?.job?.autoPipeline?.config?.master, voices, activeProject?.id]);
 
   useEffect(() => {
     const job = video?.job;
@@ -1513,6 +1744,27 @@ export default function VideoDubbingTab() {
             mixerTouchedRef.current = false;
             setMixerSettingsSaved(true);
             setMixerError(null);
+            if (result.job) {
+              setVideo((current) =>
+                current?.job?.id === job.id
+                  ? { ...current, job: result.job as VideoDubbingJob }
+                  : current,
+              );
+              setVideoFiles((current) =>
+                current.map((item) =>
+                  item.job?.id === job.id
+                    ? { ...item, job: result.job as VideoDubbingJob }
+                    : item,
+                ),
+              );
+              setJobHistory((current) =>
+                current.map((item) =>
+                  item.job.id === job.id
+                    ? { ...item, job: result.job as VideoDubbingJob }
+                    : item,
+                ),
+              );
+            }
           }
         } catch (error) {
           if (version === mixerSettingsRequestRef.current) {
@@ -1783,8 +2035,8 @@ export default function VideoDubbingTab() {
   };
 
   const ensureImportProject = async (suggestedName: string): Promise<VideoDubbingProject> => {
-    if (activeProject) { importProjectRef.current = activeProject; return activeProject; }
     if (importProjectRef.current) return importProjectRef.current;
+    if (activeProject) { importProjectRef.current = activeProject; return activeProject; }
     if (importProjectPromiseRef.current) return importProjectPromiseRef.current;
     const creation = (async () => {
       const response = await fetch("/api/video-dubbing/projects", {
@@ -1918,22 +2170,30 @@ export default function VideoDubbingTab() {
     srtInputRef.current?.click();
   };
 
+  const fileStem = (fileName: string) =>
+    (fileName.split(/[\\/]/).pop() || fileName).replace(/\.[^.]+$/, "").trim().toLocaleLowerCase();
+
   const handleSrtFiles = async (files: File[], targetVideoId?: string, matchByName = false) => {
     if (files.length === 0 || queueRunning) return;
 
-    const queued = files.map((file) => ({
-      id: crypto.randomUUID(),
-      file,
-      fileName: file.name,
-      sizeBytes: file.size,
-      videoId: targetVideoId,
-      matchByName,
-    }));
-    setSubtitleFiles((current) => [
-      ...current.filter((item) => !targetVideoId || item.videoId !== targetVideoId),
-      ...queued,
-    ]);
+    const queued = files.map((file) => {
+      const matchingVideos = videoFiles.filter((item) => fileStem(item.name) === fileStem(file.name));
+      const matchedVideoId = targetVideoId ||
+        (matchingVideos.length === 1 ? matchingVideos[0].job?.id || matchingVideos[0].id : undefined);
+      return {
+        id: crypto.randomUUID(),
+        file,
+        fileName: file.name,
+        sizeBytes: file.size,
+        videoId: matchedVideoId,
+        matchByName: matchByName || !matchedVideoId,
+      };
+    });
+    setSubtitleFiles((current) =>
+      replaceVideoDubbingSubtitleSources(current, queued, targetVideoId),
+    );
 
+    const sourceSrtsToSave: NonNullable<VideoDubbingProject["sourceSrts"]> = [];
     for (const entry of queued) {
       try {
         if (!entry.file.name.toLowerCase().endsWith(".srt")) {
@@ -1941,32 +2201,46 @@ export default function VideoDubbingTab() {
         }
         const content = await entry.file!.text();
         const analysis = analyzeSrtContent(content);
-        const project = await ensureImportProject(entry.fileName);
-        const sourceSrts = [...(project.sourceSrts || []).filter((item) => item.id !== entry.id && (!targetVideoId || item.videoId !== targetVideoId)), { id: entry.id, fileName: entry.fileName, content, ...(targetVideoId ? { videoId: targetVideoId } : {}), ...(matchByName ? { matchByName: true } : {}) }];
-        const saveResponse = await fetch(`/api/video-dubbing/projects/${project.id}`, {
-          method: "PUT", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sourceSrts }),
-        });
-        const savedResult = await saveResponse.json();
-        if (!saveResponse.ok || !savedResult.project) throw new Error(savedResult.error || "Không thể lưu SRT vào project.");
-        const savedProject = savedResult.project as VideoDubbingProject;
-        setActiveProject(savedProject);
-        importProjectRef.current = savedProject;
-        setProjects((items) => [savedProject, ...items.filter((item) => item.id !== savedProject.id)]);
+        const sourceSrt = {
+          id: entry.id,
+          fileName: entry.fileName,
+          content,
+          ...(entry.videoId ? { videoId: entry.videoId } : {}),
+          ...(entry.matchByName ? { matchByName: true } : {}),
+        };
+        sourceSrtsToSave.push(sourceSrt);
         setSubtitlesEnabled(true);
         setSubtitleFiles((current) =>
-          current.map((item) =>
-            item.id === entry.id ? { ...item, analysis, content, file: undefined } : item,
+          replaceVideoDubbingSubtitleSources(
+            current.filter((item) => item.id !== entry.id),
+            [{ ...entry, analysis, content, file: undefined }],
           ),
         );
-        setSrt(
-          (current) =>
+        const activeJob = activeJobIdRef.current;
+        if (entry.videoId && entry.videoId === activeJob) {
+          setSrt({
+              fileName: entry.fileName,
+              sizeBytes: entry.sizeBytes,
+              content,
+              analysis,
+          });
+          setSrtContent(content);
+          setSubtitleCueOverridesByVideoId((current) => {
+            const next = { ...current };
+            delete next[entry.videoId!];
+            return next;
+          });
+          setSelectedSubtitleCue(null);
+        } else {
+          setSrt((current) =>
             current || {
               fileName: entry.fileName,
               sizeBytes: entry.sizeBytes,
+              content,
               analysis,
             },
-        );
+          );
+        }
       } catch (error) {
         const message =
           error instanceof Error
@@ -1975,6 +2249,42 @@ export default function VideoDubbingTab() {
         setSubtitleFiles((current) =>
           current.map((item) =>
             item.id === entry.id ? { ...item, error: message } : item,
+          ),
+        );
+      }
+    }
+
+    if (sourceSrtsToSave.length > 0) {
+      try {
+        const project = await ensureImportProject(sourceSrtsToSave[0].fileName);
+        const replacementIds = new Set(sourceSrtsToSave.map((item) => item.id));
+        const sourceSrts = [
+          ...(project.sourceSrts || []).filter((item) => !replacementIds.has(item.id)),
+          ...sourceSrtsToSave,
+        ];
+        const saveResponse = await fetch(`/api/video-dubbing/projects/${project.id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sourceSrts }),
+        });
+        const savedResult = await saveResponse.json();
+        if (!saveResponse.ok || !savedResult.project) {
+          throw new Error(savedResult.error || "Không thể lưu các SRT vào project.");
+        }
+        const savedProject = savedResult.project as VideoDubbingProject;
+        setActiveProject(savedProject);
+        importProjectRef.current = savedProject;
+        setProjects((items) => [
+          savedProject,
+          ...items.filter((item) => item.id !== savedProject.id),
+        ]);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Không thể lưu các SRT vào project.";
+        setSubtitleFiles((current) =>
+          current.map((item) =>
+            sourceSrtsToSave.some((source) => source.id === item.id)
+              ? { ...item, error: message }
+              : item,
           ),
         );
       }
@@ -1998,7 +2308,9 @@ export default function VideoDubbingTab() {
       void importQueueVideos(droppedVideos);
     }
     if (droppedSubtitles.length > 0) {
-      const droppedTogether = droppedVideos.length > 0;
+      const droppedTogether =
+        droppedVideos.length > 0 ||
+        (!targetVideoId && droppedSubtitles.length > 0);
       void handleSrtFiles(droppedSubtitles, droppedTogether ? undefined : targetVideoId, droppedTogether);
     }
   };
@@ -2035,14 +2347,41 @@ export default function VideoDubbingTab() {
 
   const removeQueuedSource = async (videoSource: QueuedVideo | undefined, subtitleSource: QueuedSubtitle | undefined) => {
     try {
-      if (videoSource?.job && activeProject) {
+      const currentProject = importProjectRef.current || activeProject;
+      const isRemovingActivePreview = Boolean(
+        videoSource?.job &&
+          (activeJobIdRef.current === videoSource.job.id ||
+            video?.job?.id === videoSource.job.id),
+      );
+      const remainingVideos = videoSource
+        ? videoFiles.filter((item) => item.id !== videoSource.id)
+        : videoFiles;
+      const removedVideoIndex = videoSource
+        ? videoFiles.findIndex((item) => item.id === videoSource.id)
+        : -1;
+      const replacementPreview = isRemovingActivePreview
+        ? remainingVideos
+            .slice(Math.max(0, removedVideoIndex))
+            .find((item) => item.job?.status === "completed") ||
+          remainingVideos
+            .slice(0, Math.max(0, removedVideoIndex))
+            .reverse()
+            .find((item) => item.job?.status === "completed")
+        : undefined;
+
+      if (videoSource?.job && currentProject) {
         const response = await fetch(`/api/video-dubbing/jobs/${videoSource.job.id}`, { method: "DELETE" });
         const result = await response.json();
         if (!response.ok) throw new Error(result.error || "Không thể xóa video nguồn đã lưu.");
-        const jobIds = activeProject.jobIds.filter((id) => id !== videoSource.job!.id);
-        const saveResponse = await fetch(`/api/video-dubbing/projects/${activeProject.id}`, {
+        const jobIds = currentProject.jobIds.filter((id) => id !== videoSource.job!.id);
+        const activeJobId = isRemovingActivePreview
+          ? replacementPreview?.job?.id || null
+          : currentProject.activeJobId === videoSource.job.id
+            ? jobIds[0] || null
+            : currentProject.activeJobId || null;
+        const saveResponse = await fetch(`/api/video-dubbing/projects/${currentProject.id}`, {
           method: "PUT", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ jobIds, activeJobId: activeProject.activeJobId === videoSource.job.id ? jobIds[0] || null : activeProject.activeJobId || null }),
+          body: JSON.stringify({ jobIds, activeJobId }),
         });
         const saved = await saveResponse.json();
         if (!saveResponse.ok || !saved.project) throw new Error(saved.error || "Không thể cập nhật project sau khi xóa video.");
@@ -2050,11 +2389,19 @@ export default function VideoDubbingTab() {
         importProjectRef.current = saved.project;
         setProjects((items) => [saved.project, ...items.filter((item) => item.id !== saved.project.id)]);
         setJobHistory((items) => items.filter((item) => item.job.id !== videoSource.job!.id));
-        if (activeJobIdRef.current === videoSource.job.id) { activeJobIdRef.current = null; setVideo(null); }
+        if (isRemovingActivePreview) {
+          if (replacementPreview?.job) {
+            await previewSourceVideo(replacementPreview.job);
+          } else {
+            activeJobIdRef.current = null;
+            setVideo(null);
+          }
+        }
       }
-      if (subtitleSource && activeProject) {
-        const sourceSrts = (activeProject.sourceSrts || []).filter((item) => item.id !== subtitleSource.id);
-        const response = await fetch(`/api/video-dubbing/projects/${activeProject.id}`, {
+      const latestProject = importProjectRef.current || currentProject;
+      if (subtitleSource && latestProject) {
+        const sourceSrts = (latestProject.sourceSrts || []).filter((item) => item.id !== subtitleSource.id);
+        const response = await fetch(`/api/video-dubbing/projects/${latestProject.id}`, {
           method: "PUT", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ sourceSrts, ...(subtitleSource.id.startsWith("legacy-") ? { srt: null } : {}) }),
         });
@@ -2103,10 +2450,17 @@ export default function VideoDubbingTab() {
   };
 
   const job = video?.job || null;
-  useEffect(() => {
-    setSubtitleCueOverrides(null);
-  }, [job?.id, srt?.fileName, srt?.sizeBytes]);
   const selectedVoice = voices.find((voice) => voice.id === selectedVoiceId);
+  useEffect(() => {
+    if (!previewTrackKeyRef.current?.includes("ttsMaster:")) return;
+    releasePreviewGraph(false);
+    setPreviewStatus("paused");
+  }, [
+    job?.id,
+    job?.masterEdit?.updatedAt,
+    job?.masterGeneration?.audioVersion,
+    job?.masterGeneration?.sizeBytes,
+  ]);
   const masterGeneration = job?.masterGeneration;
   const isMasterGenerating = masterGeneration?.status === "generating";
   const audioMix = job?.audioMix;
@@ -2185,8 +2539,7 @@ export default function VideoDubbingTab() {
   );
   const canRenderFinalMix = Boolean(
     job?.status === "completed" &&
-    hasMasterAudio &&
-    hasPreviewTrack &&
+    (hasPreviewTrack || Boolean(job.metadata?.audioCodec)) &&
     !isMasterGenerating &&
     !isMediaProcessing,
   );
@@ -2198,24 +2551,34 @@ export default function VideoDubbingTab() {
     !isMasterGenerating &&
     !isMediaProcessing,
   );
+  const currentTtsSubtitleItems = resolveVideoDubbingTtsItems(
+    job?.id,
+    subtitleCueOverridesByVideoId,
+    srt?.analysis?.items ?? [],
+  );
   const canGenerateMaster = Boolean(
     job?.status === "completed" &&
-    srt?.analysis?.items.length &&
+    currentTtsSubtitleItems.length &&
     selectedVoice &&
     !isMasterGenerating &&
     !isMediaProcessing,
   );
   const autoPipelineConfig: VideoDubbingAutoPipelineConfig | null = useMemo(
     () =>
-      srt?.analysis?.items.length && selectedVoice
+      (!autoPipelineTtsMasterEnabled ||
+        (currentTtsSubtitleItems.length > 0 && Boolean(selectedVoice)))
         ? {
             enabled: autoPipelineEnabled,
             master: {
-              items: srt.analysis.items,
-              model: selectedVoice.modelId,
-              speakerId: selectedVoice.speakerId,
+              items: currentTtsSubtitleItems,
+              model:
+                selectedVoice?.modelId ||
+                job?.autoPipeline?.config?.master.model ||
+                "",
+              speakerId: selectedVoice?.speakerId,
               options: { minSpeed, maxSpeed, speedPriority },
             },
+            ttsMasterEnabled: autoPipelineTtsMasterEnabled,
             demucsEnabled: autoPipelineDemucsEnabled,
             mixerSettings,
             originalAudioVolumePercent,
@@ -2223,25 +2586,31 @@ export default function VideoDubbingTab() {
         : null,
     [
       autoPipelineEnabled,
+      autoPipelineTtsMasterEnabled,
       autoPipelineDemucsEnabled,
       maxSpeed,
       minSpeed,
       mixerSettings,
       originalAudioVolumePercent,
+      job?.id,
       selectedVoice,
       speedPriority,
       srt?.analysis?.items,
+      subtitleCueOverridesByVideoId,
     ],
   );
   const canStartAutoPipeline = Boolean(
     job?.status === "completed" &&
     autoPipelineEnabled &&
+    (autoPipelineTtsMasterEnabled || autoPipelineDemucsEnabled) &&
     autoPipelineConfig &&
     !isAutoPipelineRunning &&
     !isMediaProcessing &&
+    (!autoPipelineTtsMasterEnabled ||
+    Boolean(currentTtsSubtitleItems.length && selectedVoice)) &&
     (!autoPipelineDemucsEnabled ||
-      (separationAvailability?.status === "ready" &&
-        Boolean(job.metadata?.audioCodec))),
+    (separationAvailability?.status === "ready" &&
+      Boolean(job.metadata?.audioCodec))),
   );
   const queueRows = pairVideoDubbingQueueRows(videoFiles, subtitleFiles);
   const projectJobItems = activeProject
@@ -2250,6 +2619,137 @@ export default function VideoDubbingTab() {
         .filter((item): item is VideoDubbingJobHistoryItem => item !== undefined)
         .filter((item) => !videoFiles.some((video) => video.job?.id === item.job.id))
     : [];
+  const allVideosJobs = Array.from(
+    new Map(
+      [
+        ...projectJobItems.map(({ job: savedJob }) => savedJob),
+        ...queueRows.flatMap(({ video: queuedVideo }) =>
+          queuedVideo?.job ? [queuedVideo.job] : [],
+        ),
+      ]
+        .filter((targetJob) => targetJob.status === "completed")
+        .map((targetJob) => [targetJob.id, targetJob] as const),
+    ).values(),
+  );
+  const resolveSrtDownload = (
+    targetJob: VideoDubbingJob,
+  ): { fileName: string; cues: VideoDubbingSubtitleCue[] } | null => {
+    const queueRow = queueRows.find(
+      ({ video: queuedVideo }) => queuedVideo?.job?.id === targetJob.id,
+    );
+    const hasTimelineOverride = Object.prototype.hasOwnProperty.call(
+      subtitleCueOverridesByVideoId,
+      targetJob.id,
+    );
+    const cues = hasTimelineOverride
+      ? subtitleCueOverridesByVideoId[targetJob.id]
+      : queueRow?.subtitle?.analysis?.items?.length
+        ? queueRow.subtitle.analysis.items
+        : job?.id === targetJob.id && srt?.analysis?.items?.length
+          ? srt.analysis.items
+          : targetJob.overlaySettings?.subtitles || [];
+    if (!cues?.some((cue) => typeof cue.text === "string" && cue.text.trim())) {
+      return null;
+    }
+
+    const matchedProjectSrt = activeProject?.sourceSrts?.find(
+      (source) =>
+        source.videoId === targetJob.id ||
+        (!source.videoId &&
+          source.matchByName !== false &&
+          fileStem(source.fileName) === fileStem(targetJob.fileName)),
+    );
+    const originalFileName =
+      queueRow?.subtitle?.fileName ||
+      matchedProjectSrt?.fileName ||
+      (activeProject?.activeJobId === targetJob.id
+        ? activeProject.srt?.fileName
+        : undefined);
+    return {
+      fileName:
+        originalFileName?.split(/[\\/]/).pop() ||
+        `${targetJob.fileName.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, "") || "subtitles"}.srt`,
+      cues: [...cues],
+    };
+  };
+  const allSrtDownloadTargets = allVideosJobs.flatMap((targetJob) => {
+    const resolved = resolveSrtDownload(targetJob);
+    return resolved ? [{ targetJob, ...resolved }] : [];
+  });
+  const triggerFileDownload = (fileName: string, blob: Blob) => {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = fileName;
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+  const downloadSrtForJob = (targetJob: VideoDubbingJob) => {
+    try {
+      const resolved = resolveSrtDownload(targetJob);
+      if (!resolved) {
+        setSrtDownloadMessage(`Không có phụ đề để tải: ${targetJob.fileName}`);
+        return;
+      }
+      triggerFileDownload(
+        resolved.fileName,
+        new Blob([formatVideoDubbingSrt(resolved.cues)], {
+          type: "application/x-subrip;charset=utf-8",
+        }),
+      );
+      setSrtDownloadMessage(`Đã tải ${resolved.fileName}.`);
+    } catch (error) {
+      setSrtDownloadMessage(
+        error instanceof Error ? error.message : "Không thể tạo tệp SRT.",
+      );
+    }
+  };
+  const downloadAllSrts = () => {
+    try {
+      const usedNames = new Set<string>();
+      const files: ExtractedSrtFile[] = allSrtDownloadTargets.map(
+        ({ fileName, cues }) => {
+          const extensionIndex = fileName.toLocaleLowerCase().endsWith(".srt")
+            ? fileName.length - 4
+            : fileName.length;
+          const baseName = fileName.slice(0, extensionIndex);
+          let uniqueName = `${baseName}.srt`;
+          let suffix = 2;
+          while (usedNames.has(uniqueName.toLocaleLowerCase())) {
+            uniqueName = `${baseName} (${suffix}).srt`;
+            suffix += 1;
+          }
+          usedNames.add(uniqueName.toLocaleLowerCase());
+          return {
+            fileName: uniqueName,
+            content: formatVideoDubbingSrt(cues),
+          };
+        },
+      );
+      if (!files.length) {
+        setSrtDownloadMessage("Không có phụ đề để tải.");
+        return;
+      }
+      triggerFileDownload("subtitles.zip", createSrtZip(files));
+      setSrtDownloadMessage(`Đã tạo ZIP gồm ${files.length} phụ đề.`);
+    } catch (error) {
+      setSrtDownloadMessage(
+        error instanceof Error ? error.message : "Không thể tạo tệp ZIP SRT.",
+      );
+    }
+  };
+  const allVideosRunning = allVideosAction?.status === "running";
+  const allVideosTtsReady = Boolean(
+    selectedVoice ||
+      allVideosJobs.every(
+        (targetJob) => targetJob.autoPipeline?.config?.master.model,
+      ),
+  );
+  const allVideosActionDisabled =
+    allVideosJobs.length === 0 ||
+    allVideosRunning ||
+    queueRunning ||
+    settingsSyncRunning;
   const queueRowCount = queueRows.length;
   const queueCountsMatch = hasMatchedVideoDubbingQueueInputs(queueRows);
   const queueInputsValid =
@@ -2271,8 +2771,10 @@ export default function VideoDubbingTab() {
   const canStartQueue = Boolean(
     queueInputsValid &&
     autoPipelineEnabled &&
-    selectedVoice &&
+    (autoPipelineTtsMasterEnabled ? selectedVoice : true) &&
+    (autoPipelineTtsMasterEnabled || autoPipelineDemucsEnabled) &&
     !queueRunning &&
+    !allVideosRunning &&
     !isAutoPipelineRunning &&
     (!autoPipelineDemucsEnabled || separationAvailability?.status === "ready"),
   );
@@ -2387,13 +2889,26 @@ export default function VideoDubbingTab() {
     }
 
     const duration = targetJob.metadata?.durationSeconds ?? Number.POSITIVE_INFINITY;
-    const sourceCues = targetJob.id === sourceJob?.id && subtitleCueOverrides
-      ? subtitleCueOverrides
-      : subtitle?.analysis?.items || targetJob.overlaySettings?.subtitles || [];
-    const textOverlayClips = textOverlays
-      .filter((cue) => cue.startTime < duration)
-      .map((cue) => ({ ...cue, endTime: Math.min(cue.endTime, duration) }))
-      .filter((cue) => cue.endTime > cue.startTime);
+    const sourceCues = resolveVideoDubbingTtsItems(
+      targetJob.id,
+      subtitleCueOverridesByVideoId,
+      subtitle?.analysis?.items?.length
+        ? subtitle.analysis.items
+        : targetJob.id === job?.id
+          ? srt?.analysis?.items || []
+          : (targetJob.overlaySettings?.subtitles || []).map(
+              (cue, index): SubtitleItem => ({
+                id: `saved-${index + 1}`,
+                index: index + 1,
+                startTime: cue.startTime,
+                endTime: cue.endTime,
+                targetDuration: Math.max(0.1, cue.endTime - cue.startTime),
+                text: cue.text,
+                status: "pending",
+              }),
+            ),
+    );
+    const textOverlayClips = fitTextOverlaysToVideoDuration(textOverlays, duration);
     const settings = {
       exportQuality,
       logoEnabled: logoEnabled && Boolean(sourceLogoName),
@@ -2461,7 +2976,11 @@ export default function VideoDubbingTab() {
         setSettingsSyncMessage(`Đang đồng bộ ${index + 1}/${sources.length}: ${source.name}`);
         try {
           await applyPreviewOverlayToJob(sourceJob, row?.subtitle);
-          const subtitleItems = row?.subtitle?.analysis?.items || sourceJob.autoPipeline?.config?.master.items;
+          const subtitleItems = resolveVideoDubbingTtsItems(
+            sourceJob.id,
+            subtitleCueOverridesByVideoId,
+            row?.subtitle?.analysis?.items || sourceJob.autoPipeline?.config?.master.items || [],
+          );
           if (selectedVoice && subtitleItems?.length) {
             const config: VideoDubbingAutoPipelineConfig = {
               enabled: true,
@@ -2471,6 +2990,7 @@ export default function VideoDubbingTab() {
                 speakerId: selectedVoice.speakerId,
                 options: { minSpeed, maxSpeed, speedPriority },
               },
+              ttsMasterEnabled: autoPipelineTtsMasterEnabled,
               demucsEnabled: autoPipelineDemucsEnabled && Boolean(sourceJob.metadata?.audioCodec),
               mixerSettings,
               originalAudioVolumePercent,
@@ -2537,7 +3057,7 @@ export default function VideoDubbingTab() {
   };
 
   const startQueue = async () => {
-    if (!canStartQueue || !selectedVoice) return;
+    if (!canStartQueue || (autoPipelineTtsMasterEnabled && !selectedVoice)) return;
     let shouldJoinAfterQueue = joinAfterQueue;
     if (shouldJoinAfterQueue) {
       const jobIds = queueRows.map((row) => row.video?.job?.id);
@@ -2615,11 +3135,16 @@ export default function VideoDubbingTab() {
           const config: VideoDubbingAutoPipelineConfig = {
             enabled: true,
             master: {
-              items: subtitle.analysis.items,
-              model: selectedVoice.modelId,
-              speakerId: selectedVoice.speakerId,
+              items: resolveVideoDubbingTtsItems(
+                uploadedJob.id,
+                subtitleCueOverridesByVideoId,
+                subtitle.analysis.items,
+              ),
+              model: selectedVoice?.modelId || uploadedJob.autoPipeline?.config?.master.model || "",
+              speakerId: selectedVoice?.speakerId,
               options: { minSpeed, maxSpeed, speedPriority },
             },
+            ttsMasterEnabled: autoPipelineTtsMasterEnabled,
             demucsEnabled: autoPipelineDemucsEnabled,
             mixerSettings,
             originalAudioVolumePercent,
@@ -2838,14 +3363,14 @@ export default function VideoDubbingTab() {
     !isMediaProcessing,
   );
   const createMaster = async () => {
-    if (!job || !srt?.analysis?.items.length || !selectedVoice) return;
+    if (!job || !currentTtsSubtitleItems.length || !selectedVoice) return;
     setMasterError(null);
     try {
       const response = await fetch(`/api/video-dubbing/jobs/${job.id}/master`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          items: srt.analysis.items,
+          items: currentTtsSubtitleItems,
           model: selectedVoice.modelId,
           speakerId: selectedVoice.speakerId,
           options: { minSpeed, maxSpeed, speedPriority },
@@ -2876,49 +3401,66 @@ export default function VideoDubbingTab() {
   };
   const saveAutoPipelineConfig = async (config = autoPipelineConfig) => {
     if (!job || !config) return;
-    const configKey = JSON.stringify(config);
     setAutoPipelineError(null);
     setAutoPipelineSaving(true);
     try {
-      const response = await fetch(
-        `/api/video-dubbing/jobs/${job.id}/auto-pipeline/config`,
-        {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: configKey,
-        },
-      );
-      const result = await response.json();
-      if (!response.ok) {
-        throw new Error(
-          result.error || "Không thể lưu cấu hình Auto Pipeline.",
+      const saveOperation = mixerSaveChainRef.current.then(async () => {
+        const mixerSettingsVersion = mixerSettingsVersionRef.current;
+        const configToSave = {
+          ...config,
+          mixerSettings: mixerSettingsRef.current,
+        };
+        const configKey = JSON.stringify(configToSave);
+        const response = await fetch(
+          `/api/video-dubbing/jobs/${job.id}/auto-pipeline/config`,
+          {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: configKey,
+          },
         );
-      }
-      autoPipelineSavedConfigKeyRef.current = configKey;
-      mixerTouchedRef.current = false;
-      setMixerSettingsSaved(true);
-      setVideo((current) =>
-        current?.job?.id === job.id
-          ? {
-              ...current,
-              job: {
-                ...current.job,
-                mixerSettings: result.config.mixerSettings,
-                autoPipeline: {
-                  ...(current.job.autoPipeline || {
-                    status: "idle",
-                    phase: "validating",
-                    completedStages: [],
-                    reusedOutputs: [],
-                    artifacts: {},
-                    updatedAt: Date.now(),
-                  }),
-                  config: result.config,
+        const result = await response.json();
+        if (!response.ok) {
+          throw new Error(
+            result.error || "Không thể lưu cấu hình Auto Pipeline.",
+          );
+        }
+        autoPipelineSavedConfigKeyRef.current = JSON.stringify({
+          ...configToSave,
+          mixerSettings: undefined,
+        });
+        if (mixerSettingsVersionRef.current === mixerSettingsVersion) {
+          mixerTouchedRef.current = false;
+          setMixerSettingsSaved(true);
+        }
+        setVideo((current) =>
+          current?.job?.id === job.id
+            ? {
+                ...current,
+                job: {
+                  ...current.job,
+                  mixerSettings:
+                    mixerSettingsVersionRef.current === mixerSettingsVersion
+                      ? result.config.mixerSettings
+                      : current.job.mixerSettings,
+                  autoPipeline: {
+                    ...(current.job.autoPipeline || {
+                      status: "idle",
+                      phase: "validating",
+                      completedStages: [],
+                      reusedOutputs: [],
+                      artifacts: {},
+                      updatedAt: Date.now(),
+                    }),
+                    config: result.config,
+                  },
                 },
-              },
-            }
-          : current,
-      );
+              }
+            : current,
+        );
+      });
+      mixerSaveChainRef.current = saveOperation.catch(() => undefined);
+      await saveOperation;
     } catch (error) {
       setAutoPipelineError(
         error instanceof Error
@@ -2933,16 +3475,8 @@ export default function VideoDubbingTab() {
     if (!job || !autoPipelineConfig) return;
     setAutoPipelineError(null);
     try {
-      const overlayResponse = await fetch(`/api/video-dubbing/jobs/${job.id}/overlay-settings`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ exportQuality }),
-      });
-      const overlayResult = await overlayResponse.json();
-      if (!overlayResponse.ok || !overlayResult.job) throw new Error(overlayResult.error || "Không thể lưu mức chất lượng export.");
-      setVideo((current) => current?.job?.id === job.id ? { ...current, job: overlayResult.job } : current);
       const response = await fetch(
-        `/api/video-dubbing/jobs/${job.id}/auto-pipeline`,
+        `/api/video-dubbing/jobs/${job.id}/auto-pipeline/tts`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -2951,7 +3485,7 @@ export default function VideoDubbingTab() {
       );
       const result = await response.json();
       if (!response.ok) {
-        throw new Error(result.error || "Không thể bắt đầu Auto Pipeline.");
+        throw new Error(result.error || "Không thể bắt đầu tạo TTS.");
       }
       setVideo((current) =>
         current?.job?.id === job.id
@@ -2965,7 +3499,7 @@ export default function VideoDubbingTab() {
       setAutoPipelineError(
         error instanceof Error
           ? error.message
-          : "Không thể bắt đầu Auto Pipeline.",
+          : "Không thể bắt đầu tạo TTS.",
       );
     }
   };
@@ -3184,7 +3718,10 @@ export default function VideoDubbingTab() {
             endTime,
             text,
           })),
-          textOverlays,
+          textOverlays: fitTextOverlaysToVideoDuration(
+            textOverlays,
+            job.metadata?.durationSeconds ?? Number.POSITIVE_INFINITY,
+          ),
           subtitleFontSize,
           subtitleFontFamily,
           subtitleColor,
@@ -3229,17 +3766,335 @@ export default function VideoDubbingTab() {
     }
   };
 
-  const openExportFolder = async () => {
-    if (!job) return;
+  const updateListedJob = (updatedJob: VideoDubbingJob) => {
+    setVideo((current) =>
+      current?.job?.id === updatedJob.id
+        ? { ...current, job: updatedJob }
+        : current,
+    );
+    setVideoFiles((current) =>
+      current.map((item) =>
+        item.job?.id === updatedJob.id ? { ...item, job: updatedJob } : item,
+      ),
+    );
+    setJobHistory((current) =>
+      current.map((item) =>
+        item.job.id === updatedJob.id ? { ...item, job: updatedJob } : item,
+      ),
+    );
+  };
+
+  const requestMasterEdit = async (
+    jobId: string,
+    action: "split" | "merge" | "clips",
+    clips?: VideoDubbingMasterEditClip[],
+  ) => {
     try {
       const response = await fetch(
-        `/api/video-dubbing/jobs/${job.id}/open-export-folder`,
+        `/api/video-dubbing/jobs/${jobId}/master-edit/${action}`,
+        {
+          method: action === "clips" ? "PUT" : "POST",
+          ...(clips
+            ? {
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ clips }),
+              }
+            : {}),
+        },
+      );
+      const result = await response.json();
+      if (!response.ok || !result.job) {
+        if (result.job) updateListedJob(result.job as VideoDubbingJob);
+        throw new Error(result.error || "Không thể cập nhật TTS Master.");
+      }
+      updateListedJob(result.job as VideoDubbingJob);
+      setMediaError(null);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Không thể cập nhật TTS Master.";
+      setMediaError(message);
+      throw error;
+    }
+  };
+
+  const runAllVideosAction = async (
+    action: AllVideosActionName,
+    targetJobs = allVideosJobs,
+  ) => {
+    if (
+      allVideosRunning ||
+      queueRunning ||
+      settingsSyncRunning ||
+      targetJobs.length === 0
+    ) {
+      return;
+    }
+    if (
+      action === "tts" &&
+      !selectedVoice &&
+      targetJobs.some(
+        (targetJob) => !targetJob.autoPipeline?.config?.master.model,
+      )
+    ) {
+      setAllVideosAction({
+        action,
+        status: "completed",
+        currentIndex: 0,
+        total: targetJobs.length,
+        completed: 0,
+        errors: ["Hãy chọn giọng đọc trước khi tạo TTS."],
+      });
+      return;
+    }
+
+    const actionLabels: Record<AllVideosActionName, string> = {
+      tts: "TTS",
+      demucs: "Demucs",
+      mix: "Mix Audio",
+      render: "Render",
+      download: "Download",
+    };
+    const errors: string[] = [];
+    let completed = 0;
+    setAllVideosAction({
+      action,
+      status: "running",
+      currentIndex: 0,
+      total: targetJobs.length,
+      completed: 0,
+      errors: [],
+    });
+    if (action === "download") {
+      const downloadableJobs = targetJobs.filter(
+        (targetJob) => targetJob.videoExport?.status === "completed",
+      );
+      if (!downloadableJobs.length) return;
+      const downloadUrl = new URL(
+        "/api/video-dubbing/exports/download-all",
+        window.location.origin,
+      );
+      downloadUrl.searchParams.set(
+        "jobIds",
+        downloadableJobs.map((targetJob) => targetJob.id).join(","),
+      );
+      const link = document.createElement("a");
+      link.href = downloadUrl.toString();
+      link.download = "video-dubbing-exports.zip";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setAllVideosAction({
+        action,
+        status: "completed",
+        currentIndex: downloadableJobs.length,
+        total: downloadableJobs.length,
+        completed: downloadableJobs.length,
+        errors: [],
+      });
+      void loadJobHistory();
+      return;
+    }
+
+    const fetchLatestJob = async (jobId: string): Promise<VideoDubbingJob> => {
+      const response = await fetch(`/api/video-dubbing/jobs/${jobId}`);
+      const result = await response.json();
+      if (!response.ok || !result.job) {
+        throw new Error(result.error || "Không thể tải trạng thái job.");
+      }
+      updateListedJob(result.job as VideoDubbingJob);
+      return result.job as VideoDubbingJob;
+    };
+
+    const postJobAction = async (
+      jobId: string,
+      body?: unknown,
+    ): Promise<void> => {
+      const endpoint =
+        action === "tts"
+          ? `/api/video-dubbing/jobs/${jobId}/auto-pipeline/tts`
+          : action === "demucs"
+            ? `/api/video-dubbing/jobs/${jobId}/separation`
+            : action === "mix"
+            ? `/api/video-dubbing/jobs/${jobId}/final-mix`
+            : `/api/video-dubbing/jobs/${jobId}/export`;
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body ?? {}),
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(
+          result.error || `Không thể bắt đầu ${actionLabels[action]}.`,
+        );
+      }
+      if (result.job) updateListedJob(result.job as VideoDubbingJob);
+      const isRunning = (currentJob: VideoDubbingJob) =>
+        action === "tts"
+          ? currentJob.autoPipeline?.status === "running"
+          : action === "demucs"
+            ? currentJob.separation?.status === "processing"
+          : action === "mix"
+            ? currentJob.finalMix?.status === "running"
+            : currentJob.videoExport?.status === "running";
+      const taskState = (currentJob: VideoDubbingJob) =>
+        action === "tts"
+          ? currentJob.autoPipeline
+          : action === "demucs"
+            ? currentJob.separation
+          : action === "mix"
+            ? currentJob.finalMix
+            : currentJob.videoExport;
+      const deadline = Date.now() + 2 * 60 * 60 * 1000;
+      while (Date.now() < deadline) {
+        const latestJob = await fetchLatestJob(jobId);
+        if (!isRunning(latestJob)) {
+          const state = taskState(latestJob);
+          if (state?.status !== "completed") {
+            throw new Error(
+              state?.error ||
+                `${actionLabels[action]} kết thúc với trạng thái ${state?.status || "không xác định"}.`,
+            );
+          }
+          return;
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, 1000));
+      }
+      throw new Error(`${actionLabels[action]} quá thời gian chờ.`);
+    };
+
+    try {
+      for (let index = 0; index < targetJobs.length; index++) {
+        const listedJob = targetJobs[index];
+        setAllVideosAction({
+          action,
+          status: "running",
+          currentIndex: index + 1,
+          total: targetJobs.length,
+          currentFileName: listedJob.fileName,
+          completed,
+          errors: [...errors],
+        });
+        try {
+          const targetJob = await fetchLatestJob(listedJob.id);
+          const row = queueRows.find(
+            ({ video: queuedVideo }) => queuedVideo?.job?.id === targetJob.id,
+          );
+          if (action === "tts") {
+            const isCurrentJob = targetJob.id === job?.id;
+            const savedCues = targetJob.overlaySettings?.subtitles || [];
+            const fallbackItems =
+              (row?.subtitle?.analysis?.items.length
+                ? row.subtitle.analysis.items
+                : undefined) ||
+              (targetJob.autoPipeline?.config?.master.items.length
+                ? targetJob.autoPipeline.config.master.items
+                : undefined) ||
+              savedCues.map(
+                (cue, cueIndex): SubtitleItem => ({
+                  id: `saved-${cueIndex + 1}`,
+                  index: cueIndex + 1,
+                  startTime: cue.startTime,
+                  endTime: cue.endTime,
+                  targetDuration: Math.max(0.1, cue.endTime - cue.startTime),
+                  text: cue.text,
+                  status: "pending",
+                }),
+              );
+            const items = resolveVideoDubbingTtsItems(
+              targetJob.id,
+              subtitleCueOverridesByVideoId,
+              fallbackItems,
+            );
+            if (!items.length) {
+              throw new Error("Video chưa có phụ đề để tạo TTS.");
+            }
+            const savedMaster = targetJob.autoPipeline?.config?.master;
+            const useCurrentTtsSettings = isCurrentJob || !savedMaster;
+            const voice = useCurrentTtsSettings
+              ? selectedVoice
+              : undefined;
+            if (useCurrentTtsSettings && !voice) {
+              throw new Error("Hãy chọn giọng đọc cho video này trước khi tạo TTS.");
+            }
+            const targetConfig: VideoDubbingAutoPipelineConfig = {
+              enabled: true,
+              master: {
+                items,
+                model: useCurrentTtsSettings
+                  ? voice!.modelId
+                  : savedMaster!.model,
+                speakerId: useCurrentTtsSettings
+                  ? voice?.speakerId
+                  : savedMaster?.speakerId,
+                options: useCurrentTtsSettings
+                  ? { minSpeed, maxSpeed, speedPriority }
+                  : savedMaster.options,
+              },
+              demucsEnabled:
+                false,
+              ttsMasterEnabled: true,
+              mixerSettings: isCurrentJob
+                ? mixerSettings
+                : targetJob.mixerSettings ||
+                  targetJob.autoPipeline?.config?.mixerSettings ||
+                  mixerSettings,
+              originalAudioVolumePercent:
+                useCurrentTtsSettings
+                  ? originalAudioVolumePercent
+                  : targetJob.autoPipeline?.config
+                      ?.originalAudioVolumePercent ?? originalAudioVolumePercent,
+            };
+            await postJobAction(targetJob.id, targetConfig);
+          } else if (action === "mix") {
+            const settings =
+              targetJob.id === job?.id
+                ? mixerSettings
+                : targetJob.mixerSettings ||
+                  targetJob.autoPipeline?.config?.mixerSettings ||
+                  mixerSettings;
+            await postJobAction(targetJob.id, settings);
+          } else if (action === "demucs") {
+            if (!targetJob.metadata?.audioCodec) {
+              throw new Error("Video nguồn không có audio để Demucs tách.");
+            }
+            await postJobAction(targetJob.id);
+          } else {
+            await applyPreviewOverlayToJob(targetJob, row?.subtitle);
+            await postJobAction(targetJob.id);
+          }
+          completed++;
+        } catch (error) {
+          errors.push(
+            `${listedJob.fileName}: ${
+              error instanceof Error ? error.message : "Lỗi không xác định."
+            }`,
+          );
+        }
+      }
+    } finally {
+      setAllVideosAction({
+        action,
+        status: "completed",
+        currentIndex: targetJobs.length,
+        total: targetJobs.length,
+        completed,
+        errors,
+      });
+      await loadJobHistory();
+    }
+  };
+
+  const openProjectFolder = async () => {
+    if (!activeProject) return;
+    try {
+      const response = await fetch(
+        `/api/video-dubbing/projects/${activeProject.id}/open-folder`,
         { method: "POST" },
       );
       const result = await response.json();
-      if (!response.ok) throw new Error(result.error || "Không thể mở thư mục export.");
+      if (!response.ok) throw new Error(result.error || "Không thể mở thư mục project.");
     } catch (error) {
-      setMediaError(error instanceof Error ? error.message : "Không thể mở thư mục export.");
+      setProjectError(error instanceof Error ? error.message : "Không thể mở thư mục project.");
     }
   };
   const cancelMediaTask = async (task: "audio-mix" | "export") => {
@@ -3350,7 +4205,9 @@ export default function VideoDubbingTab() {
       );
     }
   };
-  const autoPipelineConfigKey = JSON.stringify(autoPipelineConfig);
+  const autoPipelineConfigKey = autoPipelineConfig
+    ? JSON.stringify({ ...autoPipelineConfig, mixerSettings: undefined })
+    : "null";
   useEffect(() => {
     if (
       !job ||
@@ -3388,16 +4245,232 @@ export default function VideoDubbingTab() {
     (detailJobId
       ? jobHistory.find((item) => item.job.id === detailJobId)?.job || null
       : null);
+  const previewVideoRow = (
+    event: ReactMouseEvent<HTMLTableRowElement>,
+    selectedJob?: VideoDubbingJob,
+  ) => {
+    if (
+      !selectedJob ||
+      !(event.target instanceof Element) ||
+      event.target.closest("button, a, input, select, textarea, label, summary")
+    ) {
+      return;
+    }
+    void previewSourceVideo(selectedJob);
+  };
+  const renderJobProcessingBar = (targetJob: VideoDubbingJob) => {
+    const progress = getJobProcessingProgress(targetJob);
+    if (!progress) return null;
+    const percent =
+      progress.progressPercent === undefined
+        ? undefined
+        : Math.max(0, Math.min(100, progress.progressPercent));
+    return (
+      <div className="mt-1.5 space-y-1 px-1" aria-live="polite">
+        <div className="flex items-center justify-between gap-2 text-[10px] text-slate-300">
+          <span className="truncate">{progress.label}</span>
+          <span className="shrink-0">
+            {percent === undefined ? "Đang xử lý…" : `${Math.round(percent)}%`}
+          </span>
+        </div>
+        <div
+          role="progressbar"
+          aria-label={`${progress.label}: ${targetJob.fileName}`}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={percent}
+          className="h-1.5 overflow-hidden rounded-full bg-slate-800"
+        >
+          <div
+            className={`h-full transition-all ${progress.colorClass} ${
+              percent === undefined ? "w-1/3 animate-pulse" : ""
+            }`}
+            style={percent === undefined ? undefined : { width: `${percent}%` }}
+          />
+        </div>
+      </div>
+    );
+  };
+  const renderVideoActions = (targetJob: VideoDubbingJob) => {
+    const isCurrentJob = job?.id === targetJob.id;
+    const autoPipelineRunning = isCurrentJob && isAutoPipelineRunning;
+    const finalMixRunning = isCurrentJob && finalMix?.status === "running";
+    const exportRunning = isCurrentJob && videoExport?.status === "running";
+    const hasSrtToDownload = Boolean(resolveSrtDownload(targetJob));
+    return (
+      <div className="flex max-w-full shrink-0 flex-wrap items-center justify-end gap-1.5">
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            downloadSrtForJob(targetJob);
+          }}
+          disabled={!hasSrtToDownload}
+          title={hasSrtToDownload ? "Tải phụ đề SRT đã chỉnh sửa" : "Video này chưa có phụ đề"}
+          aria-label={`Tải SRT ${targetJob.fileName}`}
+          className="inline-flex items-center gap-1 rounded-lg border border-emerald-500/35 px-2.5 py-1.5 text-xs font-semibold text-emerald-100 hover:bg-emerald-950/40 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          <Download className="h-3.5 w-3.5" />
+          Tải SRT
+        </button>
+        <button
+          type="button"
+          onClick={() => void (autoPipelineRunning ? cancelAutoPipeline() : startAutoPipeline())}
+          disabled={allVideosRunning || !isCurrentJob || (!autoPipelineRunning && !canStartAutoPipeline)}
+          title={autoPipelineRunning ? "Hủy Auto Pipeline" : "Tạo TTS Master cho video này"}
+          aria-label={autoPipelineRunning ? "Hủy Auto Pipeline" : `TTS ${targetJob.fileName}`}
+          className="rounded-lg border border-indigo-400/35 px-2.5 py-1.5 text-xs font-semibold text-indigo-100 hover:bg-indigo-950/40 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {autoPipelineRunning ? "Hủy TTS" : "TTS"}
+        </button>
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              void runAllVideosAction("demucs", [targetJob]);
+            }}
+            disabled={
+              allVideosActionDisabled ||
+              !targetJob.metadata?.audioCodec ||
+              targetJob.separation?.status === "processing" ||
+              separationAvailability?.status !== "ready"
+            }
+            title={
+              targetJob.separation?.status === "processing"
+                ? "Demucs đang chạy"
+                : separationAvailability?.status === "ready"
+                  ? "Tách vocals và instrumental cho video này"
+                  : separationAvailability?.message || "Demucs chưa sẵn sàng"
+            }
+            aria-label={`Demucs ${targetJob.fileName}`}
+            className="rounded-lg border border-violet-400/35 px-2.5 py-1.5 text-xs font-semibold text-violet-100 hover:bg-violet-950/40 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {targetJob.separation?.status === "processing" ? "Đang tách" : "Demucs"}
+          </button>
+        <button
+          type="button"
+          onClick={() => void (finalMixRunning ? cancelFinalMix() : startFinalMix())}
+          disabled={allVideosRunning || !isCurrentJob || (!finalMixRunning && !canRenderFinalMix)}
+          title={finalMixRunning ? "Hủy render final mix" : "Render final mix"}
+          aria-label={finalMixRunning ? "Hủy render final mix" : `Mix Audio ${targetJob.fileName}`}
+          className="rounded-lg border border-cyan-400/35 px-2.5 py-1.5 text-xs font-semibold text-cyan-100 hover:bg-cyan-950/40 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {finalMixRunning ? "Hủy Mix" : "Mix Audio"}
+        </button>
+        <button
+          type="button"
+          onClick={() => void (exportRunning ? cancelMediaTask("export") : startVideoExport())}
+          disabled={allVideosRunning || !isCurrentJob || (!exportRunning && (!canExportVideo || logoUploading))}
+          title={exportRunning ? "Hủy export" : "Export video"}
+          aria-label={exportRunning ? "Hủy export" : `Render ${targetJob.fileName}`}
+          className="rounded-lg border border-sky-400/35 px-2.5 py-1.5 text-xs font-semibold text-sky-100 hover:bg-sky-950/40 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {exportRunning ? "Hủy" : "Render"}
+        </button>
+      </div>
+    );
+  };
   const overlayAlignment = getOverlayAlignment(logoPosition);
   const subtitleOverlayAlignment = getOverlayAlignment(subtitlePosition);
+  const subtitleCueOverrides = job?.id
+    ? subtitleCueOverridesByVideoId[job.id] ?? null
+    : null;
   const previewSubtitleCues = subtitleCueOverrides ||
     srt?.analysis?.items || job?.overlaySettings?.subtitles || [];
+  const updatePreviewSubtitleCues = (
+    update: (cues: VideoDubbingSubtitleCue[]) => VideoDubbingSubtitleCue[],
+  ) => {
+    if (!job) return;
+    setSubtitleCueOverridesByVideoId((current) => {
+      const currentCues = current[job.id] ?? previewSubtitleCues;
+      return {
+        ...current,
+        [job.id]: update(currentCues).map(({ startTime, endTime, text }) => ({
+          startTime,
+          endTime,
+          text,
+        })),
+      };
+    });
+  };
+  const updateSelectedSubtitleCue = (patch: Partial<VideoDubbingSubtitleCue>) => {
+    if (selectedSubtitleCue === null) return;
+    updatePreviewSubtitleCues((cues) =>
+      cues.map((cue, index) =>
+        index === selectedSubtitleCue ? { ...cue, ...patch } : cue,
+      ),
+    );
+  };
+  const adjustAllSubtitleCues = (
+    field: "start" | "end" | "move",
+    direction: -1 | 1,
+  ) => {
+    const delta = subtitleTimingAdjustmentsMs[field] / 1000 * direction;
+    if (!Number.isFinite(delta) || delta === 0) return;
+    updatePreviewSubtitleCues((originalCues) => {
+      return adjustSubtitleCueTimings(
+        originalCues,
+        field,
+        delta,
+        job?.metadata?.durationSeconds,
+      );
+    });
+  };
+  const renderSubtitleTimingAdjustment = (
+    field: "start" | "end" | "move",
+    label: string,
+  ) => (
+    <div className="inline-flex items-center gap-1 whitespace-nowrap">
+      <span>{label}:</span>
+      <button
+        type="button"
+        disabled={!previewSubtitleCues.length || !job}
+        onClick={() => adjustAllSubtitleCues(field, -1)}
+        aria-label={`${label} giảm ${subtitleTimingAdjustmentsMs[field]} mili giây cho toàn bộ phụ đề`}
+        title={`${label} giảm ${subtitleTimingAdjustmentsMs[field]} ms trên toàn bộ phụ đề`}
+        className="rounded border border-slate-700 px-1.5 py-0.5 text-slate-300 hover:border-cyan-500/50 disabled:opacity-40"
+      >
+        ←
+      </button>
+      <input
+        type="number"
+        min={1}
+        step={1}
+        value={subtitleTimingAdjustmentsMs[field]}
+        onChange={(event) => {
+          const value = Number(event.target.value);
+          if (Number.isFinite(value) && value >= 1) {
+            setSubtitleTimingAdjustmentsMs((current) => ({
+              ...current,
+              [field]: Math.round(value),
+            }));
+          }
+        }}
+        aria-label={`${label} mili giây`}
+        className="w-14 rounded border border-slate-700 bg-slate-950 px-1 py-0.5 text-center text-slate-200"
+      />
+      <span>ms</span>
+      <button
+        type="button"
+        disabled={!previewSubtitleCues.length || !job}
+        onClick={() => adjustAllSubtitleCues(field, 1)}
+        aria-label={`${label} tăng ${subtitleTimingAdjustmentsMs[field]} mili giây cho toàn bộ phụ đề`}
+        title={`${label} tăng ${subtitleTimingAdjustmentsMs[field]} ms trên toàn bộ phụ đề`}
+        className="rounded border border-slate-700 px-1.5 py-0.5 text-slate-300 hover:border-cyan-500/50 disabled:opacity-40"
+      >
+        →
+      </button>
+    </div>
+  );
   const subtitleTimelineDuration = Math.max(
     1,
     job?.metadata?.durationSeconds || 0,
     ...previewSubtitleCues.map((cue) => cue.endTime),
-    ...textOverlays.map((cue) => cue.endTime),
+    ...textOverlays.filter((cue) => !cue.isTitle).map((cue) => cue.endTime),
   );
+  const subtitleTimelineCursor = previewStatus === "playing"
+    ? previewCurrentTime
+    : subtitleTimelineCursorTime;
   const subtitleTimelineWidth = Math.max(
     720,
     subtitleTimelineDuration * subtitleTimelineZoom,
@@ -3410,6 +4483,34 @@ export default function VideoDubbingTab() {
     { length: Math.floor(subtitleTimelineDuration / subtitleTimelineStep) + 1 },
     (_, index) => index * subtitleTimelineStep,
   );
+  useEffect(() => {
+    const container = subtitleTimelineScrollRef.current;
+    if (!container) return;
+    const onWheel = (event: WheelEvent) => {
+      if (!event.ctrlKey && !event.shiftKey) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.ctrlKey) {
+        const direction = event.deltaY < 0 ? 1 : -1;
+        setSubtitleTimelineZoom((current) =>
+          Math.max(8, Math.min(180, Math.round(current * (direction > 0 ? 1.15 : 1 / 1.15)))),
+        );
+        return;
+      }
+      container.scrollLeft += event.deltaY || event.deltaX;
+    };
+    container.addEventListener("wheel", onWheel, { passive: false });
+    return () => container.removeEventListener("wheel", onWheel);
+  }, [job?.id, previewSubtitleCues.length]);
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      const container = subtitleTimelineScrollRef.current;
+      if (!container) return;
+      const markerX = (subtitleTimelineCursor / subtitleTimelineDuration) * subtitleTimelineWidth;
+      container.scrollLeft = Math.max(0, markerX - container.clientWidth / 2);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [subtitleTimelineZoom]);
   const subtitleTimelineItems: Array<{
     cue: (typeof previewSubtitleCues)[number];
     index: number;
@@ -3432,17 +4533,24 @@ export default function VideoDubbingTab() {
           cue.endTime >= previewCurrentTime,
       )
     : undefined;
-  const selectedTextIsActive = selectedTextOverlay !== null &&
-    textOverlays[selectedTextOverlay]?.startTime <= previewCurrentTime &&
-    textOverlays[selectedTextOverlay]?.endTime >= previewCurrentTime;
-  const activePreviewTextIndex = selectedTextIsActive
-    ? selectedTextOverlay!
-    : textOverlays.findIndex(
-        (cue) => cue.startTime <= previewCurrentTime && cue.endTime >= previewCurrentTime,
-      );
-  const activePreviewText = activePreviewTextIndex >= 0
-    ? textOverlays[activePreviewTextIndex]
-    : undefined;
+  const previewTextOverlays = textOverlays.map((cue) =>
+      cue.isTitle
+        ? {
+            ...cue,
+            startTime: 0,
+            endTime: job?.metadata?.durationSeconds ?? cue.endTime,
+          }
+        : cue,
+  );
+  const titleOverlayIndex = textOverlays.findIndex((cue) => cue.isTitle);
+  const titleOverlay = titleOverlayIndex >= 0 ? textOverlays[titleOverlayIndex] : undefined;
+  const activePreviewTextItems = previewTextOverlays
+    .map((cue, index) => ({ cue, index }))
+    .filter(({ cue }) =>
+      cue.enabled !== false &&
+      cue.startTime <= previewCurrentTime &&
+      cue.endTime >= previewCurrentTime,
+    );
   const updateSelectedTextOverlay = (
     patch: Partial<VideoDubbingTextOverlayCue>,
   ) => {
@@ -3450,6 +4558,135 @@ export default function VideoDubbingTab() {
     setTextOverlays((items) => items.map((item, index) =>
       index === selectedTextOverlay ? { ...item, ...patch } : item,
     ));
+  };
+  const applySelectedTextOverlayToTrack = () => {
+    if (selectedTextOverlay === null) return;
+    const cue = textOverlays[selectedTextOverlay];
+    if (!cue || cue.isTitle) return;
+    const trackId = cue.trackId || DEFAULT_TEXT_TRACK_ID;
+    const styleAndPosition: Partial<VideoDubbingTextOverlayCue> = {
+      fontFamily: cue.fontFamily,
+      fontSize: cue.fontSize,
+      bold: cue.bold,
+      italic: cue.italic,
+      underline: cue.underline,
+      textCase: cue.textCase,
+      color: cue.color,
+      outlineEnabled: cue.outlineEnabled,
+      outlineColor: cue.outlineColor,
+      outlineWidthPx: cue.outlineWidthPx,
+      characterSpacingPx: cue.characterSpacingPx,
+      lineSpacingPx: cue.lineSpacingPx,
+      textAlign: cue.textAlign ?? getSubtitleTextAlignment(cue.position),
+      position: cue.position,
+      xPercent: cue.xPercent,
+      yPercent: cue.yPercent,
+      backgroundColor: cue.backgroundColor,
+      backgroundTransparent: cue.backgroundTransparent,
+      paddingPx: cue.paddingPx,
+    };
+    setTextOverlays((items) => items.map((item) =>
+      !item.isTitle && (item.trackId || DEFAULT_TEXT_TRACK_ID) === trackId
+        ? { ...item, ...styleAndPosition }
+        : item,
+    ));
+  };
+  const addTextOverlayToTrack = () => {
+    if (!job) return;
+    const trackId = textTracks.some((track) => track.id === activeTextTrackId)
+      ? activeTextTrackId
+      : textTracks[0]?.id || DEFAULT_TEXT_TRACK_ID;
+    const duration = Math.max(0.1, job.metadata?.durationSeconds || subtitleTimelineDuration);
+    const startTime = Math.min(subtitleTimelineCursor, Math.max(0, duration - 0.1));
+    const trackStyle = textOverlays.find((item) =>
+      !item.isTitle && (item.trackId || DEFAULT_TEXT_TRACK_ID) === trackId,
+    );
+    const cue: VideoDubbingTextOverlayCue = {
+      startTime,
+      endTime: Math.min(duration, startTime + 3),
+      text: "Text mới",
+      trackId,
+      fontSize: trackStyle?.fontSize ?? 28,
+      fontFamily: trackStyle?.fontFamily ?? "Arial",
+      color: trackStyle?.color ?? "#ffffff",
+      bold: trackStyle?.bold ?? false,
+      italic: trackStyle?.italic ?? false,
+      underline: trackStyle?.underline ?? false,
+      textCase: trackStyle?.textCase ?? "none",
+      outlineEnabled: trackStyle?.outlineEnabled ?? false,
+      outlineColor: trackStyle?.outlineColor ?? "#000000",
+      outlineWidthPx: trackStyle?.outlineWidthPx ?? 2,
+      characterSpacingPx: trackStyle?.characterSpacingPx ?? 0,
+      lineSpacingPx: trackStyle?.lineSpacingPx ?? 0,
+      textAlign: trackStyle?.textAlign ?? (trackStyle ? getSubtitleTextAlignment(trackStyle.position) : "center"),
+      position: trackStyle?.position ?? "middle-center",
+      xPercent: trackStyle?.xPercent,
+      yPercent: trackStyle?.yPercent,
+      backgroundColor: trackStyle?.backgroundColor ?? "#000000",
+      backgroundTransparent: trackStyle?.backgroundTransparent ?? true,
+      paddingPx: trackStyle?.paddingPx ?? 0,
+    };
+    setTextOverlays((items) => [...items, cue]);
+    setSelectedTextOverlay(textOverlays.length);
+  };
+  const createTitleOverlay = () => {
+    if (titleOverlayIndex >= 0) {
+      setTextOverlays((items) => items.map((item, index) =>
+        index === titleOverlayIndex ? { ...item, enabled: true, isTitle: true, startTime: 0, extendToVideoEnd: true } : item,
+      ));
+      setSelectedTextOverlay(titleOverlayIndex);
+      return;
+    }
+
+    const reusableClipIndex = textOverlays.findIndex(
+      (cue) => cue.extendToVideoEnd && cue.startTime === 0,
+    );
+    if (reusableClipIndex >= 0) {
+      setTextOverlays((items) => items.map((item, index) =>
+        index === reusableClipIndex
+          ? {
+              ...item,
+              isTitle: true,
+              enabled: true,
+              startTime: 0,
+              endTime: job?.metadata?.durationSeconds ?? item.endTime,
+              extendToVideoEnd: true,
+            }
+          : item,
+      ));
+      setSelectedTextOverlay(reusableClipIndex);
+      return;
+    }
+
+    const duration = Math.max(0.1, job?.metadata?.durationSeconds ?? 1);
+    const title: VideoDubbingTextOverlayCue = {
+      startTime: 0,
+      endTime: duration,
+      text: "Tiêu đề phim",
+      extendToVideoEnd: true,
+      isTitle: true,
+      enabled: true,
+      fontSize: 28,
+      fontFamily: "Arial",
+      color: "#ffffff",
+      bold: true,
+      italic: true,
+      underline: false,
+      textCase: "none",
+      outlineEnabled: true,
+      outlineColor: "#000000",
+      outlineWidthPx: 2,
+      characterSpacingPx: 0,
+      lineSpacingPx: 0,
+      position: "top-center",
+      xPercent: 55,
+      yPercent: 12,
+      backgroundColor: "#000000",
+      backgroundTransparent: true,
+      paddingPx: 0,
+    };
+    setTextOverlays((items) => [...items, title]);
+    setSelectedTextOverlay(textOverlays.length);
   };
   const subtitleTextStyleValue: TextStyleControlValue = {
     fontFamily: subtitleFontFamily,
@@ -3491,11 +4728,18 @@ export default function VideoDubbingTab() {
     event.preventDefault();
     event.stopPropagation();
     setSelectedTextOverlay(cueIndex);
+    const cue = textOverlays[cueIndex];
+    const alignment = cue.isTitle ? "center" : cue.textAlign ?? getSubtitleTextAlignment(cue.position);
+    const anchorX = alignment === "left"
+      ? overlayBounds.left
+      : alignment === "right"
+        ? overlayBounds.right
+        : overlayBounds.left + overlayBounds.width / 2;
     setTextOverlayPreviewDrag({
       cueIndex,
       pointerX: event.clientX,
       pointerY: event.clientY,
-      centerX: overlayBounds.left + overlayBounds.width / 2 - stageBounds.left,
+      anchorX: anchorX - stageBounds.left,
       centerY: overlayBounds.top + overlayBounds.height / 2 - stageBounds.top,
       stageLeft: stageBounds.left,
       stageTop: stageBounds.top,
@@ -3546,20 +4790,22 @@ export default function VideoDubbingTab() {
       } else {
         endTime = snap(Math.min(drag.timelineDuration, Math.max(drag.originalStart + 0.1, drag.originalEnd + delta)));
       }
-      const update = (current: typeof textOverlays | null | typeof previewSubtitleCues) => {
-        const items = drag.track === "subtitle"
-          ? (subtitleCueOverrides || previewSubtitleCues)
-          : textOverlays;
-        if (!items[drag.cueIndex]) return current;
+      const update = (items: readonly VideoDubbingSubtitleCue[], isText = false) => {
+        if (!items[drag.cueIndex]) return items;
         return items.map((item, index) => index === drag.cueIndex
-          ? { ...item, startTime, endTime }
+          ? {
+              ...item,
+              startTime,
+              endTime,
+              ...(isText ? { extendToVideoEnd: false } : {}),
+            }
           : item,
         );
       };
       if (drag.track === "subtitle") {
-        setSubtitleCueOverrides((current) => update(current) as typeof previewSubtitleCues);
+        updatePreviewSubtitleCues((cues) => update(cues) as VideoDubbingSubtitleCue[]);
       } else {
-        setTextOverlays((current) => update(current) as VideoDubbingTextOverlayCue[]);
+        setTextOverlays((current) => update(current, true) as VideoDubbingTextOverlayCue[]);
       }
     };
     const onPointerUp = () => setSubtitleTimelineDrag(null);
@@ -3571,15 +4817,29 @@ export default function VideoDubbingTab() {
       window.removeEventListener("pointerup", onPointerUp);
       window.removeEventListener("pointercancel", onPointerUp);
     };
-  }, [subtitleTimelineDrag, previewSubtitleCues, subtitleCueOverrides, textOverlays]);
+  }, [subtitleTimelineDrag, previewSubtitleCues, subtitleCueOverrides, textOverlays, job?.id]);
   useEffect(() => {
     const drag = textOverlayPreviewDrag;
     if (!drag) return;
     const onPointerMove = (event: PointerEvent) => {
-      const minimumX = Math.min(50, (drag.overlayWidth / 2 / drag.stageWidth) * 100);
+      const overlayWidthPercent = Math.min(100, (drag.overlayWidth / drag.stageWidth) * 100);
+      const cue = textOverlays[drag.cueIndex];
+      const alignment = cue?.isTitle
+        ? "center"
+        : cue?.textAlign ?? (cue ? getSubtitleTextAlignment(cue.position) : "center");
+      const minimumX = alignment === "right"
+        ? overlayWidthPercent
+        : alignment === "center"
+          ? overlayWidthPercent / 2
+          : 0;
+      const maximumX = alignment === "left"
+        ? 100 - overlayWidthPercent
+        : alignment === "center"
+          ? 100 - overlayWidthPercent / 2
+          : 100;
       const minimumY = Math.min(50, (drag.overlayHeight / 2 / drag.stageHeight) * 100);
-      const xPercent = Math.max(minimumX, Math.min(100 - minimumX,
-        ((drag.centerX + event.clientX - drag.pointerX) / drag.stageWidth) * 100));
+      const xPercent = Math.max(minimumX, Math.min(maximumX,
+        ((drag.anchorX + event.clientX - drag.pointerX) / drag.stageWidth) * 100));
       const yPercent = Math.max(minimumY, Math.min(100 - minimumY,
         ((drag.centerY + event.clientY - drag.pointerY) / drag.stageHeight) * 100));
       setTextOverlays((items) => items.map((item, index) => index === drag.cueIndex
@@ -3595,7 +4855,7 @@ export default function VideoDubbingTab() {
       window.removeEventListener("pointerup", onPointerUp);
       window.removeEventListener("pointercancel", onPointerUp);
     };
-  }, [textOverlayPreviewDrag]);
+  }, [textOverlayPreviewDrag, textOverlays]);
   const previewOverlayScale =
     videoPreviewReady && job?.metadata && previewVideoRef.current
       ? previewVideoRef.current.clientWidth / job.metadata.width
@@ -3646,6 +4906,24 @@ export default function VideoDubbingTab() {
               có.
             </p>
           </div>
+          <label className="flex items-start gap-3 rounded-xl border border-slate-800 bg-slate-950/60 p-3 text-xs">
+            <input
+              type="checkbox"
+              checked={autoPipelineTtsMasterEnabled}
+              onChange={(event) =>
+                setAutoPipelineTtsMasterEnabled(event.target.checked)
+              }
+              className="mt-0.5 accent-indigo-400"
+            />
+            <span>
+              <span className="block font-semibold text-slate-200">
+                Tạo TTS Master trong Auto Pipeline
+              </span>
+              <span className="mt-1 block text-slate-400">
+                Bỏ chọn để chỉ chạy Demucs; có thể bật TTS Master, Demucs hoặc cả hai.
+              </span>
+            </span>
+          </label>
         </div>
         <span className="self-start sm:self-auto px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wide bg-slate-800 text-slate-300 border border-slate-700">
           Video Dubbing · Piper & VieNeu Turbo · Demucs cục bộ
@@ -3795,7 +5073,12 @@ export default function VideoDubbingTab() {
             </div>
             {projects.length === 0 ? <p className="rounded-xl border border-slate-800 p-4 text-sm text-slate-500">Chưa có project được lưu.</p> : <ul className="space-y-2">{projects.map((project) => (
               <li key={project.id} className={`flex flex-wrap items-center justify-between gap-3 rounded-xl border p-3 ${activeProject?.id === project.id ? "border-sky-500/40 bg-sky-950/15" : "border-slate-800 bg-slate-950/40"}`}>
-                <div className="min-w-0"><p className="truncate text-sm font-semibold text-white">{project.name}{defaultProjectId === project.id && <span className="ml-2 rounded-full border border-emerald-500/30 px-2 py-0.5 text-[10px] font-medium text-emerald-300">Mặc định</span>}</p><p className="mt-1 text-xs text-slate-500">{project.jobIds.length} video/job · cập nhật {new Date(project.updatedAt).toLocaleString()}</p></div>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-semibold text-white">{project.name}{defaultProjectId === project.id && <span className="ml-2 rounded-full border border-emerald-500/30 px-2 py-0.5 text-[10px] font-medium text-emerald-300">Mặc định</span>}</p>
+                  <p className="mt-1 text-xs text-slate-500">{project.jobIds.length} video/job · cập nhật {new Date(project.updatedAt).toLocaleString()}</p>
+                  {project.storagePath && <p className="mt-1 break-all font-mono text-[10px] leading-relaxed text-slate-400" title={project.storagePath}>Thư mục project: {project.storagePath}</p>}
+                  {project.jobsDirectory && <p className="break-all font-mono text-[10px] leading-relaxed text-sky-300/80" title={project.jobsDirectory}>Video được lưu trong: {project.jobsDirectory}{"\\<ID video>\\source.video"}</p>}
+                </div>
                 <div className="flex flex-wrap gap-2"><button type="button" disabled={projectBusy} onClick={() => void openProject(project)} className="rounded-lg border border-sky-500/30 px-3 py-1.5 text-xs text-sky-200 disabled:opacity-50">Mở</button><button type="button" disabled={projectBusy} onClick={() => void renameProject(project)} className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 disabled:opacity-50">Đổi tên</button><button type="button" onClick={() => setDefaultProject(defaultProjectId === project.id ? null : project)} className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300">{defaultProjectId === project.id ? "Bỏ mặc định" : "Đặt mặc định"}</button><button type="button" disabled={projectBusy} onClick={() => void deleteProject(project)} className="rounded-lg border border-rose-500/30 px-3 py-1.5 text-xs text-rose-200 disabled:opacity-50">Xóa</button></div>
               </li>
             ))}</ul>}
@@ -3809,10 +5092,10 @@ export default function VideoDubbingTab() {
             <div className="flex items-center justify-between gap-3"><h3 id="video-dubbing-guide-title" className="font-semibold text-white">Hướng Dẫn</h3><button type="button" onClick={() => setGuideOpen(false)} className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:text-white">Đóng</button></div>
             <ul className="space-y-3 text-sm text-slate-300">
               <li><b className="text-white">Bắt đầu hàng đợi:</b> xử lý tuần tự các video và SRT trong danh sách nguồn.</li>
-              <li><b className="text-white">Bắt đầu Auto Pipeline:</b> chạy pipeline cho job hiện tại theo cấu hình đã lưu.</li>
-              <li><b className="text-white">Render final mix:</b> tạo file âm thanh cuối từ các track và mixer.</li>
-              <li><b className="text-white">Export:</b> ghép final mix, phụ đề và logo vào video.</li>
-              <li><b className="text-white">Open Export Folder:</b> mở thư mục lưu output của job hiện tại.</li>
+              <li><b className="text-white">TTS:</b> tạo TTS Master và tách vocal/instrumental nếu được bật; không tự chạy Mix Audio hay Render.</li>
+              <li><b className="text-white">Mix Audio:</b> tạo file âm thanh cuối từ các track và mixer của video đang chọn.</li>
+              <li><b className="text-white">Render:</b> ghép final mix, phụ đề và logo vào video đang chọn.</li>
+              <li><b className="text-white">Mở Project Folder:</b> mở thư mục chứa dữ liệu của project đang mở.</li>
               <li><b className="text-white">Lịch sử job:</b> xem lại và mở các job đã lưu.</li>
             </ul>
           </section>
@@ -3827,14 +5110,12 @@ export default function VideoDubbingTab() {
           ) : (
             <button type="button" onClick={() => void startQueue()} disabled={!canStartQueue} className="inline-flex items-center gap-2 rounded-lg bg-indigo-400 px-3 py-2 text-xs font-bold text-slate-950 disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-500"><Play className="h-4 w-4" />Bắt đầu hàng đợi</button>
           )}
-          {isAutoPipelineRunning ? (
-            <button type="button" onClick={() => void cancelAutoPipeline()} className="inline-flex items-center gap-2 rounded-lg border border-rose-500/30 bg-rose-950/30 px-3 py-2 text-xs font-bold text-rose-100"><X className="h-4 w-4" />Hủy Auto Pipeline</button>
-          ) : (
-            <button type="button" onClick={() => void startAutoPipeline()} disabled={!canStartAutoPipeline} className="inline-flex items-center gap-2 rounded-lg border border-indigo-400/40 px-3 py-2 text-xs font-bold text-indigo-100 disabled:cursor-not-allowed disabled:opacity-40"><Play className="h-4 w-4" />Bắt đầu Auto Pipeline</button>
-          )}
+          <label title="Sau khi tất cả video trong hàng đợi export thành công, ghép chúng bằng stream copy không encode lại." className={`inline-flex items-center gap-2 rounded-lg border border-slate-700 px-3 py-2 text-xs text-slate-200 ${queueRunning || queueRows.length < 2 || concatPreflight.status === "checking" ? "cursor-not-allowed opacity-50" : "cursor-pointer hover:border-sky-500/40"}`}>
+            <input type="checkbox" checked={joinAfterQueue} onChange={() => void toggleJoinAfterQueue()} disabled={queueRunning || queueRows.length < 2 || concatPreflight.status === "checking"} className="accent-sky-400" />
+            Ghép nối sau khi hàng đợi xong
+          </label>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <button type="button" onClick={() => void startFinalMix()} disabled={!canRenderFinalMix} className="inline-flex items-center gap-2 rounded-lg bg-cyan-400 px-3 py-2 text-xs font-bold text-slate-950 disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-500"><Volume2 className="h-4 w-4" />Render final mix</button>
           <label title="Theo nguồn dùng codec và bitrate video gốc. Low khoảng 70%, Medium 90% bitrate gốc. High giữ cấu hình chất lượng hiện tại." className="inline-flex items-center gap-2 rounded-lg border border-slate-700 px-2.5 py-2 text-xs text-slate-300">
             Chất lượng
             <select value={exportQuality} onChange={(event) => setExportQuality(event.target.value as VideoDubbingExportQuality)} className="rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-100 focus:border-sky-400 focus:outline-none">
@@ -3844,19 +5125,12 @@ export default function VideoDubbingTab() {
               <option value="high">High</option>
             </select>
           </label>
-          <button type="button" onClick={() => void startVideoExport()} disabled={!canExportVideo || logoUploading} className="inline-flex items-center gap-2 rounded-lg bg-sky-500 px-3 py-2 text-xs font-bold text-slate-950 disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-500"><Film className="h-4 w-4" />Export</button>
-          <div className="flex max-w-sm flex-col gap-1">
-            <label title="Sau khi tất cả video trong hàng đợi export thành công, ghép chúng bằng stream copy không encode lại." className={`inline-flex items-center gap-2 rounded-lg border border-slate-700 px-3 py-2 text-xs text-slate-200 ${queueRunning || queueRows.length < 2 || concatPreflight.status === "checking" ? "cursor-not-allowed opacity-50" : "cursor-pointer hover:border-sky-500/40"}`}>
-              <input type="checkbox" checked={joinAfterQueue} onChange={() => void toggleJoinAfterQueue()} disabled={queueRunning || queueRows.length < 2 || concatPreflight.status === "checking"} className="accent-sky-400" />
-              Ghép nối sau khi hàng đợi xong
-            </label>
-            {concatPreflight.status !== "idle" && <span className={`max-w-sm text-[10px] leading-relaxed ${concatPreflight.status === "incompatible" ? "text-rose-300" : concatPreflight.status === "compatible" ? "text-emerald-300" : "text-slate-400"}`}>{concatPreflight.message}</span>}
-          </div>
-          <button type="button" onClick={() => void openExportFolder()} disabled={!job} className="inline-flex items-center gap-2 rounded-lg border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-200 hover:border-slate-500 disabled:opacity-40"><FolderOpen className="h-4 w-4" />Open Export Folder</button>
+          <button type="button" onClick={() => void openProjectFolder()} disabled={!activeProject} className="inline-flex items-center gap-2 rounded-lg border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-200 hover:border-slate-500 disabled:cursor-not-allowed disabled:opacity-40"><FolderOpen className="h-4 w-4" />Mở Project Folder</button>
           <button type="button" onClick={() => { setProjectsExpanded(true); void loadProjects(); }} className="inline-flex items-center gap-2 rounded-lg border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-200 hover:border-sky-400/50"><FolderOpen className="h-4 w-4" />Project{activeProject ? ` · ${activeProject.name}` : ""}</button>
           <button type="button" onClick={() => setGuideOpen(true)} className="inline-flex items-center gap-2 rounded-lg border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-200 hover:border-cyan-400/50"><BookOpen className="h-4 w-4" />Hướng Dẫn</button>
         </div>
         </div>
+        {concatPreflight.status !== "idle" && <p className={`text-[10px] leading-relaxed ${concatPreflight.status === "incompatible" ? "text-rose-300" : concatPreflight.status === "compatible" ? "text-emerald-300" : "text-slate-400"}`}>{concatPreflight.message}</p>}
         <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
           {queueRunning && (
             <div className="space-y-2 rounded-xl border border-amber-500/25 bg-amber-950/20 p-3 text-xs text-amber-100">
@@ -4895,10 +6169,10 @@ export default function VideoDubbingTab() {
                     )}
                   </div>
                   <audio
-                    key={`${job?.id}-${masterGeneration.sizeBytes}`}
+                    key={`${job?.id}-${masterGeneration.audioVersion || masterGeneration.sizeBytes}`}
                     controls
                     preload="metadata"
-                    src={`/api/video-dubbing/jobs/${job?.id}/master-audio`}
+                    src={`/api/video-dubbing/jobs/${job?.id}/master-audio?v=${masterGeneration.audioVersion || masterGeneration.sizeBytes}`}
                     className="w-full"
                   >
                     Trình duyệt không hỗ trợ phát WAV.
@@ -5160,28 +6434,172 @@ export default function VideoDubbingTab() {
         }}
         onDrop={handleQueueDrop}
       >
+        <div className="border-b border-slate-800 p-3">
+          <div
+            className="grid grid-cols-1 gap-2 rounded-xl border border-dashed border-slate-700 bg-slate-950/60 p-2 sm:grid-cols-2"
+            onDragEnter={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+            }}
+            onDragOver={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              event.dataTransfer.dropEffect = queueRunning ? "none" : "copy";
+            }}
+            onDrop={(event) => handleQueueDrop(event)}
+          >
+            <button
+              type="button"
+              disabled={queueRunning}
+              onClick={() => videoInputRef.current?.click()}
+              className="flex min-h-16 items-center justify-center gap-3 rounded-lg border border-slate-700/80 bg-slate-900/80 px-4 py-3 text-left transition-colors hover:border-amber-500/50 hover:bg-amber-950/20 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Film className="h-5 w-5 shrink-0 text-amber-400" />
+              <span>
+                <span className="block text-sm font-semibold text-slate-100">Thả nhiều video</span>
+                <span className="mt-0.5 block text-[11px] text-slate-400">Hoặc click để chọn MP4, MKV, MOV…</span>
+              </span>
+            </button>
+            <button
+              type="button"
+              disabled={queueRunning}
+              onClick={() => openSrtBrowser()}
+              className="flex min-h-16 items-center justify-center gap-3 rounded-lg border border-slate-700/80 bg-slate-900/80 px-4 py-3 text-left transition-colors hover:border-cyan-500/50 hover:bg-cyan-950/20 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <FileText className="h-5 w-5 shrink-0 text-cyan-400" />
+              <span>
+                <span className="block text-sm font-semibold text-slate-100">Thả nhiều phụ đề SRT</span>
+                <span className="mt-0.5 block text-[11px] text-slate-400">Ghép theo tên file hoặc thứ tự danh sách</span>
+              </span>
+            </button>
+          </div>
+        </div>
         <div className="border-b border-slate-800 px-4 py-3">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="space-y-3">
             <div>
               <h3 className="text-sm font-semibold text-white">Danh sách video nguồn</h3>
               <p className="mt-1 text-xs text-slate-400">Video đã lưu trong job của project được liệt kê tại đây. Thả thêm video và SRT để ghép theo tên file.</p>
             </div>
-            <button
-              type="button"
-              onClick={() => void syncSettingsToAllVideos()}
-              disabled={settingsSyncRunning || queueRunning || videoFiles.some((item) => item.uploading) || !videoFiles.some((item) => item.job?.status === "completed")}
-              title="Lưu cài đặt preview vào tất cả job video trong danh sách, không bắt đầu xử lý"
-              className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg border border-cyan-400/30 bg-cyan-950/30 px-3 py-2 text-xs font-semibold text-cyan-100 hover:bg-cyan-900/40 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <RefreshCw className={`h-3.5 w-3.5 ${settingsSyncRunning ? "animate-spin" : ""}`} />
-              {settingsSyncRunning ? "Đang đồng bộ…" : "Đồng bộ"}
-            </button>
+            <div className="flex min-w-0 items-center justify-between gap-3">
+              <span className="shrink-0 text-xs font-semibold text-slate-300">All Videos:</span>
+              <div className="flex min-w-0 flex-1 items-center justify-end gap-2 overflow-x-auto">
+              <button
+                type="button"
+                onClick={() => void runAllVideosAction("tts")}
+                disabled={allVideosActionDisabled || !allVideosTtsReady}
+                title="Tạo riêng TTS Master cho tất cả video"
+                className="rounded-lg border border-indigo-400/35 px-3 py-2 text-xs font-semibold text-indigo-100 hover:bg-indigo-950/40 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                TTS
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  void runAllVideosAction(
+                    "demucs",
+                    allVideosJobs.filter(
+                      (item) =>
+                        item.metadata?.audioCodec &&
+                        item.separation?.status !== "processing",
+                    ),
+                  )
+                }
+                disabled={
+                  allVideosActionDisabled ||
+                  !allVideosJobs.some(
+                    (item) =>
+                      item.metadata?.audioCodec &&
+                      item.separation?.status !== "processing",
+                  ) ||
+                  separationAvailability?.status !== "ready"
+                }
+                title={
+                  separationAvailability?.status === "ready"
+                    ? "Tách vocals và instrumental cho tất cả video có audio"
+                    : separationAvailability?.message || "Demucs chưa sẵn sàng"
+                }
+                className="rounded-lg border border-violet-400/35 px-3 py-2 text-xs font-semibold text-violet-100 hover:bg-violet-950/40 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Demucs All
+              </button>
+              <button
+                type="button"
+                onClick={() => void runAllVideosAction("mix")}
+                disabled={allVideosActionDisabled}
+                title="Chỉ render final mix cho tất cả video"
+                className="rounded-lg border border-cyan-400/35 px-3 py-2 text-xs font-semibold text-cyan-100 hover:bg-cyan-950/40 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Mix Audio
+              </button>
+              <button
+                type="button"
+                onClick={() => void runAllVideosAction("render")}
+                disabled={allVideosActionDisabled}
+                title="Chỉ export tất cả video"
+                className="rounded-lg border border-sky-400/35 px-3 py-2 text-xs font-semibold text-sky-100 hover:bg-sky-950/40 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Render
+              </button>
+              <button
+                type="button"
+                onClick={downloadAllSrts}
+                disabled={!allSrtDownloadTargets.length}
+                title="Tải phụ đề đã chỉnh sửa của tất cả video trong project"
+                className="rounded-lg border border-emerald-500/35 px-3 py-2 text-xs font-semibold text-emerald-100 hover:bg-emerald-950/40 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Tải SRT cho all
+              </button>
+              <button
+                type="button"
+                onClick={() => void runAllVideosAction("download")}
+                disabled={
+                  allVideosActionDisabled ||
+                  !allVideosJobs.some(
+                    (item) => item.videoExport?.status === "completed",
+                  )
+                }
+                title="Tải tất cả MP4 đã export hoàn tất trong một file ZIP"
+                aria-label="Download tất cả video đã export"
+                className="rounded-lg border border-emerald-500/35 p-2 text-emerald-200 hover:bg-emerald-950/40 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <Download className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => void syncSettingsToAllVideos()}
+                disabled={settingsSyncRunning || queueRunning || allVideosRunning || videoFiles.some((item) => item.uploading) || !videoFiles.some((item) => item.job?.status === "completed")}
+                title="Lưu cài đặt preview vào tất cả job video trong danh sách, không bắt đầu xử lý"
+                className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg border border-cyan-400/30 bg-cyan-950/30 px-3 py-2 text-xs font-semibold text-cyan-100 hover:bg-cyan-900/40 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <RefreshCw className={`h-3.5 w-3.5 ${settingsSyncRunning ? "animate-spin" : ""}`} />
+                {settingsSyncRunning ? "Đang đồng bộ…" : "Đồng bộ"}
+              </button>
+                </div>
+            </div>
           </div>
           {settingsSyncMessage && <p className="mt-2 text-xs text-cyan-200" role="status">{settingsSyncMessage}</p>}
+          {srtDownloadMessage && <p className="mt-2 text-xs text-emerald-200" role="status">{srtDownloadMessage}</p>}
+          {allVideosAction && (
+            <div className="mt-2 space-y-1" role="status" aria-live="polite">
+              <p className="text-xs text-slate-300">
+                {allVideosAction.status === "running"
+                          ? `Đang ${allVideosAction.action === "tts" ? "tạo TTS" : allVideosAction.action === "demucs" ? "tách Demucs" : allVideosAction.action === "mix" ? "render Mix Audio" : allVideosAction.action === "render" ? "export" : "tải"} ${allVideosAction.currentIndex}/${allVideosAction.total}${allVideosAction.currentFileName ? `: ${allVideosAction.currentFileName}` : "…"}`
+                          : `${allVideosAction.action === "tts" ? "TTS" : allVideosAction.action === "demucs" ? "Demucs" : allVideosAction.action === "mix" ? "Mix Audio" : allVideosAction.action === "render" ? "Render" : "Download"} hoàn tất: ${allVideosAction.completed}/${allVideosAction.total} video thành công.`}
+              </p>
+              {allVideosAction.errors.length > 0 && (
+                <p className="text-xs text-rose-300">
+                  {allVideosAction.errors.slice(0, 3).join(" · ")}
+                  {allVideosAction.errors.length > 3
+                    ? ` · và ${allVideosAction.errors.length - 3} lỗi khác`
+                    : ""}
+                </p>
+              )}
+            </div>
+          )}
         </div>
-        <div className="w-full min-w-0 overflow-hidden">
+        <div className="max-h-[60vh] w-full min-w-0 overflow-auto overscroll-contain">
           <table className="w-full min-w-0 table-fixed border-collapse text-left">
-            <thead className="bg-slate-950/80">
+            <thead className="sticky top-0 z-10 bg-slate-950/95">
               <tr className="border-b border-slate-800 text-xs font-semibold uppercase tracking-wide text-slate-400">
                 <th scope="col" className="w-1/3 px-3 py-3">
                   Video nguồn
@@ -5201,10 +6619,22 @@ export default function VideoDubbingTab() {
                   ? activeProject.srt?.fileName
                   : undefined;
                 return (
-                  <tr key={`saved-${item.job.id}`} aria-current={job?.id === item.job.id ? "true" : undefined} className={job?.id === item.job.id ? "bg-sky-900/30 ring-1 ring-inset ring-sky-400/35" : "bg-slate-950/20"}>
-                    <td className="min-w-0 p-2"><button type="button" onClick={() => openHistoryJob(item)} className="flex w-full min-w-0 items-center gap-2 rounded-lg px-1 py-2 text-left hover:bg-slate-800/70"><Film className="h-4 w-4 shrink-0 text-sky-300" /><span className="min-w-0 flex-1 truncate text-sm text-slate-100">{item.job.fileName}</span>{job?.id === item.job.id && <span className="shrink-0 rounded-full bg-sky-400/15 px-2 py-0.5 text-[10px] font-semibold text-sky-200">Đang preview</span>}</button></td>
+                  <tr key={`saved-${item.job.id}`} onClick={(event) => previewVideoRow(event, item.job)} aria-current={job?.id === item.job.id ? "true" : undefined} className={`cursor-pointer ${job?.id === item.job.id ? "bg-sky-900/30 ring-1 ring-inset ring-sky-400/35" : "bg-slate-950/20"}`}>
+                    <td className="min-w-0 p-2">
+                      <button
+                        type="button"
+                        onClick={() => void previewSourceVideo(item.job)}
+                        disabled={item.job.status !== "completed" || queueRunning || settingsSyncRunning}
+                        className="flex w-full min-w-0 items-center gap-2 rounded-lg px-1 py-2 text-left hover:bg-slate-800/70 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <Film className="h-4 w-4 shrink-0 text-sky-300" />
+                        <span className="min-w-0 flex-1 truncate text-sm text-slate-100">{item.job.fileName}</span>
+                        {job?.id === item.job.id && <span className="shrink-0 rounded-full bg-sky-400/15 px-2 py-0.5 text-[10px] font-semibold text-sky-200">Đang preview</span>}
+                      </button>
+                      {renderJobProcessingBar(item.job)}
+                    </td>
                     <td className="whitespace-nowrap p-2 text-center"><span title={srtName || (cues.length ? "Phụ đề đã lưu trong job" : "Chưa có SRT lưu cho job này")}><FileText className={`mx-auto h-4 w-4 ${srtName || cues.length ? "text-cyan-300" : "text-slate-600"}`} /></span>{cues.length > 0 && <div className="mt-1 text-[10px] text-slate-500">{cues.length} câu</div>}</td>
-                    <td className="min-w-0 p-2"><div className="flex flex-wrap items-center justify-end gap-2"><span className="text-[11px] text-slate-400">{statusLabel(item.job)}</span><button type="button" onClick={() => void previewSourceVideo(item.job)} disabled={item.job.status !== "completed" || queueRunning || settingsSyncRunning} title={`Preview ${item.job.fileName}`} aria-label={`Preview ${item.job.fileName}`} className="rounded-lg border border-sky-500/30 p-2 text-sky-200 hover:bg-sky-950/30 disabled:cursor-not-allowed disabled:opacity-40"><Play className="h-4 w-4" /></button></div></td>
+                    <td className="min-w-0 p-2"><div className="flex flex-wrap items-center justify-end gap-2"><span className="text-[11px] text-slate-400">{statusLabel(item.job)}</span>{renderVideoActions(item.job)}</div></td>
                   </tr>
                 );
               })}
@@ -5222,8 +6652,9 @@ export default function VideoDubbingTab() {
                   return (
                     <tr
                       key={`${file?.id || "no-video"}-${file?.name || ""}-${file?.size || 0}-${file?.lastModified || 0}-${subtitle?.id || "no-srt"}-${index}`}
+                      onClick={(event) => previewVideoRow(event, file?.job)}
                       aria-current={file?.job?.id && job?.id === file.job.id ? "true" : undefined}
-                      className={file?.job?.id && job?.id === file.job.id ? "bg-sky-900/30 ring-1 ring-inset ring-sky-400/35" : undefined}
+                      className={`${file?.job ? "cursor-pointer" : ""} ${file?.job?.id && job?.id === file.job.id ? "bg-sky-900/30 ring-1 ring-inset ring-sky-400/35" : ""}`}
                     >
                       <td className="min-w-0 p-2">
                         <div
@@ -5237,13 +6668,17 @@ export default function VideoDubbingTab() {
                             event.dataTransfer.dropEffect = "copy";
                           }}
                           onDrop={(event) => handleQueueDrop(event, file?.job?.id)}
-                          className="min-h-14"
+                          className={`flex min-h-14 rounded-lg border border-dashed border-slate-700 bg-slate-950/50 hover:border-amber-500/50 ${file?.job ? "cursor-pointer" : ""}`}
                         >
                           <button
                             type="button"
-                            disabled={queueRunning}
-                            onClick={() => videoInputRef.current?.click()}
-                            className="flex min-h-14 w-full items-center gap-2 rounded-lg border border-dashed border-slate-700 bg-slate-950/50 px-3 py-2 text-left hover:border-amber-500/50 disabled:cursor-wait disabled:opacity-60"
+                            disabled={queueRunning || Boolean(file?.uploading)}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              videoInputRef.current?.click();
+                            }}
+                            aria-label={file ? `Chọn video khác thay cho ${file.name}` : "Chọn video nguồn"}
+                            className={`flex min-h-14 min-w-0 items-center gap-2 rounded-lg px-3 py-2 text-left disabled:cursor-wait disabled:opacity-60 ${file?.job ? "max-w-[85%]" : "w-full"}`}
                           >
                             <Film className="h-4 w-4 shrink-0 text-amber-400" />
                             <span className="min-w-0 flex-1 truncate text-sm text-slate-200">
@@ -5257,7 +6692,7 @@ export default function VideoDubbingTab() {
                             )}
                             {file?.uploading && <span className="shrink-0 text-[11px] text-amber-300">Đang lưu vào project…</span>}
                             {file?.job && !file.uploading && <span className="shrink-0 text-[11px] text-emerald-300">Đã lưu</span>}
-                            {file?.error && <span className="shrink-0 text-[11px] text-rose-300">Lỗi lưu</span>}
+                            {file?.error && <span title={file.error} role="alert" className="shrink-0 text-[11px] text-rose-300">Lỗi lưu</span>}
                             {rowState?.status === "uploading" && (
                               <span className="shrink-0 text-[11px] text-amber-300">
                                 {rowState.progressPercent === undefined
@@ -5267,6 +6702,7 @@ export default function VideoDubbingTab() {
                             )}
                           </button>
                         </div>
+                        {file?.job && renderJobProcessingBar(file.job)}
                       </td>
                       <td className="whitespace-nowrap p-2">
                         <div
@@ -5285,7 +6721,7 @@ export default function VideoDubbingTab() {
                             type="button"
                             disabled={queueRunning || Boolean(file?.uploading)}
                             onClick={() => openSrtBrowser(file?.job?.id)}
-                            title={subtitle?.fileName ? `SRT: ${subtitle.fileName}` : "Chọn phụ đề SRT"}
+                            title={subtitle?.error || (subtitle?.fileName ? `SRT: ${subtitle.fileName}` : "Chọn phụ đề SRT")}
                             aria-label={subtitle?.fileName ? `Thay đổi phụ đề SRT ${subtitle.fileName}` : "Chọn phụ đề SRT"}
                             className={`rounded-lg border p-2.5 transition-colors disabled:cursor-wait disabled:opacity-60 ${subtitle?.analysis && !subtitle.error ? "border-cyan-400/40 bg-cyan-400/10 text-cyan-300 hover:bg-cyan-400/20" : subtitle?.error ? "border-rose-500/30 bg-rose-950/20 text-rose-300" : "border-slate-700 bg-slate-950/50 text-slate-500 hover:border-slate-500 hover:text-slate-300"}`}
                           >
@@ -5294,44 +6730,41 @@ export default function VideoDubbingTab() {
                         </div>
                       </td>
                       <td className="min-w-0 p-2">
-                        <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
-                          {file?.job && (
-                            <button
-                              type="button"
-                              onClick={() => void previewSourceVideo(file.job!)}
-                              disabled={file.job.status !== "completed" || file.uploading || queueRunning || settingsSyncRunning}
-                              title={`Preview ${file.name}`}
-                              aria-label={`Preview ${file.name}`}
-                              className="rounded-lg border border-sky-500/30 bg-sky-950/20 p-2 text-sky-200 hover:bg-sky-950/40 disabled:cursor-not-allowed disabled:opacity-40"
-                            >
-                              <Play className="h-4 w-4" />
-                            </button>
-                          )}
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setDetailRowIndex(index);
-                              setFileDetailsOpen(true);
-                            }}
-                            disabled={!file && !subtitle}
-                            className="rounded-lg border border-slate-700 bg-slate-950/70 px-2.5 py-1.5 text-xs font-semibold text-slate-200 hover:border-amber-500/40 disabled:cursor-not-allowed disabled:opacity-40"
-                          >
-                            Details
-                          </button>
-                          {rowState?.status === "completed" &&
-                            rowState.jobId && (
+                        <div className="flex min-w-0 items-center justify-end gap-2">
+                          <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2">
+                            {rowState && <span className={`text-[11px] ${rowState.status === "failed" ? "text-rose-300" : rowState.status === "completed" ? "text-emerald-300" : "text-slate-400"}`}>{rowState.status === "completed" ? "Hoàn tất" : rowState.status === "failed" ? rowState.error || "Thất bại" : rowState.status === "cancelled" ? "Đã hủy" : rowState.status === "queued" ? "Trong hàng đợi" : rowState.phase || "Đang xử lý"}{rowState.status === "processing" && rowState.progressPercent !== undefined && ` · ${Math.round(rowState.progressPercent)}%`}</span>}
+                            {file?.job && renderVideoActions(file.job)}
+                            {rowState?.status === "completed" &&
+                              rowState.jobId && (
                               <a
                                 href={`/api/video-dubbing/jobs/${rowState.jobId}/download`}
                                 download
-                                className="rounded-lg border border-emerald-500/30 bg-emerald-950/20 px-2.5 py-1.5 text-xs font-semibold text-emerald-200 hover:bg-emerald-950/40"
+                                title="Tải video đã export"
+                                aria-label="Tải video đã export"
+                                className="rounded-lg border border-emerald-500/30 bg-emerald-950/20 p-2 text-emerald-200 hover:bg-emerald-950/40"
                               >
-                                Tải
+                                <Download className="h-4 w-4" />
                               </a>
                             )}
+                          </div>
+                          <div className="flex shrink-0 flex-col gap-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setDetailRowIndex(index);
+                                setFileDetailsOpen(true);
+                              }}
+                              disabled={!file && !subtitle}
+                              title="Chi tiết video nguồn"
+                              aria-label="Chi tiết video nguồn"
+                              className="rounded-lg border border-slate-700 bg-slate-950/70 p-1.5 text-slate-200 hover:border-amber-500/40 disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              <Info className="h-4 w-4" />
+                            </button>
                           {(file || subtitle) && (
                             <button
                               type="button"
-                              disabled={queueRunning}
+                              disabled={queueRunning || settingsSyncRunning}
                               onClick={() => {
                                 void removeQueuedSource(file, subtitle);
                                 setQueueStates((current) =>
@@ -5354,36 +6787,15 @@ export default function VideoDubbingTab() {
                                       : current,
                                 );
                               }}
-                              className="rounded-lg border border-rose-500/25 bg-rose-950/20 px-2.5 py-1.5 text-xs font-semibold text-rose-200 hover:border-rose-400/50 disabled:cursor-not-allowed disabled:opacity-40"
-                            >
-                              Xóa
-                            </button>
+                                title="Xóa video nguồn"
+                                aria-label="Xóa video nguồn"
+                                className="rounded-lg border border-rose-500/25 bg-rose-950/20 p-1.5 text-rose-200 hover:border-rose-400/50 disabled:cursor-not-allowed disabled:opacity-40"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </button>
                           )}
+                          </div>
                         </div>
-                        {rowState && (
-                          <p
-                            className={`mt-1.5 text-[11px] ${
-                              rowState.status === "failed"
-                                ? "text-rose-300"
-                                : rowState.status === "completed"
-                                  ? "text-emerald-300"
-                                  : "text-slate-400"
-                            }`}
-                          >
-                            {rowState.status === "completed"
-                              ? "Hoàn tất"
-                              : rowState.status === "failed"
-                                ? rowState.error || "Thất bại"
-                                : rowState.status === "cancelled"
-                                  ? "Đã hủy"
-                                  : rowState.status === "queued"
-                                    ? "Trong hàng đợi"
-                                    : rowState.phase || "Đang xử lý"}
-                            {rowState.status === "processing" &&
-                              rowState.progressPercent !== undefined &&
-                              ` · ${Math.round(rowState.progressPercent)}%`}
-                          </p>
-                        )}
                       </td>
                     </tr>
                   );
@@ -5404,6 +6816,7 @@ export default function VideoDubbingTab() {
         <input
           ref={srtInputRef}
           type="file"
+          multiple
           accept=".srt,application/x-subrip"
           onChange={(event) => void handleSrtChange(event)}
           className="hidden"
@@ -5531,11 +6944,14 @@ export default function VideoDubbingTab() {
                         />
                       </div>
                     )}
-                    {activePreviewText && activePreviewTextIndex >= 0 && (() => {
-                      const cue = activePreviewText;
-                      const index = activePreviewTextIndex;
+                    {activePreviewTextItems.map(({ cue, index }) => {
                       const customPosition = Number.isFinite(cue.xPercent) && Number.isFinite(cue.yPercent);
                       const selected = selectedTextOverlay === index;
+                      const textAlign = cue.isTitle ? undefined : cue.textAlign ?? getSubtitleTextAlignment(cue.position);
+                      const horizontalTransform = textAlign === "left" ? "0%" : textAlign === "right" ? "-100%" : "-50%";
+                      const verticalTransform = customPosition || cue.position.startsWith("middle-")
+                        ? "-50%"
+                        : cue.position.startsWith("bottom-") ? "-100%" : "0%";
                       const content = (
                         <div
                           onPointerDown={(event) => startTextOverlayPreviewDrag(event, index)}
@@ -5561,23 +6977,45 @@ export default function VideoDubbingTab() {
                             backgroundColor={cue.backgroundColor}
                             paddingPx={cue.paddingPx}
                             position={cue.position}
+                            textAlign={textAlign}
+                            wrap={false}
                           />
                         </div>
                       );
-                      return customPosition ? (
-                        <div className="absolute z-10" style={{ left: `${cue.xPercent}%`, top: `${cue.yPercent}%`, transform: "translate(-50%, -50%)" }}>
+                      if (cue.isTitle) {
+                        return customPosition ? (
+                          <div key={`preview-text-${index}`} className="absolute z-10" style={{ left: `${cue.xPercent}%`, top: `${cue.yPercent}%`, transform: "translate(-50%, -50%)" }}>
+                            {content}
+                          </div>
+                        ) : (
+                          <div key={`preview-text-${index}`} className="pointer-events-none absolute inset-0 flex" style={{
+                            justifyContent: getOverlayAlignment(cue.position).horizontal,
+                            alignItems: getOverlayAlignment(cue.position).vertical,
+                            padding: `${24 * previewOverlayScale}px`,
+                          }}>
+                            {content}
+                          </div>
+                        );
+                      }
+                      const margin = 24 * previewOverlayScale;
+                      return (
+                        <div key={`preview-text-${index}`} className="pointer-events-none absolute inset-0">
+                          <div className="absolute z-10" style={{
+                            left: customPosition
+                              ? `${cue.xPercent}%`
+                              : cue.position.endsWith("-left") ? `${margin}px` : cue.position.endsWith("-center") ? "50%" : undefined,
+                            right: !customPosition && cue.position.endsWith("-right") ? `${margin}px` : undefined,
+                            top: customPosition
+                              ? `${cue.yPercent}%`
+                              : cue.position.startsWith("top-") ? `${margin}px` : cue.position.startsWith("middle-") ? "50%" : undefined,
+                            bottom: !customPosition && cue.position.startsWith("bottom-") ? `${margin}px` : undefined,
+                            transform: `translate(${horizontalTransform}, ${verticalTransform})`,
+                          }}>
                           {content}
                         </div>
-                      ) : (
-                        <div className="pointer-events-none absolute inset-0 flex" style={{
-                          justifyContent: getOverlayAlignment(cue.position).horizontal,
-                          alignItems: getOverlayAlignment(cue.position).vertical,
-                          padding: `${24 * previewOverlayScale}px`,
-                        }}>
-                          {content}
                         </div>
                       );
-                    })()}
+                    })}
                   </div>
                 </div>
                 {videoWorkspaceTab === "merged" && (hasExportedVideo && job ? (
@@ -5611,10 +7049,10 @@ export default function VideoDubbingTab() {
                     type="button"
                     onClick={() => void playMixerPreview()}
                     disabled={
-                      !hasPreviewTrack ||
                       !videoPreviewReady ||
                       isMediaProcessing
                     }
+                    title={hasPreviewTrack ? "Phát preview video và các track âm thanh đang bật" : "Phát video preview (im lặng nếu chưa có track âm thanh)"}
                     className="inline-flex items-center gap-2 rounded-lg border border-cyan-500/30 bg-cyan-950/30 px-3 py-2 text-xs font-semibold text-cyan-100 hover:bg-cyan-950/60 disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     {previewStatus === "playing" ? (
@@ -5663,51 +7101,105 @@ export default function VideoDubbingTab() {
                 </p>
               </div>
               {videoWorkspaceTab === "preview" && (
+                <div className="space-y-3">
+                  <div
+                    role="tablist"
+                    aria-label="Timeline video dubbing"
+                    className="flex gap-1 rounded-xl border border-slate-800 bg-slate-950/70 p-1"
+                  >
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={timelineWorkspaceTab === "subtitle"}
+                      onClick={() => setTimelineWorkspaceTab("subtitle")}
+                      className={`flex-1 rounded-lg px-3 py-2 text-xs font-semibold ${timelineWorkspaceTab === "subtitle" ? "bg-cyan-400 text-slate-950" : "text-slate-300 hover:bg-slate-800"}`}
+                    >
+                      Timeline phụ đề
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={timelineWorkspaceTab === "audio"}
+                      onClick={() => setTimelineWorkspaceTab("audio")}
+                      className={`flex-1 rounded-lg px-3 py-2 text-xs font-semibold ${timelineWorkspaceTab === "audio" ? "bg-violet-400 text-slate-950" : "text-slate-300 hover:bg-slate-800"}`}
+                    >
+                      Timeline âm thanh
+                    </button>
+                  </div>
+                  {timelineWorkspaceTab === "subtitle" && (
                 <section className="space-y-3 rounded-xl border border-slate-800 bg-slate-950/60 p-3">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
                       <h4 className="text-xs font-semibold text-white">Timeline phụ đề</h4>
-                      <p className="mt-1 text-[10px] text-slate-500">Bấm clip để tua · kéo clip để di chuyển · kéo mép clip để chỉnh thời gian</p>
+                      <p className="mt-1 text-[10px] text-slate-500">Khi phát, timeline bám theo video; khi dừng, bấm timeline để di chuyển playhead riêng · Ctrl+cuộn để zoom · Shift+cuộn để cuộn ngang</p>
                     </div>
                     <div className="flex items-center gap-2 text-[10px] text-slate-400">
                       <span>{previewSubtitleCues.length} câu</span>
-                      <button type="button" onClick={() => {
-                        const startTime = Math.min(previewCurrentTime, Math.max(0, subtitleTimelineDuration - 0.1));
-                        const next = [...textOverlays, {
+                      <button type="button" disabled={!job} onClick={() => {
+                        const duration = Math.max(0.1, job?.metadata?.durationSeconds || subtitleTimelineDuration);
+                        const startTime = Math.min(subtitleTimelineCursor, Math.max(0, duration - 0.1));
+                        const cue = {
                           startTime,
-                          endTime: Math.min(subtitleTimelineDuration, startTime + 3),
-                          text: "Text mới",
-                          fontSize: 36,
-                          fontFamily: "Arial",
-                          color: "#ffffff",
-                          bold: false,
-                          italic: false,
-                          underline: false,
-                          textCase: "none" as const,
-                          outlineEnabled: false,
-                          outlineColor: "#000000",
-                          outlineWidthPx: 2,
-                          characterSpacingPx: 0,
-                          lineSpacingPx: 0,
-                          position: "middle-center" as VideoDubbingOverlayPosition,
-                          backgroundColor: "#000000",
-                          backgroundTransparent: true,
-                          paddingPx: 8,
-                        }];
-                        setTextOverlays(next);
-                        setSelectedTextOverlay(next.length - 1);
-                      }} className="inline-flex items-center gap-1 rounded-md border border-cyan-500/30 px-2 py-1 text-cyan-200 hover:bg-cyan-950/40"><Plus className="h-3 w-3" />Text</button>
+                          endTime: Math.min(duration, startTime + 3),
+                          text: "Câu phụ đề mới",
+                        };
+                        setSelectedSubtitleCue(previewSubtitleCues.length);
+                        setSubtitlesEnabled(true);
+                        updatePreviewSubtitleCues((cues) => [...cues, cue]);
+                      }} className="inline-flex items-center gap-1 rounded-md border border-cyan-500/30 px-2 py-1 text-cyan-200 hover:bg-cyan-950/40 disabled:cursor-not-allowed disabled:opacity-40"><Plus className="h-3 w-3" />Câu</button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const nextNumber = textTracks.length + 1;
+                          const track = { id: `text-track-${crypto.randomUUID()}`, name: `TEXT ${nextNumber}` };
+                          setTextTracks((tracks) => [...tracks, track]);
+                          setActiveTextTrackId(track.id);
+                        }}
+                        className="inline-flex items-center gap-1 rounded-md border border-violet-500/30 px-2 py-1 text-violet-200 hover:bg-violet-950/40"
+                      >
+                        <Plus className="h-3 w-3" />Timeline
+                      </button>
+                      <button
+                        type="button"
+                        disabled={!job}
+                        onClick={addTextOverlayToTrack}
+                        className="inline-flex items-center gap-1 rounded-md border border-violet-500/30 px-2 py-1 text-violet-200 hover:bg-violet-950/40 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        <Plus className="h-3 w-3" />Text
+                      </button>
                       <label className="flex items-center gap-2">Zoom
-                        <input type="range" min={8} max={36} step={1} value={subtitleTimelineZoom} onChange={(event) => setSubtitleTimelineZoom(Number(event.target.value))} className="w-20 accent-cyan-400" aria-label="Zoom timeline phụ đề" />
+                        <input type="range" min={8} max={180} step={1} value={subtitleTimelineZoom} onChange={(event) => setSubtitleTimelineZoom(Number(event.target.value))} className="w-20 accent-cyan-400" aria-label="Zoom timeline phụ đề" />
                       </label>
                     </div>
                   </div>
-                  {previewSubtitleCues.length === 0 ? (
+                  {previewSubtitleCues.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-slate-800 bg-slate-950/50 px-2.5 py-2 text-[10px] text-slate-400">
+                      {renderSubtitleTimingAdjustment("start", "Bắt đầu")}
+                      {renderSubtitleTimingAdjustment("end", "Kết thúc")}
+                      {renderSubtitleTimingAdjustment("move", "Di chuyển")}
+                      <span className="text-slate-500">
+                        Chỉ kéo dài vào khoảng trống, không chồng lấn phụ đề kế bên
+                      </span>
+                    </div>
+                  )}
+                  {previewSubtitleCues.length === 0 && textTracks.length === 0 ? (
                     <p className="rounded-lg border border-dashed border-slate-700 p-4 text-xs text-slate-500">Chọn file SRT để tạo các clip phụ đề trên timeline.</p>
                   ) : (
-                    <div className="max-h-64 overflow-auto rounded-lg border border-slate-800 bg-slate-900/50">
+                    <div
+                      ref={subtitleTimelineScrollRef}
+                      className="max-h-64 overflow-auto overscroll-contain rounded-lg border border-slate-800 bg-slate-900/50"
+                    >
                       <div style={{ width: `${subtitleTimelineWidth}px` }}>
-                        <div className="relative h-7 border-b border-slate-700 bg-slate-950/80">
+                        <div
+                          className="relative h-7 cursor-crosshair border-b border-slate-700 bg-slate-950/80"
+                          onClick={(event) => {
+                            setSelectedSubtitleCue(null);
+                            setSelectedTextOverlay(null);
+                            const bounds = event.currentTarget.getBoundingClientRect();
+                            const position = Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width));
+                            seekSubtitleTimeline(position * subtitleTimelineDuration);
+                          }}
+                        >
                           {subtitleTimelineTicks.map((tick) => (
                             <span key={tick} className="absolute top-1 text-[9px] tabular-nums text-slate-500" style={{ left: `${(tick / subtitleTimelineDuration) * subtitleTimelineWidth}px` }}>{formatElapsed(tick)}</span>
                           ))}
@@ -5717,18 +7209,20 @@ export default function VideoDubbingTab() {
                           className="relative cursor-crosshair bg-slate-950/30"
                           style={{ height: `${Math.max(54, subtitleTimelineLaneEnds.length * 34 + 10)}px` }}
                           onClick={(event) => {
-                            if (event.target !== event.currentTarget || !videoPreviewReady) return;
+                            if (event.target !== event.currentTarget) return;
+                            setSelectedSubtitleCue(null);
+                            setSelectedTextOverlay(null);
                             const bounds = event.currentTarget.getBoundingClientRect();
                             const position = Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width));
-                            seekMixerPreview(position * subtitleTimelineDuration);
+                            seekSubtitleTimeline(position * subtitleTimelineDuration);
                           }}
                         >
                           {subtitleTimelineTicks.map((tick) => (
                             <span key={`grid-${tick}`} className="pointer-events-none absolute inset-y-0 border-l border-slate-800/80" style={{ left: `${(tick / subtitleTimelineDuration) * subtitleTimelineWidth}px` }} />
                           ))}
-                          <span className="pointer-events-none absolute inset-y-0 z-20 border-l-2 border-rose-400" style={{ left: `${(previewCurrentTime / subtitleTimelineDuration) * subtitleTimelineWidth}px` }} />
+                          <span className="pointer-events-none absolute inset-y-0 z-20 border-l-2 border-rose-400" style={{ left: `${(subtitleTimelineCursor / subtitleTimelineDuration) * subtitleTimelineWidth}px` }} />
                           {subtitleTimelineItems.map(({ cue, index, lane }) => {
-                            const active = cue.startTime <= previewCurrentTime && cue.endTime >= previewCurrentTime;
+                            const active = cue.startTime <= subtitleTimelineCursor && cue.endTime >= subtitleTimelineCursor;
                             const left = (cue.startTime / subtitleTimelineDuration) * subtitleTimelineWidth;
                             const width = Math.max(14, ((cue.endTime - cue.startTime) / subtitleTimelineDuration) * subtitleTimelineWidth);
                             return (
@@ -5737,41 +7231,119 @@ export default function VideoDubbingTab() {
                                 role="button"
                                 tabIndex={0}
                                 title={`${index + 1}. ${cue.text}\n${formatDuration(cue.startTime)} – ${formatDuration(cue.endTime)}`}
-                                onClick={(event) => { event.stopPropagation(); seekMixerPreview(cue.startTime); }}
-                                onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); seekMixerPreview(cue.startTime); } }}
-                                onPointerDown={(event) => startSubtitleTimelineDrag(event, index, cue.startTime, cue.endTime, "move")}
-                                className={`absolute z-10 flex h-7 select-none items-center overflow-hidden rounded-md border px-1 text-[9px] text-white shadow-sm ${previewSubtitleCues.length ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"} ${active ? "border-cyan-200 bg-cyan-500/80" : "border-cyan-500/50 bg-cyan-700/70 hover:bg-cyan-600/80"}`}
+                                onClick={(event) => { event.stopPropagation(); setSelectedTextOverlay(null); setSelectedSubtitleCue(index); seekSubtitleTimeline(cue.startTime); }}
+                                onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSelectedSubtitleCue(index); seekSubtitleTimeline(cue.startTime); } }}
+                                onPointerDown={(event) => { setSelectedTextOverlay(null); startSubtitleTimelineDrag(event, index, cue.startTime, cue.endTime, "move"); }}
+                                className={`absolute z-10 flex h-7 select-none items-center overflow-hidden rounded-md border px-1 text-[9px] text-white shadow-sm ${previewSubtitleCues.length ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"} ${selectedSubtitleCue === index ? "border-amber-200 bg-amber-500/80" : active ? "border-cyan-200 bg-cyan-500/80" : "border-cyan-500/50 bg-cyan-700/70 hover:bg-cyan-600/80"}`}
                                 style={{ left: `${left}px`, top: `${5 + lane * 34}px`, width: `${width}px` }}
                               >
-                                {previewSubtitleCues.length > 0 && <span onClick={(event) => event.stopPropagation()} onPointerDown={(event) => startSubtitleTimelineDrag(event, index, cue.startTime, cue.endTime, "start")} className="absolute inset-y-0 left-0 z-20 w-1.5 cursor-ew-resize bg-cyan-100/80" aria-label={`Chỉnh điểm bắt đầu câu ${index + 1}`} />}
+                                {previewSubtitleCues.length > 0 && <span onClick={(event) => event.stopPropagation()} onPointerDown={(event) => { setSelectedTextOverlay(null); startSubtitleTimelineDrag(event, index, cue.startTime, cue.endTime, "start"); }} className="absolute inset-y-0 left-0 z-20 w-1.5 cursor-ew-resize bg-cyan-100/80" aria-label={`Chỉnh điểm bắt đầu câu ${index + 1}`} />}
                                 <span className="pointer-events-none truncate px-1">{index + 1}. {cue.text}</span>
-                                {previewSubtitleCues.length > 0 && <span onClick={(event) => event.stopPropagation()} onPointerDown={(event) => startSubtitleTimelineDrag(event, index, cue.startTime, cue.endTime, "end")} className="absolute inset-y-0 right-0 z-20 w-1.5 cursor-ew-resize bg-cyan-100/80" aria-label={`Chỉnh điểm kết thúc câu ${index + 1}`} />}
+                                {previewSubtitleCues.length > 0 && <span onClick={(event) => event.stopPropagation()} onPointerDown={(event) => { setSelectedTextOverlay(null); startSubtitleTimelineDrag(event, index, cue.startTime, cue.endTime, "end"); }} className="absolute inset-y-0 right-0 z-20 w-1.5 cursor-ew-resize bg-cyan-100/80" aria-label={`Chỉnh điểm kết thúc câu ${index + 1}`} />}
                               </div>
                             );
                           })}
                         </div>
-                        <div className="relative h-8 border-t border-slate-800 bg-violet-950/10" onClick={(event) => {
-                          if (event.target !== event.currentTarget || !videoPreviewReady) return;
-                          const bounds = event.currentTarget.getBoundingClientRect();
-                          const position = Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width));
-                          seekMixerPreview(position * subtitleTimelineDuration);
-                        }}>
-                          <span className="absolute left-2 top-2 z-20 text-[9px] font-semibold text-violet-300">TEXT</span>
-                          <span className="pointer-events-none absolute inset-y-0 z-20 border-l-2 border-rose-400" style={{ left: `${(previewCurrentTime / subtitleTimelineDuration) * subtitleTimelineWidth}px` }} />
-                          {textOverlays.map((cue, index) => {
-                            const left = (cue.startTime / subtitleTimelineDuration) * subtitleTimelineWidth;
-                            const width = Math.max(18, ((cue.endTime - cue.startTime) / subtitleTimelineDuration) * subtitleTimelineWidth);
-                            return <div key={`text-${index}`} role="button" tabIndex={0} title={`${cue.text}\n${formatDuration(cue.startTime)} – ${formatDuration(cue.endTime)}`} onClick={(event) => { event.stopPropagation(); setSelectedTextOverlay(index); seekMixerPreview(cue.startTime); }} onPointerDown={(event) => startSubtitleTimelineDrag(event, index, cue.startTime, cue.endTime, "move", "text")} className={`absolute inset-y-1 z-10 flex select-none items-center overflow-hidden rounded-md border px-1 text-[9px] text-white ${selectedTextOverlay === index ? "border-violet-200 bg-violet-500/90" : "border-violet-400/50 bg-violet-700/75"} cursor-grab active:cursor-grabbing`} style={{ left: `${left}px`, width: `${width}px` }}>
-                              <span onClick={(event) => event.stopPropagation()} onPointerDown={(event) => startSubtitleTimelineDrag(event, index, cue.startTime, cue.endTime, "start", "text")} className="absolute inset-y-0 left-0 z-20 w-1.5 cursor-ew-resize bg-violet-100/80" />
-                              <span className="pointer-events-none truncate px-1">{cue.text}</span>
-                              <span onClick={(event) => event.stopPropagation()} onPointerDown={(event) => startSubtitleTimelineDrag(event, index, cue.startTime, cue.endTime, "end", "text")} className="absolute inset-y-0 right-0 z-20 w-1.5 cursor-ew-resize bg-violet-100/80" />
-                            </div>;
-                          })}
-                        </div>
+                        {textTracks.map((track) => (
+                          <div
+                            key={track.id}
+                            onClick={() => {
+                              setActiveTextTrackId(track.id);
+                              setSelectedSubtitleCue(null);
+                              setSelectedTextOverlay(null);
+                            }}
+                            className={`border-t border-slate-800 transition-colors ${activeTextTrackId === track.id ? "bg-violet-500/10 ring-1 ring-inset ring-violet-400/40" : "bg-violet-950/10 hover:bg-violet-500/5"}`}
+                          >
+                            <div className="flex h-7 items-center px-2">
+                              <span className="text-[9px] font-semibold text-violet-300">{track.name}</span>
+                            </div>
+                            <div
+                              className="relative h-8"
+                              onClick={(event) => {
+                                setActiveTextTrackId(track.id);
+                                if (event.target !== event.currentTarget) return;
+                                setSelectedSubtitleCue(null);
+                                setSelectedTextOverlay(null);
+                                const bounds = event.currentTarget.getBoundingClientRect();
+                                const position = Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width));
+                                seekSubtitleTimeline(position * subtitleTimelineDuration);
+                              }}
+                            >
+                              <span className="pointer-events-none absolute inset-y-0 z-20 border-l-2 border-rose-400" style={{ left: `${(subtitleTimelineCursor / subtitleTimelineDuration) * subtitleTimelineWidth}px` }} />
+                              {textOverlays.map((cue, index) => ({ cue, index }))
+                                .filter(({ cue }) => !cue.isTitle && (cue.trackId || DEFAULT_TEXT_TRACK_ID) === track.id)
+                                .map(({ cue, index }) => {
+                                  const left = (cue.startTime / subtitleTimelineDuration) * subtitleTimelineWidth;
+                                  const width = Math.max(18, ((cue.endTime - cue.startTime) / subtitleTimelineDuration) * subtitleTimelineWidth);
+                                  return <div key={`text-${index}`} role="button" tabIndex={0} title={`${cue.text}\n${formatDuration(cue.startTime)} – ${formatDuration(cue.endTime)}`} onClick={(event) => { event.stopPropagation(); setActiveTextTrackId(track.id); setSelectedSubtitleCue(null); setSelectedTextOverlay(index); seekSubtitleTimeline(cue.startTime); }} onPointerDown={(event) => { setActiveTextTrackId(track.id); setSelectedSubtitleCue(null); startSubtitleTimelineDrag(event, index, cue.startTime, cue.endTime, "move", "text"); }} className={`absolute inset-y-1 z-10 flex select-none items-center overflow-hidden rounded-md border px-1 text-[9px] text-white ${selectedTextOverlay === index ? "border-violet-200 bg-violet-500/90" : "border-violet-400/50 bg-violet-700/75"} cursor-grab active:cursor-grabbing`} style={{ left: `${left}px`, width: `${width}px` }}>
+                                    <span onClick={(event) => event.stopPropagation()} onPointerDown={(event) => { event.stopPropagation(); setActiveTextTrackId(track.id); startSubtitleTimelineDrag(event, index, cue.startTime, cue.endTime, "start", "text"); }} className="absolute inset-y-0 left-0 z-20 w-1.5 cursor-ew-resize bg-violet-100/80" />
+                                    <span className="pointer-events-none truncate px-1">{cue.text}</span>
+                                    <span onClick={(event) => event.stopPropagation()} onPointerDown={(event) => { event.stopPropagation(); setActiveTextTrackId(track.id); startSubtitleTimelineDrag(event, index, cue.startTime, cue.endTime, "end", "text"); }} className="absolute inset-y-0 right-0 z-20 w-1.5 cursor-ew-resize bg-violet-100/80" />
+                                  </div>;
+                                })}
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     </div>
                   )}
-                  {selectedTextOverlay !== null && textOverlays[selectedTextOverlay] && (() => {
+                  {selectedSubtitleCue !== null && previewSubtitleCues[selectedSubtitleCue] && (
+                    <div className="grid gap-2 rounded-lg border border-cyan-500/20 bg-cyan-950/10 p-3 sm:grid-cols-2">
+                      <label className="space-y-1 text-[10px] text-slate-400 sm:col-span-2">
+                        Nội dung câu {selectedSubtitleCue + 1}
+                        <textarea
+                          value={previewSubtitleCues[selectedSubtitleCue].text}
+                          onChange={(event) => updateSelectedSubtitleCue({ text: event.target.value })}
+                          rows={2}
+                          className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-white"
+                        />
+                      </label>
+                      <label className="space-y-1 text-[10px] text-slate-400">
+                        Bắt đầu (giây)
+                        <input
+                          type="number"
+                          min={0}
+                          max={previewSubtitleCues[selectedSubtitleCue].endTime - 0.1}
+                          step={0.05}
+                          value={previewSubtitleCues[selectedSubtitleCue].startTime}
+                          onChange={(event) => {
+                            const value = Number(event.target.value);
+                            if (Number.isFinite(value)) updateSelectedSubtitleCue({
+                              startTime: Math.max(0, Math.min(value, previewSubtitleCues[selectedSubtitleCue].endTime - 0.1)),
+                            });
+                          }}
+                          className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-white"
+                        />
+                      </label>
+                      <label className="space-y-1 text-[10px] text-slate-400">
+                        Kết thúc (giây)
+                        <input
+                          type="number"
+                          min={previewSubtitleCues[selectedSubtitleCue].startTime + 0.1}
+                          step={0.05}
+                          value={previewSubtitleCues[selectedSubtitleCue].endTime}
+                          onChange={(event) => {
+                            const value = Number(event.target.value);
+                            if (Number.isFinite(value)) updateSelectedSubtitleCue({
+                              endTime: Math.max(previewSubtitleCues[selectedSubtitleCue].startTime + 0.1, value),
+                            });
+                          }}
+                          className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-white"
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          updatePreviewSubtitleCues((cues) => cues.filter((_, index) => index !== selectedSubtitleCue));
+                          setSelectedSubtitleCue(null);
+                        }}
+                        className="inline-flex items-center justify-center gap-1 justify-self-start rounded-md border border-rose-500/30 px-2 py-1.5 text-xs text-rose-200 hover:bg-rose-950/30"
+                      >
+                        <Trash2 className="h-3 w-3" />Xóa câu
+                      </button>
+                    </div>
+                  )}
+                  {selectedTextOverlay !== null && textOverlays[selectedTextOverlay] && !textOverlays[selectedTextOverlay].isTitle && (() => {
                     const cue = textOverlays[selectedTextOverlay];
                     const textStyleValue: TextStyleControlValue = {
                       fontFamily: cue.fontFamily,
@@ -5787,11 +7359,49 @@ export default function VideoDubbingTab() {
                       characterSpacingPx: cue.characterSpacingPx ?? 0,
                       lineSpacingPx: cue.lineSpacingPx ?? 0,
                     };
+                    const cueTrackId = cue.trackId || DEFAULT_TEXT_TRACK_ID;
+                    const cueTrackName = textTracks.find((track) => track.id === cueTrackId)?.name || DEFAULT_TEXT_TRACK.name;
+                    const cueTrackTextCount = textOverlays.filter((item) =>
+                      !item.isTitle && (item.trackId || DEFAULT_TEXT_TRACK_ID) === cueTrackId,
+                    ).length;
                     return <div className="grid gap-2 rounded-lg border border-violet-500/20 bg-violet-950/10 p-3 sm:grid-cols-2 xl:grid-cols-4">
-                      <p className="text-[10px] text-violet-200 sm:col-span-2 xl:col-span-4">Kéo trực tiếp text trên preview để đặt vị trí; kéo giữ nguyên vị trí trong khung hình khi export.</p>
+                      <div className="flex flex-wrap items-center justify-between gap-2 sm:col-span-2 xl:col-span-4">
+                        <p className="text-[10px] text-violet-200">Style và vị trí chỉ áp dụng cho clip này cho đến khi nhấn Apply to All ({cueTrackName}).</p>
+                        <button
+                          type="button"
+                          disabled={cueTrackTextCount < 2}
+                          onClick={applySelectedTextOverlayToTrack}
+                          className="rounded-md border border-violet-400/40 px-2.5 py-1.5 text-xs font-semibold text-violet-100 hover:bg-violet-900/40 disabled:cursor-not-allowed disabled:opacity-40"
+                          title={`Áp dụng style và vị trí cho ${cueTrackTextCount} clip trong ${cueTrackName}`}
+                        >
+                          Apply to All
+                        </button>
+                      </div>
                       <label className="space-y-1 text-[10px] text-slate-400 sm:col-span-2">Nội dung<textarea value={cue.text} onChange={(event) => updateSelectedTextOverlay({ text: event.target.value })} rows={2} className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-white" /></label>
                       <div className="sm:col-span-2 xl:col-span-4"><TextStyleControls value={textStyleValue} onChange={updateSelectedTextOverlay} fontOptions={subtitleFontOptions} /></div>
+                      <label className="inline-flex items-center gap-2 text-xs text-slate-300 sm:col-span-2 xl:col-span-4">
+                        <input
+                          type="checkbox"
+                          checked={cue.extendToVideoEnd ?? false}
+                          onChange={(event) => {
+                            const extendToVideoEnd = event.target.checked;
+                            const duration = video?.job?.metadata?.durationSeconds;
+                            updateSelectedTextOverlay({
+                              extendToVideoEnd,
+                              ...(extendToVideoEnd && duration
+                                ? {
+                                    startTime: Math.min(cue.startTime, Math.max(0, duration - 0.1)),
+                                    endTime: duration,
+                                  }
+                                : {}),
+                            });
+                          }}
+                          className="accent-violet-400"
+                        />
+                        Hiển thị đến hết video (tự căn theo thời lượng từng video trong hàng đợi)
+                      </label>
                       <label className="space-y-1 text-[10px] text-slate-400">Vị trí neo<select value={cue.position} onChange={(event) => updateSelectedTextOverlay({ position: event.target.value as VideoDubbingOverlayPosition, xPercent: undefined, yPercent: undefined })} className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-white">{OVERLAY_POSITION_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+                      <label className="space-y-1 text-[10px] text-slate-400">Align<select value={cue.textAlign ?? getSubtitleTextAlignment(cue.position)} onChange={(event) => updateSelectedTextOverlay({ textAlign: event.target.value as "left" | "center" | "right" })} className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-white"><option value="left">Left</option><option value="center">Center</option><option value="right">Right</option></select></label>
                       {(cue.xPercent !== undefined || cue.yPercent !== undefined) && <button type="button" onClick={() => updateSelectedTextOverlay({ xPercent: undefined, yPercent: undefined })} className="self-end rounded-md border border-violet-500/30 px-2 py-1.5 text-xs text-violet-200">Đặt lại vị trí neo</button>}
                       <label className="inline-flex items-center gap-2 text-xs text-slate-300"><input type="checkbox" checked={cue.backgroundTransparent} onChange={(event) => updateSelectedTextOverlay({ backgroundTransparent: event.target.checked })} className="accent-violet-400" />Nền trong suốt</label>
                       {!cue.backgroundTransparent && <label className="space-y-1 text-[10px] text-slate-400">Màu nền<input type="color" value={cue.backgroundColor} onChange={(event) => updateSelectedTextOverlay({ backgroundColor: event.target.value })} className="h-8 w-full rounded-md border border-slate-700 bg-slate-950" /></label>}
@@ -5800,15 +7410,51 @@ export default function VideoDubbingTab() {
                   })()}
                 </section>
               )}
+                  {timelineWorkspaceTab === "audio" && job && (
+                    <VideoDubbingAudioTimeline
+                      jobId={job.id}
+                      duration={job.metadata?.durationSeconds || 1}
+                      currentTime={subtitleTimelineCursor}
+                      zoom={subtitleTimelineZoom}
+                      onZoomChange={setSubtitleTimelineZoom}
+                      onSeek={seekSubtitleTimeline}
+                      vocalsAvailable={Boolean(job.separation?.vocalsSizeBytes)}
+                      instrumentalAvailable={Boolean(
+                        job.separation?.instrumentalSizeBytes,
+                      )}
+                      ttsMasterAvailable={Boolean(
+                        job.masterGeneration?.sizeBytes &&
+                          job.masterGeneration.durationSeconds !== undefined,
+                      )}
+                      ttsMasterVersion={
+                        job.masterGeneration?.audioVersion ||
+                        job.masterGeneration?.sizeBytes ||
+                        0
+                      }
+                      masterEdit={job.masterEdit}
+                      onSplitMaster={() => requestMasterEdit(job.id, "split")}
+                      onMergeMaster={() => requestMasterEdit(job.id, "merge")}
+                      onMoveMasterClip={(clips) =>
+                        requestMasterEdit(job.id, "clips", clips)
+                      }
+                      mixerSettings={mixerSettings}
+                      onToggleMute={(track) =>
+                        updateMixerSetting(track, {
+                          muted: !mixerSettings[track].muted,
+                        })
+                      }
+                    />
+                  )}
+                </div>
+              )}
               </div>
 
               <div className="space-y-4">
 
-              {!hasMasterAudio && (
+              {!hasMasterAudio && job?.metadata?.audioCodec && (
                 <p className="rounded-lg border border-amber-500/25 bg-amber-950/20 p-3 text-xs text-amber-200">
-                  Cần tạo TTS Master bằng pipeline hiện có trước khi render
-                  final mix. Các track vocals/instrumental có thể nghe riêng ở
-                  phần tách audio phía trên.
+                  TTS Master là tùy chọn. Nếu không có track vocals hoặc
+                  instrumental đang bật, Mix Audio sẽ dùng audio gốc của video.
                 </p>
               )}
               {mixerError && (
@@ -5859,6 +7505,16 @@ export default function VideoDubbingTab() {
               <div className="space-y-4 border-t border-slate-800 pt-4">
                 <div className="grid grid-cols-1 gap-4">
                   <div className="space-y-3 rounded-xl border border-slate-800 bg-slate-950/50 p-4">
+                    <button
+                      type="button"
+                      aria-expanded={!logoTitleCollapsed}
+                      onClick={() => setLogoTitleCollapsed((collapsed) => !collapsed)}
+                      className="flex w-full items-center justify-between text-left text-sm font-semibold text-slate-100"
+                    >
+                      Chèn logo và tiêu đề
+                      <ChevronDown className={`h-4 w-4 transition-transform ${logoTitleCollapsed ? "-rotate-90" : ""}`} />
+                    </button>
+                    {!logoTitleCollapsed && <div className="space-y-3">
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <label className="flex items-center gap-2 text-sm font-semibold text-slate-100">
                         <input
@@ -5872,7 +7528,7 @@ export default function VideoDubbingTab() {
                           }
                           className="accent-sky-400"
                         />
-                        Chèn logo
+                        Bật logo
                       </label>
                       <input
                         ref={logoInputRef}
@@ -5974,6 +7630,129 @@ export default function VideoDubbingTab() {
                     <p className="text-[11px] text-slate-500">
                       Mặc định: trên trái.
                     </p>
+                    <div className="border-t border-slate-800 pt-3">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <label className="flex items-center gap-2 text-sm font-semibold text-slate-100">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(titleOverlay && titleOverlay.enabled !== false)}
+                            disabled={!titleOverlay}
+                            onChange={(event) => {
+                              if (titleOverlayIndex >= 0) {
+                                setTextOverlays((items) => items.map((item, index) =>
+                                  index === titleOverlayIndex
+                                    ? { ...item, enabled: event.target.checked }
+                                    : item,
+                                ));
+                              }
+                            }}
+                            className="accent-violet-400"
+                          />
+                          Bật tiêu đề
+                        </label>
+                        <button
+                          type="button"
+                          onClick={createTitleOverlay}
+                          disabled={!job || isMediaProcessing}
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-violet-500/30 bg-violet-950/20 px-3 py-2 text-xs font-semibold text-violet-100 hover:bg-violet-950/40 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          <Plus className="h-3.5 w-3.5" />
+                          {titleOverlay ? "Chỉnh tiêu đề" : "Tạo Tiêu Đề"}
+                        </button>
+                      </div>
+                      <p className="mt-2 text-[11px] text-slate-500">
+                        Tiêu đề luôn hiển thị từ đầu đến hết video. Kéo tiêu đề trực tiếp trên preview để đặt cạnh logo.
+                      </p>
+                    </div>
+                    {titleOverlay && selectedTextOverlay === titleOverlayIndex && (
+                      <div className="grid gap-3 rounded-lg border border-violet-500/20 bg-violet-950/10 p-3 sm:grid-cols-2">
+                        <label className="space-y-1 text-[10px] text-slate-400 sm:col-span-2">
+                          Nội dung tiêu đề
+                          <textarea
+                            value={titleOverlay.text}
+                            onChange={(event) => updateSelectedTextOverlay({ text: event.target.value })}
+                            rows={2}
+                            className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-white"
+                          />
+                        </label>
+                        <div className="sm:col-span-2">
+                          <TextStyleControls
+                            value={{
+                              fontFamily: titleOverlay.fontFamily,
+                              fontSize: titleOverlay.fontSize,
+                              bold: titleOverlay.bold,
+                              underline: titleOverlay.underline ?? false,
+                              italic: titleOverlay.italic,
+                              textCase: titleOverlay.textCase ?? "none",
+                              color: titleOverlay.color,
+                              outlineEnabled: titleOverlay.outlineEnabled ?? false,
+                              outlineColor: titleOverlay.outlineColor ?? "#000000",
+                              outlineWidthPx: titleOverlay.outlineWidthPx ?? 2,
+                              characterSpacingPx: titleOverlay.characterSpacingPx ?? 0,
+                              lineSpacingPx: titleOverlay.lineSpacingPx ?? 0,
+                            }}
+                            onChange={updateSelectedTextOverlay}
+                            fontOptions={subtitleFontOptions}
+                          />
+                        </div>
+                        <label className="space-y-1 text-[10px] text-slate-400">
+                          Vị trí neo
+                          <select
+                            value={titleOverlay.position}
+                            onChange={(event) => updateSelectedTextOverlay({
+                              position: event.target.value as VideoDubbingOverlayPosition,
+                              xPercent: undefined,
+                              yPercent: undefined,
+                            })}
+                            className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-white"
+                          >
+                            {OVERLAY_POSITION_OPTIONS.map((option) => (
+                              <option key={option.value} value={option.value}>{option.label}</option>
+                            ))}
+                          </select>
+                        </label>
+                        {(titleOverlay.xPercent !== undefined || titleOverlay.yPercent !== undefined) && (
+                          <button
+                            type="button"
+                            onClick={() => updateSelectedTextOverlay({ xPercent: undefined, yPercent: undefined })}
+                            className="self-end rounded-md border border-violet-500/30 px-2 py-1.5 text-xs text-violet-200"
+                          >
+                            Đặt lại vị trí neo
+                          </button>
+                        )}
+                        <label className="inline-flex items-center gap-2 text-xs text-slate-300">
+                          <input
+                            type="checkbox"
+                            checked={titleOverlay.backgroundTransparent}
+                            onChange={(event) => updateSelectedTextOverlay({ backgroundTransparent: event.target.checked })}
+                            className="accent-violet-400"
+                          />
+                          Nền trong suốt
+                        </label>
+                        {!titleOverlay.backgroundTransparent && (
+                          <label className="space-y-1 text-[10px] text-slate-400">
+                            Màu nền
+                            <input
+                              type="color"
+                              value={titleOverlay.backgroundColor}
+                              onChange={(event) => updateSelectedTextOverlay({ backgroundColor: event.target.value })}
+                              className="h-8 w-full rounded-md border border-slate-700 bg-slate-950"
+                            />
+                          </label>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setTextOverlays((items) => items.filter((_, index) => index !== titleOverlayIndex));
+                            setSelectedTextOverlay(null);
+                          }}
+                          className="inline-flex items-center justify-center gap-1 justify-self-start rounded-md border border-rose-500/30 px-2 py-1 text-xs text-rose-200"
+                        >
+                          <Trash2 className="h-3 w-3" />Xóa tiêu đề
+                        </button>
+                      </div>
+                    )}
+                    </div>}
                   </div>
 
                   <div className="space-y-3 rounded-xl border border-slate-800 bg-slate-950/50 p-4">

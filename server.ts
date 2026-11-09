@@ -11,6 +11,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import fs from "fs";
 import os from "os";
+import { randomUUID } from "crypto";
 import { Transform } from "stream";
 import { pipeline } from "stream/promises";
 import { exec, execSync, spawn, spawnSync } from "child_process";
@@ -65,11 +66,24 @@ import {
   deleteWhisperModel,
   resetCurrentJob,
 } from "./systemToolsManager";
+import {
+  cancelSubtitleTranslationDownload,
+  deleteSubtitleTranslationModel,
+  getSubtitleTranslationState,
+  getSubtitleTranslationPrompt,
+  saveSubtitleTranslationConfig,
+  startSubtitleTranslationDownload,
+  startSubtitleTranslationEngine,
+  stopSubtitleTranslationEngine,
+  translateSubtitleCues,
+} from "./subtitleTranslationManager";
 import { VideoDubbingManager } from "./videoDubbingManager";
 import { VideoDubbingProjects } from "./videoDubbingProjects";
 import { createVideoDubbingRouter } from "./videoDubbingRoutes";
 import { JoinAudioManager } from "./joinAudioManager";
 import { createJoinAudioRouter } from "./joinAudioRoutes";
+import { JoinSplitVideoManager } from "./joinSplitVideoManager";
+import { createJoinSplitVideoRouter } from "./joinSplitVideoRoutes";
 import { VideoDubbingPipelineCoordinator } from "./videoDubbingPipeline";
 import { VideoDubbingMediaCoordinator } from "./videoDubbingMedia";
 import { VideoDubbingSeparationCoordinator } from "./videoDubbingSeparation";
@@ -77,8 +91,18 @@ import {
   VideoDubbingMasterCoordinator,
   VideoDubbingMasterRequest,
 } from "./videoDubbingMaster";
+import { VideoDubbingMasterEditCoordinator } from "./videoDubbingMasterEdit";
 import { normalizeVieNeuAudioForTimeline } from "./videoDubbingAudio";
 import { vieneuWorkerPool } from "./vieneuWorkerPool";
+import {
+  cancelSubtitleOcrInstall,
+  cancelSubtitleOcrJob,
+  createSubtitleOcrJob,
+  getSubtitleOcrJob,
+  getSubtitleOcrMaxUploadBytes,
+  getSubtitleOcrInstallStatus,
+  startSubtitleOcrInstall,
+} from "./subtitleOcrManager";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -291,6 +315,12 @@ const joinAudioManager = new JoinAudioManager({
   storageDirectory: path.resolve(__dirname, "join_audio_storage"),
 });
 app.use("/api/join-audio", createJoinAudioRouter(joinAudioManager));
+const joinSplitVideoManager = new JoinSplitVideoManager({
+  ffmpegPath: resolveFfmpegPath(),
+  ffprobePath: resolveFfprobePath(),
+  storageDirectory: path.resolve(__dirname, "join_split_video_storage"),
+});
+app.use("/api/join-split-video", createJoinSplitVideoRouter(joinSplitVideoManager));
 
 const videoDubbingManager = new VideoDubbingManager({
   storageDirectory: VIDEO_DUBBING_DIR,
@@ -387,6 +417,9 @@ const videoDubbingPipelineCoordinator = new VideoDubbingPipelineCoordinator(
   videoDubbingSeparationCoordinator,
   videoDubbingMediaCoordinator,
 );
+const videoDubbingMasterEditCoordinator = new VideoDubbingMasterEditCoordinator(
+  videoDubbingManager,
+);
 app.use(
   "/api/video-dubbing",
   createVideoDubbingRouter(
@@ -396,6 +429,7 @@ app.use(
     videoDubbingSeparationCoordinator,
     videoDubbingPipelineCoordinator,
     videoDubbingProjects,
+    videoDubbingMasterEditCoordinator,
   ),
 );
 
@@ -3676,7 +3710,7 @@ app.post("/api/dataset/prepare-joined-audio", (req: Request, res: Response) => {
     });
   }
 
-  const minDuration = Number(req.body?.minDuration ?? 1);
+  const minDuration = Number(req.body?.minDuration ?? 3);
   const maxDuration = Number(req.body?.maxDuration ?? 12);
   const concurrency = Number(req.body?.concurrency ?? 2);
   if (
@@ -3768,7 +3802,7 @@ app.post("/api/dataset/prepare-upload", async (req: Request, res: Response) => {
       originalFilename,
       queryString("voiceName", "giong_moi"),
       queryString("whisperModel", "small"),
-      Number(queryString("minDuration", "1")) || 1,
+      Number(queryString("minDuration", "3")) || 3,
       Number(queryString("maxDuration", "12")) || 12,
       uploadTempDir,
       targetDatasetId || undefined,
@@ -3859,7 +3893,7 @@ app.post("/api/dataset/prepare-session/:sessionId/start", (req: Request, res: Re
   const {
     voiceName = "giong_moi",
     whisperModel = "small",
-    minDuration = 1.0,
+    minDuration = 3.0,
     maxDuration = 12.0,
     concurrency = 2,
     extendDatasetId,
@@ -3874,7 +3908,7 @@ app.post("/api/dataset/prepare-session/:sessionId/start", (req: Request, res: Re
     originalFilenames,
     String(voiceName),
     String(whisperModel),
-    Number(minDuration) || 1.0,
+    Number(minDuration) || 3.0,
     Number(maxDuration) || 12.0,
     session.tempDir,
     extendDatasetId || targetDatasetId || undefined,
@@ -3892,7 +3926,7 @@ app.post("/api/dataset/prepare", async (req: Request, res: Response) => {
       originalFilename = "audio.wav",
       voiceName = "giong_moi",
       whisperModel = "small",
-      minDuration = 1.0,
+      minDuration = 3.0,
       maxDuration = 12.0,
       concurrency = 2,
       extendDatasetId,
@@ -3917,7 +3951,7 @@ app.post("/api/dataset/prepare", async (req: Request, res: Response) => {
       originalFilename,
       voiceName,
       whisperModel,
-      Number(minDuration) || 1.0,
+      Number(minDuration) || 3.0,
       Number(maxDuration) || 12.0,
       undefined,
       extendDatasetId || targetDatasetId || undefined,
@@ -4298,6 +4332,208 @@ app.get("/api/bgm/download/:filename", (req: Request, res: Response) => {
 });
 
 // BGM Model Management (On-Demand Download, RAM Monitoring & Storage)
+app.get("/api/subtitle-ocr/install/status", (_req: Request, res: Response) => {
+  res.json({ success: true, ...getSubtitleOcrInstallStatus() });
+});
+
+app.post("/api/subtitle-ocr/install", async (_req: Request, res: Response) => {
+  try {
+    res.json(await startSubtitleOcrInstall());
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post("/api/subtitle-ocr/install/cancel", (_req: Request, res: Response) => {
+  res.json({ success: cancelSubtitleOcrInstall(), status: getSubtitleOcrInstallStatus() });
+});
+
+const isLocalSubtitleTranslationRequest = (req: Request, res: Response, next: () => void) => {
+  const address = req.socket.remoteAddress?.replace(/^::ffff:/, "");
+  if (address !== "127.0.0.1" && address !== "::1") {
+    return res.status(403).json({ success: false, error: "Tính năng dịch cục bộ chỉ cho phép truy cập từ máy này." });
+  }
+  next();
+};
+
+app.get("/api/subtitle-translation/state", isLocalSubtitleTranslationRequest, (_req: Request, res: Response) => {
+  res.json({ success: true, state: getSubtitleTranslationState() });
+});
+
+app.put("/api/subtitle-translation/config", isLocalSubtitleTranslationRequest, (req: Request, res: Response) => {
+  try {
+    res.json({ success: true, config: saveSubtitleTranslationConfig(req.body) });
+  } catch (error) {
+    res.status(400).json({ success: false, error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+app.post("/api/subtitle-translation/download", isLocalSubtitleTranslationRequest, (req: Request, res: Response) => {
+  try {
+    res.json(startSubtitleTranslationDownload(req.body?.target));
+  } catch (error) {
+    res.status(400).json({ success: false, error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+app.post("/api/subtitle-translation/download/cancel", isLocalSubtitleTranslationRequest, (_req: Request, res: Response) => {
+  res.json({ success: true, state: cancelSubtitleTranslationDownload() });
+});
+
+app.delete("/api/subtitle-translation/models/:id", isLocalSubtitleTranslationRequest, (req: Request, res: Response) => {
+  try {
+    res.json({ success: true, state: deleteSubtitleTranslationModel(req.params.id) });
+  } catch (error) {
+    res.status(400).json({ success: false, error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+app.post("/api/subtitle-translation/engine/start", isLocalSubtitleTranslationRequest, async (_req: Request, res: Response) => {
+  try {
+    res.json({ success: true, state: await startSubtitleTranslationEngine() });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error instanceof Error ? error.message : String(error), state: getSubtitleTranslationState() });
+  }
+});
+
+app.post("/api/subtitle-translation/engine/stop", isLocalSubtitleTranslationRequest, async (_req: Request, res: Response) => {
+  try {
+    res.json({ success: true, state: await stopSubtitleTranslationEngine() });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+app.get("/api/subtitle-translation/prompt", isLocalSubtitleTranslationRequest, (_req: Request, res: Response) => {
+  res.json({ success: true, prompt: getSubtitleTranslationPrompt() });
+});
+
+app.post("/api/subtitle-translation/translate", isLocalSubtitleTranslationRequest, async (req: Request, res: Response) => {
+  const cancellation = new AbortController();
+  res.on("close", () => {
+    if (!res.writableEnded) cancellation.abort();
+  });
+  res.status(200).set({
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+  res.flushHeaders();
+  const sendEvent = (event: object) => {
+    if (!cancellation.signal.aborted && !res.destroyed) res.write(`data: ${JSON.stringify(event)}\n\n`);
+  };
+  try {
+    const translations = await translateSubtitleCues(
+      req.body?.cues,
+      req.body?.systemPrompt,
+      cancellation.signal,
+      (translation) => sendEvent({ type: "translation", ...translation }),
+    );
+    sendEvent({ type: "complete", count: translations.length });
+    res.end();
+  } catch (error) {
+    if (cancellation.signal.aborted) return;
+    sendEvent({ type: "error", error: error instanceof Error ? error.message : String(error) });
+    res.end();
+  }
+});
+
+app.post("/api/subtitle-ocr/jobs", async (req: Request, res: Response) => {
+  const declaredBytes = Number(req.headers["content-length"]);
+  const maxBytes = getSubtitleOcrMaxUploadBytes();
+  if (Number.isFinite(declaredBytes) && declaredBytes > maxBytes) {
+    return res.status(413).json({ error: "Video vượt quá giới hạn tải lên 4 GB." });
+  }
+  const queryText = (key: string, fallback = "") => typeof req.query[key] === "string" ? String(req.query[key]).trim() : fallback;
+  const parseTime = (input: string): number | null => {
+    if (!input) return null;
+    const parts = input.split(":").map(Number);
+    if (parts.some((part) => !Number.isFinite(part) || part < 0) || parts.length > 3) return Number.NaN;
+    return parts.length === 3 ? parts[0] * 3600 + parts[1] * 60 + parts[2] : parts[0] * 60 + (parts[1] || 0);
+  };
+  const timeStart = parseTime(queryText("timeStart", "0:00")) ?? 0;
+  const parsedEnd = parseTime(queryText("timeEnd"));
+  const timeEnd = parsedEnd;
+  if (!Number.isFinite(timeStart) || (timeEnd !== null && (!Number.isFinite(timeEnd) || timeEnd <= timeStart))) {
+    return res.status(400).json({ error: "Thời gian bắt đầu/kết thúc không hợp lệ." });
+  }
+  const confidenceValue = Number(queryText("confidence", "75"));
+  const confidence = Math.max(0, Math.min(100, Number.isFinite(confidenceValue) ? confidenceValue : 75));
+  const zone = (key: string, fallback: string) => ["lower", "center", "upper"].includes(queryText(key)) ? queryText(key) as "lower" | "center" | "upper" : fallback as "lower" | "center" | "upper";
+  const alignment = (key: string) => {
+    const valid = ["bottom-left", "bottom-center", "bottom-right", "middle-left", "middle-center", "middle-right", "top-left", "top-center", "top-right"];
+    const value = queryText(key, "bottom-center");
+    return valid.includes(value) ? value : "bottom-center";
+  };
+  const numberOption = (key: string, fallback: number, min: number, max: number) => {
+    const value = Number(queryText(key));
+    return Math.max(min, Math.min(max, Number.isFinite(value) ? value : fallback));
+  };
+  const optionalThreshold = queryText("brightnessThreshold") ? numberOption("brightnessThreshold", 0, 0, 255) : null;
+  const optionalCoordinate = (key: string) => queryText(key) ? numberOption(key, 0, 0, 100000) : null;
+  const options = {
+    timeStart,
+    timeEnd,
+    confidence,
+    similarity: numberOption("similarity", 80, 0, 100),
+    maxMergeGap: numberOption("maxMergeGap", 0.6, 0, 30),
+    brightnessThreshold: optionalThreshold,
+    ssimThreshold: numberOption("ssimThreshold", 92, 0, 100),
+    maxImageWidth: numberOption("maxImageWidth", 720, 0, 7680),
+    framesToSkip: numberOption("framesToSkip", 1, 0, 300),
+    minimumDuration: numberOption("minimumDuration", 0.2, 0, 60),
+    useFullFrame: queryText("useFullFrame") === "true",
+    useDualZone: queryText("useDualZone") === "true",
+    zone1: zone("zone1", "lower"),
+    zone2: zone("zone2", "center"),
+    cropX: optionalCoordinate("cropX"),
+    cropY: optionalCoordinate("cropY"),
+    cropWidth: optionalCoordinate("cropWidth"),
+    cropHeight: optionalCoordinate("cropHeight"),
+    alignment1: alignment("alignment1"),
+    alignment2: alignment("alignment2"),
+    angleClassification: queryText("angleClassification") === "true",
+    normalizeTraditional: queryText("normalizeTraditional") === "true",
+    cpuThreads: numberOption("cpuThreads", 8, 1, 32),
+  };
+  const jobId = randomUUID();
+  const uploadDir = fs.mkdtempSync(path.join(os.tmpdir(), "subtitle-ocr-job-"));
+  const requestedName = typeof req.query.filename === "string" ? path.basename(req.query.filename) : "video.mp4";
+  const extension = path.extname(requestedName).replace(/[^.a-zA-Z0-9]/g, "").slice(0, 12) || ".video";
+  const videoPath = path.join(uploadDir, `source${extension}`);
+  let receivedBytes = 0;
+  const sizeLimiter = new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      receivedBytes += chunk.length;
+      if (receivedBytes > maxBytes) callback(new Error("UPLOAD_TOO_LARGE"));
+      else callback(null, chunk);
+    },
+  });
+  try {
+    await pipeline(req, sizeLimiter, fs.createWriteStream(videoPath, { flags: "wx" }));
+    if (receivedBytes < 1024) throw new Error("Video tải lên không hợp lệ hoặc quá nhỏ.");
+    const job = createSubtitleOcrJob(jobId, videoPath, options);
+    res.status(202).json({ success: true, job });
+  } catch (err: any) {
+    try { fs.rmSync(uploadDir, { recursive: true, force: true }); } catch { /* best effort */ }
+    const tooLarge = err.message === "UPLOAD_TOO_LARGE";
+    res.status(tooLarge ? 413 : 400).json({ error: tooLarge ? "Video vượt quá giới hạn tải lên 4 GB." : err.message });
+  }
+});
+
+app.get("/api/subtitle-ocr/jobs/:jobId", (req: Request, res: Response) => {
+  const job = getSubtitleOcrJob(req.params.jobId);
+  if (!job) return res.status(404).json({ error: "Không tìm thấy tác vụ OCR." });
+  res.json({ success: true, job });
+});
+
+app.post("/api/subtitle-ocr/jobs/:jobId/cancel", (req: Request, res: Response) => {
+  const job = getSubtitleOcrJob(req.params.jobId);
+  if (!job) return res.status(404).json({ error: "Không tìm thấy tác vụ OCR." });
+  res.json({ success: cancelSubtitleOcrJob(req.params.jobId), job: getSubtitleOcrJob(req.params.jobId) });
+});
+
 app.get("/api/bgm/models/status", (_req: Request, res: Response) => {
   try {
     const status = getBgmSystemStatus();

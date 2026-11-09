@@ -65,6 +65,8 @@ interface SystemJob {
 interface SystemToolsStatus {
   isWhisperInstalled: boolean;
   whisperCliPath: string | null;
+  whisperBackend?: "vulkan" | "cpu" | null;
+  whisperVulkanBuildReady?: boolean;
   modelsDir: string;
   models: SystemModelItem[];
   activeJob: SystemJob;
@@ -113,6 +115,12 @@ export interface DatasetChunkStatus {
   status: "pending" | "processing" | "completed" | "failed";
   progressPercent: number;
   clipsFound?: number;
+  segmentsRecognized?: number;
+  segmentsTooLong?: number;
+  segmentsTooShort?: number;
+  segmentsRejected?: number;
+  segmentsUnsplittable?: number;
+  diagnostic?: string;
   error?: string;
 }
 
@@ -149,7 +157,7 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
   const [extendDatasetId, setExtendDatasetId] = useState<string>("");
   const [datasetVoiceName, setDatasetVoiceName] = useState<string>("giong_moi");
   const [whisperModel, setWhisperModel] = useState<string>("small");
-  const [minDuration, setMinDuration] = useState<number>(1.0);
+  const [minDuration, setMinDuration] = useState<number>(3.0);
   const [maxDuration, setMaxDuration] = useState<number>(12.0);
   const [, setAvailableModels] = useState<WhisperModelItem[]>([]);
   const [isProcessingDataset, setIsProcessingDataset] = useState<boolean>(false);
@@ -1507,7 +1515,7 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
                           min="1"
                           max="30"
                           value={maxDuration}
-                          onChange={(e) => setMaxDuration(parseFloat(e.target.value) || 12.0)}
+                          onChange={(e) => setMaxDuration(parseFloat(e.target.value) || 10.0)}
                           className="w-full pl-2.5 pr-6 py-1.5 text-xs rounded-lg bg-slate-900 border border-slate-700 text-white font-mono"
                         />
                         <span className="absolute right-2 top-1.5 text-[10px] text-slate-500">s</span>
@@ -1834,6 +1842,11 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
                                   )}
                                 </span>
                               </div>
+                              {isCompleted && chunk.diagnostic && (
+                                <p className="mb-2 text-[10px] leading-relaxed text-amber-300" title={chunk.diagnostic}>
+                                  {chunk.diagnostic}
+                                </p>
+                              )}
 
                               {/* Mini Chunk Progress Bar */}
                               <div className="w-full h-1.5 rounded-full bg-slate-950 overflow-hidden">
@@ -2249,9 +2262,16 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
                   </h4>
                   <p className="text-xs text-slate-400 mt-0.5">
                     {systemStatus?.isWhisperInstalled
-                      ? `Đường dẫn: ${systemStatus.whisperCliPath}`
+                      ? `Đường dẫn: ${systemStatus.whisperCliPath} · Backend: ${systemStatus.whisperBackend === "vulkan" ? "Vulkan GPU" : "CPU"}`
                       : "Chưa có file thực thi. Cần khởi tạo để cắt lát âm thanh và phiên âm offline."}
                   </p>
+                  {systemStatus?.whisperBackend === "cpu" && (
+                    <p className="text-[11px] text-amber-300 mt-1">
+                      {systemStatus.whisperVulkanBuildReady
+                        ? "Có thể build backend Vulkan; dùng nút bên phải để cài bản GPU, bản CPU hiện tại vẫn được giữ dự phòng."
+                        : "Muốn build Vulkan cho GPU cần CMake, Vulkan SDK và bộ công cụ C++ của Visual Studio."}
+                    </p>
+                  )}
                 </div>
               </div>
 
@@ -2264,7 +2284,9 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
                 <RefreshCw className={`w-3.5 h-3.5 ${isOperatingTools ? "animate-spin" : ""}`} />
                 <span>
                   {systemStatus?.isWhisperInstalled
-                    ? "Biên dịch lại Whisper.cpp"
+                    ? systemStatus.whisperBackend === "cpu" && systemStatus.whisperVulkanBuildReady
+                      ? "Build Whisper Vulkan (GPU)"
+                      : "Biên dịch lại Whisper.cpp"
                     : "Khởi tạo Whisper.cpp (1-Click)"}
                 </span>
               </button>

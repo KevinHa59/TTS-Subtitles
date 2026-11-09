@@ -18,12 +18,13 @@ import {
   VideoDubbingAutoPipelineState,
   VideoDubbingOverlaySettings,
   VideoDubbingOverlayPosition,
+  VideoDubbingMasterEditState,
+  VideoDubbingMasterEditSegment,
 } from "./src/types/videoDubbing";
 
 const DEFAULT_MAX_UPLOAD_BYTES = 4 * 1024 * 1024 * 1024;
 const PROBE_TIMEOUT_MS = 30_000;
 const PROBE_OUTPUT_LIMIT_BYTES = 2 * 1024 * 1024;
-const MAX_JOBS = 10;
 const SUPPORTED_EXTENSIONS = new Set([".mp4", ".mkv", ".mov", ".avi", ".webm"]);
 const JOB_ID_PATTERN = /^vd_[0-9a-f]{32}$/;
 const JOB_STATUSES = new Set([
@@ -201,7 +202,54 @@ function isOverlaySettings(
     ) &&
     (settings.textOverlays === undefined ||
       (Array.isArray(settings.textOverlays) && settings.textOverlays.length <= 1_000 &&
-        settings.textOverlays.every((cue) => cue && Number.isFinite(cue.startTime) && Number.isFinite(cue.endTime) && cue.startTime >= 0 && cue.endTime > cue.startTime && typeof cue.text === "string" && typeof cue.fontSize === "number" && typeof cue.fontFamily === "string" && typeof cue.color === "string" && typeof cue.bold === "boolean" && typeof cue.italic === "boolean" && (cue.underline === undefined || typeof cue.underline === "boolean") && (cue.textCase === undefined || ["none", "uppercase", "lowercase", "capitalize"].includes(cue.textCase)) && (cue.outlineEnabled === undefined || typeof cue.outlineEnabled === "boolean") && (cue.outlineColor === undefined || (typeof cue.outlineColor === "string" && /^#[0-9a-f]{6}$/i.test(cue.outlineColor))) && (cue.outlineWidthPx === undefined || (Number.isFinite(cue.outlineWidthPx) && cue.outlineWidthPx >= 0 && cue.outlineWidthPx <= 8)) && (cue.characterSpacingPx === undefined || (Number.isFinite(cue.characterSpacingPx) && cue.characterSpacingPx >= 0 && cue.characterSpacingPx <= 40)) && (cue.lineSpacingPx === undefined || (Number.isFinite(cue.lineSpacingPx) && cue.lineSpacingPx >= 0 && cue.lineSpacingPx <= 80)) && typeof cue.backgroundColor === "string" && typeof cue.backgroundTransparent === "boolean" && Number.isFinite(cue.paddingPx) && (cue.xPercent === undefined || (Number.isFinite(cue.xPercent) && cue.xPercent >= 0 && cue.xPercent <= 100)) && (cue.yPercent === undefined || (Number.isFinite(cue.yPercent) && cue.yPercent >= 0 && cue.yPercent <= 100)) && OVERLAY_POSITIONS.has(cue.position))))
+        settings.textOverlays.every((cue) => cue && Number.isFinite(cue.startTime) && Number.isFinite(cue.endTime) && cue.startTime >= 0 && cue.endTime > cue.startTime && typeof cue.text === "string" && typeof cue.fontSize === "number" && typeof cue.fontFamily === "string" && typeof cue.color === "string" && typeof cue.bold === "boolean" && typeof         cue.italic === "boolean" && (cue.extendToVideoEnd === undefined || typeof cue.extendToVideoEnd === "boolean") && (cue.underline === undefined || typeof cue.underline === "boolean") && (cue.textAlign === undefined || ["left", "center", "right"].includes(cue.textAlign)) && (cue.textCase === undefined || ["none", "uppercase", "lowercase", "capitalize"].includes(cue.textCase)) && (cue.outlineEnabled === undefined || typeof cue.outlineEnabled === "boolean") && (cue.outlineColor === undefined || (typeof cue.outlineColor === "string" && /^#[0-9a-f]{6}$/i.test(cue.outlineColor))) && (cue.outlineWidthPx === undefined || (Number.isFinite(cue.outlineWidthPx) && cue.outlineWidthPx >= 0 && cue.outlineWidthPx <= 8)) && (cue.characterSpacingPx === undefined || (Number.isFinite(cue.characterSpacingPx) && cue.characterSpacingPx >= 0 && cue.characterSpacingPx <= 40)) && (cue.lineSpacingPx === undefined || (Number.isFinite(cue.lineSpacingPx) && cue.lineSpacingPx >= 0 && cue.lineSpacingPx <= 80)) && typeof cue.backgroundColor === "string" && typeof cue.backgroundTransparent === "boolean" && Number.isFinite(cue.paddingPx) && (cue.xPercent === undefined || (Number.isFinite(cue.xPercent) && cue.xPercent >= 0 && cue.xPercent <= 100)) && (cue.yPercent === undefined || (Number.isFinite(cue.yPercent) && cue.yPercent >= 0 && cue.yPercent <= 100)) && OVERLAY_POSITIONS.has(cue.position))))
+  );
+}
+
+function isMasterEditState(input: unknown): input is VideoDubbingMasterEditState {
+  if (!input || typeof input !== "object") return false;
+  const state = input as Record<string, unknown>;
+  return (
+    ["ready", "merging", "failed"].includes(String(state.status)) &&
+    typeof state.durationSeconds === "number" &&
+    Number.isFinite(state.durationSeconds) &&
+    state.durationSeconds > 0 &&
+    Array.isArray(state.clips) &&
+    state.clips.every((clip) => {
+      if (!clip || typeof clip !== "object") return false;
+      const item = clip as Record<string, unknown>;
+      return (
+        typeof item.id === "string" &&
+        /^[a-f0-9]{24}$/.test(item.id) &&
+        item.fileName === `${item.id}.wav` &&
+        typeof item.startTime === "number" &&
+        Number.isFinite(item.startTime) &&
+        item.startTime >= 0 &&
+        typeof item.durationSeconds === "number" &&
+        Number.isFinite(item.durationSeconds) &&
+        item.durationSeconds > 0 &&
+        typeof item.text === "string"
+      );
+    })
+  );
+}
+
+function isMasterEditSegments(input: unknown): input is VideoDubbingMasterEditSegment[] {
+  return (
+    Array.isArray(input) &&
+    input.every((segment) => {
+      if (!segment || typeof segment !== "object") return false;
+      const item = segment as Record<string, unknown>;
+      return (
+        typeof item.startTime === "number" &&
+        Number.isFinite(item.startTime) &&
+        item.startTime >= 0 &&
+        typeof item.durationSeconds === "number" &&
+        Number.isFinite(item.durationSeconds) &&
+        item.durationSeconds > 0 &&
+        typeof item.text === "string"
+      );
+    })
   );
 }
 
@@ -314,11 +362,6 @@ export class VideoDubbingManager {
   }
 
   createJob(fileName: string, sizeBytes: number, projectJobsDirectory?: string): VideoDubbingJob {
-    if (this.jobs.size >= MAX_JOBS) {
-      throw new Error(
-        "Đã đạt giới hạn 10 job Video Dubbing. Hãy bỏ bớt job đã kiểm tra.",
-      );
-    }
     if (typeof fileName !== "string") {
       throw new Error("Thiếu tên tệp video.");
     }
@@ -401,6 +444,15 @@ export class VideoDubbingManager {
           masterGeneration: job.state.masterGeneration
             ? { ...job.state.masterGeneration }
             : undefined,
+          masterEdit: job.state.masterEdit
+            ? {
+                ...job.state.masterEdit,
+                clips: job.state.masterEdit.clips.map((clip) => ({ ...clip })),
+              }
+            : undefined,
+          masterEditSegments: job.state.masterEditSegments?.map((segment) => ({
+            ...segment,
+          })),
           audioMix: job.state.audioMix ? { ...job.state.audioMix } : undefined,
           videoExport: job.state.videoExport
             ? { ...job.state.videoExport }
@@ -884,6 +936,7 @@ export class VideoDubbingManager {
   ): void {
     const job = this.findJob(jobId);
     if (!job) throw new Error("Không tìm thấy job Video Dubbing.");
+    const previousAudioVersion = job.state.masterGeneration?.audioVersion;
     if (
       generation.status === "generating" &&
       job.state.finalMix?.renderedSettings
@@ -895,7 +948,10 @@ export class VideoDubbingManager {
       job.state.autoPipeline.artifacts.finalMix = undefined;
       job.state.autoPipeline.artifacts.export = undefined;
     }
-    job.state.masterGeneration = { ...generation };
+    job.state.masterGeneration = {
+      ...generation,
+      audioVersion: previousAudioVersion,
+    };
     job.state.updatedAt = Date.now();
     this.persistJob(job);
   }
@@ -904,6 +960,7 @@ export class VideoDubbingManager {
     jobId: string,
     temporaryPath: string,
     durationSeconds: number,
+    editSegments?: VideoDubbingMasterEditSegment[],
   ): VideoDubbingMasterGeneration {
     const job = this.findJob(jobId);
     if (!job) throw new Error("Không tìm thấy job Video Dubbing.");
@@ -930,6 +987,17 @@ export class VideoDubbingManager {
       throw error;
     }
 
+    job.state.masterEdit = undefined;
+    job.state.masterEditSegments = editSegments?.map((segment) => ({ ...segment }));
+    try {
+      fs.rmSync(path.join(directory, "tts-master-clips"), {
+        recursive: true,
+        force: true,
+      });
+    } catch (error) {
+      console.error("[VideoDubbing] Không thể dọn clip TTS đã gộp:", error);
+    }
+
     const generation: VideoDubbingMasterGeneration = {
       status: "completed",
       progressPercent: 100,
@@ -937,6 +1005,10 @@ export class VideoDubbingManager {
       totalSentences: job.state.masterGeneration?.totalSentences || 0,
       durationSeconds,
       sizeBytes: fs.statSync(masterPath).size,
+      audioVersion: Math.max(
+        Date.now(),
+        (job.state.masterGeneration?.audioVersion || 0) + 1,
+      ),
     };
     if (job.state.finalMix?.renderedSettings) {
       this.invalidateFinalMix(job, "TTS Master đã thay đổi.");
@@ -950,6 +1022,26 @@ export class VideoDubbingManager {
     job.state.updatedAt = Date.now();
     this.persistJob(job);
     return { ...generation };
+  }
+
+  setMasterEditState(
+    jobId: string,
+    state: VideoDubbingMasterEditState | undefined,
+  ): void {
+    const job = this.findJob(jobId);
+    if (!job) throw new Error("Không tìm thấy job Video Dubbing.");
+    job.state.masterEdit = state
+      ? {
+          ...state,
+          updatedAt: Math.max(
+            state.updatedAt,
+            (job.state.masterEdit?.updatedAt || 0) + 1,
+          ),
+          clips: state.clips.map((clip) => ({ ...clip })),
+        }
+      : undefined;
+    job.state.updatedAt = Date.now();
+    this.persistJob(job);
   }
 
   async receiveUpload(
@@ -1102,6 +1194,16 @@ export class VideoDubbingManager {
               ? parsed.updatedAt
               : parsed.createdAt,
           } as VideoDubbingJob;
+          if (!isMasterEditState(parsed.masterEdit)) {
+            state.masterEdit = undefined;
+          } else {
+            state.masterEdit = parsed.masterEdit;
+          }
+          if (!isMasterEditSegments(parsed.masterEditSegments)) {
+            state.masterEditSegments = undefined;
+          } else {
+            state.masterEditSegments = parsed.masterEditSegments;
+          }
           if (!isOverlaySettings(parsed.overlaySettings)) {
             state.overlaySettings = undefined;
           } else {
@@ -1251,6 +1353,29 @@ export class VideoDubbingManager {
           progressPercent: undefined,
           error: "Tách audio bị gián đoạn khi máy chủ dừng.",
         };
+      }
+      if (state.masterEdit) {
+        const clipDirectory = path.join(directory, "tts-master-clips");
+        const clipsExist =
+          state.masterEditSegments?.length &&
+          state.masterEdit.clips.every((clip) =>
+            fs.existsSync(path.join(clipDirectory, clip.fileName)),
+          );
+        if (!clipsExist) {
+          state.masterEdit = undefined;
+          try {
+            fs.rmSync(clipDirectory, { recursive: true, force: true });
+          } catch (error) {
+            console.error("[VideoDubbing] Không thể dọn clip chỉnh sửa không hợp lệ:", error);
+          }
+        } else if (state.masterEdit.status === "merging") {
+          state.masterEdit = {
+            ...state.masterEdit,
+            status: "failed",
+            error: "Gộp TTS Master bị gián đoạn khi máy chủ dừng.",
+            updatedAt: Date.now(),
+          };
+        }
       }
       const job: InternalJob = { state, directory, videoPath };
       this.jobs.set(jobId, job);
@@ -1775,11 +1900,12 @@ export class VideoDubbingManager {
     try {
       const master = input.master as unknown as Record<string, unknown>;
       const options = master.options as Record<string, unknown>;
+      const ttsMasterEnabled = input.ttsMasterEnabled !== false;
       if (
         typeof master.model !== "string" ||
-        !master.model.trim() ||
+        (ttsMasterEnabled && !master.model.trim()) ||
         !Array.isArray(master.items) ||
-        master.items.length === 0 ||
+        (ttsMasterEnabled && master.items.length === 0) ||
         !options ||
         typeof options !== "object" ||
         typeof options.minSpeed !== "number" ||
@@ -1789,6 +1915,8 @@ export class VideoDubbingManager {
         !["balanced", "strict", "natural"].includes(
           String(options.speedPriority),
         ) ||
+        (input.ttsMasterEnabled !== undefined &&
+          typeof input.ttsMasterEnabled !== "boolean") ||
         typeof input.demucsEnabled !== "boolean" ||
         typeof input.originalAudioVolumePercent !== "number" ||
         !Number.isFinite(input.originalAudioVolumePercent) ||
@@ -1813,6 +1941,7 @@ export class VideoDubbingManager {
       });
       return {
         enabled: input.enabled === true,
+        ttsMasterEnabled,
         master: {
           items: items as VideoDubbingAutoPipelineConfig["master"]["items"],
           model: master.model,
@@ -1843,6 +1972,7 @@ export class VideoDubbingManager {
   ): VideoDubbingAutoPipelineConfig {
     return {
       enabled: config.enabled,
+      ttsMasterEnabled: config.ttsMasterEnabled,
       master: {
         ...config.master,
         items: config.master.items.map((item) => ({ ...item })),

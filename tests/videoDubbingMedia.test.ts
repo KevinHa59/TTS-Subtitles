@@ -512,6 +512,29 @@ test("renders a synchronized three-track WAV, persists settings, blocks stale ex
   assert.equal(exportedAudio?.codec_name, "aac");
   assert.ok(Math.abs(Number(exportMetadata.format.duration) - 1.4) < 0.1);
 
+  const exportDirectory = manager.getJobDirectory(job.id);
+  assert.ok(exportDirectory);
+  const numberedExportPath = path.join(exportDirectory, "three-track_merged (1).mp4");
+  fs.renameSync(exportedPath, numberedExportPath);
+  manager.setExportedVideoFileName(job.id, path.basename(numberedExportPath));
+  const previousExportBytes = fs.readFileSync(numberedExportPath);
+
+  const failingExportCoordinator = new VideoDubbingMediaCoordinator(manager, {
+    ffmpegPath: path.join(root, "missing-export-ffmpeg.exe"),
+    ffprobePath: "ffprobe",
+  });
+  failingExportCoordinator.startExport(job.id);
+  await waitForTask(manager, job.id, "videoExport");
+  assert.equal(manager.getJob(job.id)?.videoExport?.status, "failed");
+  assert.deepEqual(fs.readFileSync(numberedExportPath), previousExportBytes);
+
+  coordinator.startExport(job.id);
+  await waitForTask(manager, job.id, "videoExport");
+  assert.equal(manager.getJob(job.id)?.videoExport?.status, "completed");
+  const replacedExportPath = coordinator.getVideoExportPath(job.id);
+  assert.equal(replacedExportPath, path.join(exportDirectory, "three-track_merged.mp4"));
+  assert.equal(fs.existsSync(numberedExportPath), false);
+
   const app = express();
   app.use(
     "/api/video-dubbing",
@@ -548,6 +571,62 @@ test("renders a synchronized three-track WAV, persists settings, blocks stale ex
   });
   assert.equal(manager.getJob(job.id)?.finalMix?.status, "stale");
   assert.throws(() => coordinator.startExport(job.id), /render lại/i);
+});
+
+test("mixes and exports original video audio when no TTS Master or mixer track is enabled", async () => {
+  const root = await createTemporaryDirectory();
+  const fixtureDirectory = path.join(root, "fixtures");
+  fs.mkdirSync(fixtureDirectory);
+  const manager = new VideoDubbingManager({
+    storageDirectory: path.join(root, "jobs"),
+    ffprobePath: "ffprobe",
+  });
+  const coordinator = createCoordinator(manager);
+  const job = await createReadyJob(
+    manager,
+    fixtureDirectory,
+    "without-tts",
+    1.4,
+    true,
+    0.6,
+  );
+  const jobDirectory = manager.getJobDirectory(job.id)!;
+  fs.unlinkSync(path.join(jobDirectory, "tts-master.wav"));
+  manager.setMasterGeneration(job.id, {
+    status: "idle",
+    progressPercent: 0,
+    completedSentences: 0,
+    totalSentences: 0,
+  });
+
+  coordinator.startFinalMix(job.id, {
+    vocals: { volumePercent: 0, muted: false },
+    instrumental: { volumePercent: 0, muted: false },
+    ttsMaster: { volumePercent: 100, muted: false },
+  });
+  await waitForTask(manager, job.id, "finalMix");
+  while (coordinator.isBusy(job.id)) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.equal(manager.getJob(job.id)?.finalMix?.status, "completed");
+  assert.deepEqual(
+    manager.getJob(job.id)?.finalMix?.includedTracks,
+    ["originalAudio"],
+  );
+  const finalMixPath = coordinator.getFinalMixPath(job.id);
+  assert.ok(finalMixPath);
+  assert.ok(amplitudeAt(decodeAudio(finalMixPath), 440, 0.1, 0.2) > 0.02);
+
+  coordinator.startExport(job.id);
+  await waitForTask(manager, job.id, "videoExport");
+  assert.equal(manager.getJob(job.id)?.videoExport?.status, "completed");
+  const exportPath = coordinator.getVideoExportPath(job.id);
+  assert.ok(exportPath);
+  assert.ok(
+    probeMedia(exportPath).streams.some(
+      (stream) => stream.codec_type === "audio",
+    ),
+  );
 });
 
 test("cancels a final mix before publishing output and leaves no task-owned files", async () => {
@@ -796,6 +875,86 @@ test("exports an MP4, verifies it with FFprobe, and serves the real download", a
   }
 });
 
+test("downloads more than ten completed exports in one ZIP archive", async () => {
+  const root = await createTemporaryDirectory();
+  const fixtureDirectory = path.join(root, "fixtures");
+  fs.mkdirSync(fixtureDirectory);
+  const manager = new VideoDubbingManager({
+    storageDirectory: path.join(root, "jobs"),
+    ffprobePath: "ffprobe",
+  });
+  const coordinator = createCoordinator(manager);
+  const source = createVideo(
+    path.join(fixtureDirectory, "shared-source.mp4"),
+    0.6,
+    false,
+  );
+  const jobIds: string[] = [];
+  for (let index = 0; index < 12; index += 1) {
+    const job = manager.createJob(`video-${index + 1}.mp4`, source.length);
+    const uploaded = await manager.receiveUpload(
+      job.id,
+      Object.assign(Readable.from([source]), { headers: {} }),
+    );
+    assert.equal(uploaded.status, "completed");
+    const fileName = `render-${index + 1}.mp4`;
+    const outputPath = path.join(manager.getJobDirectory(job.id)!, fileName);
+    fs.copyFileSync(path.join(fixtureDirectory, "shared-source.mp4"), outputPath);
+    manager.setExportedVideoFileName(job.id, fileName);
+    manager.setMediaTask(job.id, "videoExport", {
+      status: "completed",
+      progressPercent: 100,
+      sizeBytes: fs.statSync(outputPath).size,
+    });
+    jobIds.push(job.id);
+  }
+
+  const app = express();
+  app.use(
+    "/api/video-dubbing",
+    createVideoDubbingRouter(manager, undefined, coordinator),
+  );
+  const server = app.listen(0, "127.0.0.1");
+  await new Promise<void>((resolve, reject) => {
+    server.once("listening", resolve);
+    server.once("error", reject);
+  });
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  try {
+    const query = new URLSearchParams({ jobIds: jobIds.join(",") });
+    const response = await fetch(
+      `http://127.0.0.1:${address.port}/api/video-dubbing/exports/download-all?${query}`,
+    );
+    if (!response.ok) assert.fail(await response.text());
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get("content-type") || "", /application\/zip/i);
+    assert.match(
+      response.headers.get("content-disposition") || "",
+      /video-dubbing-exports\.zip/i,
+    );
+    const archive = Buffer.from(await response.arrayBuffer());
+    const localFileHeader = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
+    let fileCount = 0;
+    for (
+      let offset = 0;
+      (offset = archive.indexOf(localFileHeader, offset)) !== -1;
+      offset += localFileHeader.length
+    ) {
+      fileCount += 1;
+    }
+    assert.equal(fileCount, 12);
+    for (let index = 1; index <= 12; index += 1) {
+      assert.ok(archive.includes(Buffer.from(`render-${index}.mp4`)));
+    }
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
+});
+
 test("uploads a Unicode-caption logo and composites subtitle PNG and logo overlays into the exported video", async () => {
   const root = await createTemporaryDirectory();
   const fixtureDirectory = path.join(root, "fixtures");
@@ -881,6 +1040,24 @@ test("uploads a Unicode-caption logo and composites subtitle PNG and logo overla
     subtitles: [
       { startTime: 0.1, endTime: 1.1, text: "Xin chào tiếng Việt" },
     ],
+    textOverlays: [{
+      startTime: 0.1,
+      endTime: 1.1,
+      text: "Long text stays anchored to the left",
+      trackId: "text-track-1",
+      textAlign: "left",
+      fontSize: 28,
+      fontFamily: "Verdana",
+      color: "#ffffff",
+      bold: false,
+      italic: false,
+      position: "top-center",
+      xPercent: 50,
+      yPercent: 15,
+      backgroundColor: "#000000",
+      backgroundTransparent: true,
+      paddingPx: 0,
+    }],
     subtitleFontSize: 28,
     subtitleFontFamily: "Verdana",
     subtitleColor: "#f0e0d0",
@@ -899,6 +1076,7 @@ test("uploads a Unicode-caption logo and composites subtitle PNG and logo overla
   assert.equal(manager.getJob(job.id)?.overlaySettings?.subtitleFontFamily, "Verdana");
   assert.equal(manager.getJob(job.id)?.overlaySettings?.subtitleColor, "#f0e0d0");
   assert.equal(manager.getJob(job.id)?.overlaySettings?.subtitleBold, true);
+  assert.equal(manager.getJob(job.id)?.overlaySettings?.textOverlays?.[0].textAlign, "left");
   const outputPath = coordinator.getVideoExportPath(job.id);
   assert.ok(outputPath);
   const overlayProbe = probeMedia(outputPath);

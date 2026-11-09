@@ -10,6 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
 import { VideoDubbingManager } from "../videoDubbingManager";
+import { VideoDubbingProjects } from "../videoDubbingProjects";
 import { analyzeSrtContent } from "../src/utils/videoDubbingSrt";
 
 const temporaryDirectories: string[] = [];
@@ -151,6 +152,16 @@ test("reports audio metadata and keeps independent job directories", async () =>
   assert.deepEqual(await readdir(storageDirectory), [second.id]);
 });
 
+test("creates more than ten video dubbing jobs", async () => {
+  const directory = await createTemporaryDirectory();
+  const manager = createManager(path.join(directory, "jobs"));
+  const jobs = Array.from({ length: 15 }, (_, index) =>
+    manager.createJob(`video-${index + 1}.mp4`, 100),
+  );
+  assert.equal(jobs.length, 15);
+  assert.equal(new Set(jobs.map((job) => job.id)).size, 15);
+});
+
 test("rejects invalid media and removes only its job data", async () => {
   const directory = await createTemporaryDirectory();
   const storageDirectory = path.join(directory, "jobs");
@@ -263,6 +274,89 @@ test("HTTP API streams video, rejects invalid job IDs, and cleans one job", asyn
     assert.equal(cancelResponse.status, 200);
     assert.equal((await cancelResponse.json()).job.status, "cancelled");
     assert.deepEqual(await readdir(storageDirectory), []);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
+});
+
+test("saves project subtitles while an existing video job is busy", async () => {
+  const directory = await createTemporaryDirectory();
+  const storageDirectory = path.join(directory, "jobs");
+  const manager = createManager(storageDirectory);
+  const projects = new VideoDubbingProjects(storageDirectory);
+  const project = await projects.create("Subtitle import");
+  const job = manager.createJob("existing.mp4", 100);
+  await projects.update(project.id, { jobIds: [job.id] });
+
+  const uploadRequest = Object.assign(new PassThrough(), { headers: {} }) as IncomingMessage;
+  const upload = manager.receiveUpload(job.id, uploadRequest);
+  assert.equal(manager.isJobStorageBusy(job.id), true);
+
+  const app = express();
+  app.use(express.json());
+  app.use(
+    "/api/video-dubbing",
+    createVideoDubbingRouter(manager, undefined, undefined, undefined, undefined, projects),
+  );
+  const server = app.listen(0, "127.0.0.1");
+  await new Promise<void>((resolve, reject) => {
+    server.once("listening", resolve);
+    server.once("error", reject);
+  });
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const baseUrl = `http://127.0.0.1:${address.port}/api/video-dubbing`;
+
+  try {
+    const response = await fetch(`${baseUrl}/projects/${project.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sourceSrts: [{ id: "subtitle-1", fileName: "existing.srt", content: "subtitle" }],
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const result = await response.json();
+    assert.equal(result.project.sourceSrts[0].fileName, "existing.srt");
+    assert.equal(manager.isJobStorageBusy(job.id), true);
+  } finally {
+    await manager.cancelJob(job.id);
+    uploadRequest.destroy();
+    await upload;
+    server.closeAllConnections();
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
+});
+
+test("returns project and video storage paths for the project list", async () => {
+  const directory = await createTemporaryDirectory();
+  const storageDirectory = path.join(directory, "jobs");
+  const manager = createManager(storageDirectory);
+  const projects = new VideoDubbingProjects(storageDirectory);
+  const project = await projects.create("Path test");
+  const app = express();
+  app.use("/api/video-dubbing", createVideoDubbingRouter(manager, undefined, undefined, undefined, undefined, projects));
+  const server = app.listen(0, "127.0.0.1");
+  await new Promise<void>((resolve, reject) => {
+    server.once("listening", resolve);
+    server.once("error", reject);
+  });
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/video-dubbing/projects`);
+    assert.equal(response.status, 200);
+    const result = await response.json();
+    assert.equal(result.projects[0].id, project.id);
+    assert.equal(result.projects[0].storagePath, projects.getProjectDirectory(project.id));
+    assert.equal(result.projects[0].jobsDirectory, projects.getProjectJobsDirectory(project.id));
   } finally {
     server.closeAllConnections();
     await new Promise<void>((resolve, reject) => {

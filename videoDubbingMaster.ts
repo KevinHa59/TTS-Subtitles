@@ -319,6 +319,19 @@ export class VideoDubbingMasterCoordinator {
         videoJobId,
         temporaryMasterPath,
         duration,
+        active.timelineJob.items
+          .filter(
+            (item) =>
+              item.status === "completed" &&
+              Number.isFinite(item.startTime) &&
+              Number.isFinite(item.finalDuration || item.targetDuration) &&
+              (item.finalDuration || item.targetDuration) > 0,
+          )
+          .map((item) => ({
+            startTime: item.startTime,
+            durationSeconds: item.finalDuration || item.targetDuration,
+            text: item.text,
+          })),
       );
       temporaryMasterPath = undefined;
       this.timeline.onMasterUpdated?.(videoJobId);

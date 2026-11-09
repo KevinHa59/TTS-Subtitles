@@ -18,6 +18,8 @@ interface ActivePipeline {
   operation: Promise<void>;
 }
 
+type PipelineRunMode = "full" | "tts";
+
 const TERMINAL_STATUSES = new Set([
   "completed",
   "failed",
@@ -42,6 +44,8 @@ export class VideoDubbingPipelineCoordinator {
   configure(
     jobId: string,
     input: unknown,
+    requireMixSource = true,
+    validateDemucs = true,
   ): VideoDubbingAutoPipelineConfig {
     const job = this.requireReadyJob(jobId);
     if (this.isBusy(jobId)) {
@@ -55,11 +59,16 @@ export class VideoDubbingPipelineCoordinator {
       throw new Error("Job đang có tác vụ TTS, Demucs hoặc media chạy.");
     }
     const config = this.validateConfig(input);
-    const masterRequest = this.master.validateRequest(config.master);
-    if (!this.master.isVoiceAvailable(masterRequest.model)) {
+    const masterRequest = config.ttsMasterEnabled
+      ? this.master.validateRequest(config.master)
+      : config.master;
+    if (
+      config.ttsMasterEnabled &&
+      !this.master.isVoiceAvailable(masterRequest.model)
+    ) {
       throw new Error("Giọng đọc đã chọn không khả dụng.");
     }
-    if (config.demucsEnabled && !job.metadata?.audioCodec) {
+    if (validateDemucs && config.demucsEnabled && !job.metadata?.audioCodec) {
       throw new Error("Video nguồn không có audio để Demucs tách.");
     }
     const mixerSettings = this.media.validateMixerSettings(config.mixerSettings);
@@ -69,6 +78,7 @@ export class VideoDubbingPipelineCoordinator {
       mixerSettings,
     };
     const hasEnabledTts =
+      normalizedConfig.ttsMasterEnabled &&
       !mixerSettings.ttsMaster.muted &&
       mixerSettings.ttsMaster.volumePercent > 0;
     const hasEnabledSeparatedTrack =
@@ -83,6 +93,14 @@ export class VideoDubbingPipelineCoordinator {
       Boolean(job.metadata?.audioCodec) &&
       normalizedConfig.originalAudioVolumePercent > 0;
     if (
+      requireMixSource &&
+      !normalizedConfig.ttsMasterEnabled &&
+      !normalizedConfig.demucsEnabled
+    ) {
+      throw new Error("Bật TTS Master hoặc Demucs trong Auto Pipeline.");
+    }
+    if (
+      requireMixSource &&
       !hasEnabledTts &&
       !hasEnabledSeparatedTrack &&
       !hasOriginalAudioFallback
@@ -103,6 +121,21 @@ export class VideoDubbingPipelineCoordinator {
     jobId: string,
     input: unknown,
   ): Promise<VideoDubbingAutoPipelineState> {
+    return this.startConfigured(jobId, input, "full");
+  }
+
+  async startTts(
+    jobId: string,
+    input: unknown,
+  ): Promise<VideoDubbingAutoPipelineState> {
+    return this.startConfigured(jobId, input, "tts");
+  }
+
+  private async startConfigured(
+    jobId: string,
+    input: unknown,
+    mode: PipelineRunMode,
+  ): Promise<VideoDubbingAutoPipelineState> {
     if (this.isBusy(jobId)) {
       throw new Error("Auto Pipeline của job này đang chạy.");
     }
@@ -113,7 +146,12 @@ export class VideoDubbingPipelineCoordinator {
     ) {
       throw new Error("Hãy bật Auto Pipeline trước khi bắt đầu xử lý.");
     }
-    const config = this.configure(jobId, input);
+    const config = this.configure(
+      jobId,
+      input,
+      mode === "full",
+      mode === "full",
+    );
     const state: VideoDubbingAutoPipelineState = {
       status: "running",
       phase: "validating",
@@ -130,7 +168,7 @@ export class VideoDubbingPipelineCoordinator {
       operation: Promise.resolve(),
     };
     this.activePipelines.set(jobId, active);
-    active.operation = this.run(jobId, active, config);
+    active.operation = this.run(jobId, active, config, mode);
     return state;
   }
 
@@ -150,16 +188,20 @@ export class VideoDubbingPipelineCoordinator {
     jobId: string,
     active: ActivePipeline,
     config: VideoDubbingAutoPipelineConfig,
+    mode: PipelineRunMode,
   ): Promise<void> {
     try {
       const job = this.requireReadyJob(jobId);
+      const includeTtsMaster =
+        mode === "tts" || config.ttsMasterEnabled;
+      const includeDemucs = mode !== "tts" && config.demucsEnabled;
       this.update(jobId, active, {
         status: "running",
         phase: "validating",
         progressPercent: undefined,
         error: undefined,
       });
-      if (config.demucsEnabled) {
+      if (includeDemucs) {
         const availability = await this.separation.getAvailability();
         if (availability.status !== "ready") {
           throw new Error(
@@ -170,50 +212,59 @@ export class VideoDubbingPipelineCoordinator {
       this.checkCancelled(active);
       const sourcePath = this.requireSourceVideo(jobId);
       const sourceFingerprint = this.fileFingerprint(sourcePath);
-      const masterInput = this.hash(
-        JSON.stringify({
-          jobId,
-          sourceFingerprint,
-          duration: job.metadata?.durationSeconds,
-          master: config.master,
-        }),
-      );
-      const masterPath = this.manager.getMasterAudioPath(jobId);
-      const masterReusable =
-        Boolean(masterPath) &&
-        job.masterGeneration?.status === "completed" &&
-        this.matchesArtifact(jobId, "master", masterInput, masterPath!);
-      if (masterReusable) {
-        this.completeStage(jobId, active, "master", true);
-      } else {
-        active.phase = "master";
-        this.update(jobId, active, {
-          phase: "master",
-          progressPercent: 0,
-          error: undefined,
-        });
-        this.master.start(jobId, config.master);
-        const master = await this.waitForStage(jobId, active, "master");
-        if (master.status !== "completed") {
-          throw new Error(master.error || "Không thể tạo TTS Master.");
+      const masterInput = includeTtsMaster
+        ? this.hash(
+            JSON.stringify({
+              jobId,
+              sourceFingerprint,
+              duration: job.metadata?.durationSeconds,
+              master: config.master,
+            }),
+          )
+        : "";
+      if (includeTtsMaster) {
+        const masterPath = this.manager.getMasterAudioPath(jobId);
+        const masterReusable =
+          Boolean(masterPath) &&
+          job.masterGeneration?.status === "completed" &&
+          this.matchesArtifact(jobId, "master", masterInput, masterPath!);
+        if (masterReusable) {
+          this.completeStage(jobId, active, "master", true);
+        } else {
+          active.phase = "master";
+          this.update(jobId, active, {
+            phase: "master",
+            progressPercent: 0,
+            error: undefined,
+          });
+          this.master.start(jobId, config.master);
+          const master = await this.waitForStage(jobId, active, "master");
+          if (master.status !== "completed") {
+            throw new Error(master.error || "Không thể tạo TTS Master.");
+          }
+          const outputPath = this.manager.getMasterAudioPath(jobId);
+          if (!outputPath) throw new Error("TTS Master hoàn tất nhưng file không có.");
+          this.setArtifact(jobId, "master", masterInput, outputPath);
+          this.completeStage(jobId, active, "master", false);
         }
-        const outputPath = this.manager.getMasterAudioPath(jobId);
-        if (!outputPath) throw new Error("TTS Master hoàn tất nhưng file không có.");
-        this.setArtifact(jobId, "master", masterInput, outputPath);
-        this.completeStage(jobId, active, "master", false);
+      } else {
+        this.skipStage(jobId, active, "master");
       }
 
       this.checkCancelled(active);
       const afterMaster = this.requireReadyJob(jobId);
-      const currentMasterPath = this.manager.getMasterAudioPath(jobId);
-      if (!currentMasterPath) throw new Error("TTS Master đã bị thiếu.");
-      const masterArtifact = this.artifactValue(
-        masterInput,
-        currentMasterPath,
-      );
+      const currentMasterPath = includeTtsMaster
+        ? this.manager.getMasterAudioPath(jobId)
+        : null;
+      if (includeTtsMaster && !currentMasterPath) {
+        throw new Error("TTS Master đã bị thiếu.");
+      }
+      const masterArtifact = currentMasterPath
+        ? this.artifactValue(masterInput, currentMasterPath)
+        : "";
 
       let separationArtifact = "";
-      if (config.demucsEnabled) {
+      if (includeDemucs) {
         const separationInput = this.hash(
           JSON.stringify({ jobId, sourceFingerprint, model: "htdemucs" }),
         );
@@ -262,20 +313,34 @@ export class VideoDubbingPipelineCoordinator {
         this.skipStage(jobId, active, "separation");
       }
 
+      if (mode === "tts") {
+        this.checkCancelled(active);
+        const finalState = this.requirePipelineState(jobId);
+        this.manager.setAutoPipelineState(jobId, {
+          ...finalState,
+          status: "completed",
+          phase: "completed",
+          progressPercent: 100,
+          updatedAt: Date.now(),
+          error: undefined,
+        });
+        return;
+      }
+
       this.checkCancelled(active);
-      const originalGain = config.demucsEnabled
-        || !job.metadata?.audioCodec
+      const originalGain = includeDemucs || !job.metadata?.audioCodec
         ? undefined
         : config.originalAudioVolumePercent;
       const finalMixInput = this.hash(
         JSON.stringify({
           jobId,
           masterArtifact,
-          separationArtifact: config.demucsEnabled
+          separationArtifact: includeDemucs
             ? separationArtifact
             : sourceFingerprint,
           settings: config.mixerSettings,
-          demucsEnabled: config.demucsEnabled,
+          ttsMasterEnabled: includeTtsMaster,
+          demucsEnabled: includeDemucs,
           originalGain,
         }),
       );
@@ -300,7 +365,8 @@ export class VideoDubbingPipelineCoordinator {
           jobId,
           config.mixerSettings,
           originalGain,
-          config.demucsEnabled,
+          includeDemucs,
+          includeTtsMaster,
         );
         const result = await this.waitForStage(jobId, active, "finalMix");
         if (result.status !== "completed") {
@@ -431,6 +497,12 @@ export class VideoDubbingPipelineCoordinator {
       throw new Error("Thiếu cấu hình Auto Pipeline.");
     }
     const values = input as Record<string, unknown>;
+    if (
+      values.ttsMasterEnabled !== undefined &&
+      typeof values.ttsMasterEnabled !== "boolean"
+    ) {
+      throw new Error("Tùy chọn TTS Master không hợp lệ.");
+    }
     if (typeof values.demucsEnabled !== "boolean") {
       throw new Error("Tùy chọn Demucs không hợp lệ.");
     }
@@ -445,6 +517,7 @@ export class VideoDubbingPipelineCoordinator {
     }
     return {
       enabled: values.enabled === true,
+      ttsMasterEnabled: values.ttsMasterEnabled !== false,
       master: values.master as VideoDubbingAutoPipelineConfig["master"],
       demucsEnabled: values.demucsEnabled,
       mixerSettings: this.media.validateMixerSettings(values.mixerSettings),

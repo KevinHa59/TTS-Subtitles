@@ -658,18 +658,23 @@ export class VideoDubbingMediaCoordinator {
     input: unknown,
     originalAudioVolumePercent?: number,
     includeSeparatedTracks = true,
+    includeTtsMaster?: boolean,
   ): VideoDubbingFinalMixTask {
     const job = this.requireReadyJob(jobId);
     this.assertNoActiveTask(jobId);
     const settings = this.validateMixerSettings(input);
-    this.requireMaster(jobId, job);
+    const shouldIncludeTtsMaster =
+      includeTtsMaster ?? this.hasUsableMaster(jobId, job);
+    if (shouldIncludeTtsMaster) this.requireMaster(jobId, job);
     const directory = this.requireDirectory(jobId);
-    const originalGain =
+    let originalGain =
       originalAudioVolumePercent === undefined
         ? undefined
         : this.validateGain(originalAudioVolumePercent, "Âm lượng audio gốc");
     const hasEnabledTrack =
-      (!settings.ttsMaster.muted && settings.ttsMaster.volumePercent > 0) ||
+      (shouldIncludeTtsMaster &&
+        !settings.ttsMaster.muted &&
+        settings.ttsMaster.volumePercent > 0) ||
       (originalGain !== undefined && originalGain > 0) ||
       (["vocals", "instrumental"] as const).some(
         (track) => {
@@ -687,7 +692,10 @@ export class VideoDubbingMediaCoordinator {
           );
         },
       );
-    if (!hasEnabledTrack) {
+    if (!hasEnabledTrack && originalGain === undefined && job.metadata?.audioCodec) {
+      originalGain = 100;
+    }
+    if (!hasEnabledTrack && !(originalGain !== undefined && originalGain > 0)) {
       throw new Error("Bật ít nhất một track có sẵn với âm lượng lớn hơn 0%.");
     }
     const savedSettings = this.manager.updateMixerSettings(jobId, settings);
@@ -709,6 +717,7 @@ export class VideoDubbingMediaCoordinator {
       savedSettings,
       originalGain,
       includeSeparatedTracks,
+      shouldIncludeTtsMaster,
     );
     return { ...task };
   }
@@ -845,10 +854,22 @@ export class VideoDubbingMediaCoordinator {
       const item = cue as Record<string, unknown>;
       if (typeof item.text !== "string" || item.text.length > 10_000) throw new Error("Nội dung text clip không hợp lệ.");
       if (typeof item.fontFamily !== "string" || !getSupportedSubtitleFontFamilies().has(item.fontFamily)) throw new Error("Font text clip không được hỗ trợ.");
+      if (item.textAlign !== undefined && item.textAlign !== "left" && item.textAlign !== "center" && item.textAlign !== "right") {
+        throw new Error("Căn chỉnh text không hợp lệ.");
+      }
       return {
         startTime: numberInRange(item.startTime, 0, job.metadata!.durationSeconds, "Thời điểm bắt đầu text"),
         endTime: numberInRange(item.endTime, 0, job.metadata!.durationSeconds, "Thời điểm kết thúc text"),
         text: item.text,
+        trackId: typeof item.trackId === "string" && item.trackId.length <= 100
+          ? item.trackId
+          : undefined,
+        extendToVideoEnd: booleanValue(item.extendToVideoEnd, false, "Hiển thị text đến hết video"),
+        isTitle: booleanValue(item.isTitle, false, "Text tiêu đề"),
+        enabled: booleanValue(item.enabled, true, "Trạng thái tiêu đề"),
+        textAlign: item.textAlign === "left" || item.textAlign === "center" || item.textAlign === "right"
+          ? item.textAlign
+          : undefined,
         fontSize: numberInRange(item.fontSize, 8, 160, "Cỡ chữ text"),
         fontFamily: item.fontFamily,
         color: color(item.color, "#ffffff", "Màu chữ text"),
@@ -1055,6 +1076,16 @@ export class VideoDubbingMediaCoordinator {
       throw new Error("Hãy tạo TTS Master thành công trước khi trộn âm thanh.");
     }
     return masterPath;
+  }
+
+  private hasUsableMaster(jobId: string, job: VideoDubbingJob): boolean {
+    return Boolean(
+      this.manager.getMasterAudioPath(jobId) &&
+        job.masterGeneration?.sizeBytes &&
+        ["completed", "failed", "cancelled"].includes(
+          job.masterGeneration.status,
+        ),
+    );
   }
 
   private requireMixedAudio(jobId: string, job: VideoDubbingJob): string {
@@ -1394,6 +1425,7 @@ export class VideoDubbingMediaCoordinator {
     settings: VideoDubbingMixerSettings,
     originalAudioVolumePercent?: number,
     includeSeparatedTracks = true,
+    includeTtsMaster = true,
   ): Promise<void> {
     try {
       await this.runFinalMixBody(
@@ -1402,6 +1434,7 @@ export class VideoDubbingMediaCoordinator {
         settings,
         originalAudioVolumePercent,
         includeSeparatedTracks,
+        includeTtsMaster,
       );
     } catch (error) {
       this.failOrCancel(active, error);
@@ -1415,6 +1448,7 @@ export class VideoDubbingMediaCoordinator {
     settings: VideoDubbingMixerSettings,
     originalAudioVolumePercent?: number,
     includeSeparatedTracks = true,
+    includeTtsMaster = true,
   ): Promise<void> {
     const directory = this.requireDirectory(active.jobId);
     const duration = job.metadata!.durationSeconds;
@@ -1422,13 +1456,11 @@ export class VideoDubbingMediaCoordinator {
       track: VideoDubbingMixerTrack | "originalAudio";
       filePath: string;
       volumePercent: number;
-    }> = [
-      {
+    }> = includeTtsMaster ? [{
         track: "ttsMaster",
         filePath: this.requireMaster(active.jobId, job),
         volumePercent: settings.ttsMaster.volumePercent,
-      },
-    ];
+      }] : [];
     let originalAudioTemp: string | undefined;
     if (originalAudioVolumePercent !== undefined) {
       originalAudioTemp = path.join(
@@ -1732,6 +1764,7 @@ export class VideoDubbingMediaCoordinator {
           backgroundImage: settings.subtitleBackgroundImage,
           paddingPx: settings.subtitlePaddingPx,
           marginPx: settings.subtitleMarginPx,
+          wrap: true,
         },
       })) : []),
       ...(settings.textOverlays ?? []).map((cue) => ({
@@ -1749,6 +1782,13 @@ export class VideoDubbingMediaCoordinator {
           outlineWidthPx: cue.outlineWidthPx ?? 2,
           characterSpacingPx: cue.characterSpacingPx ?? 0,
           lineSpacingPx: cue.lineSpacingPx ?? 0,
+          textAlign: cue.isTitle
+            ? undefined
+            : cue.textAlign ?? (cue.position.endsWith("-left")
+              ? "left"
+              : cue.position.endsWith("-right")
+                ? "right"
+                : "center"),
           position: cue.position,
           xPercent: cue.xPercent,
           yPercent: cue.yPercent,
@@ -1758,6 +1798,7 @@ export class VideoDubbingMediaCoordinator {
           backgroundImage: null,
           paddingPx: cue.paddingPx,
           marginPx: 24,
+          wrap: false,
         },
       })),
     ];
@@ -1792,6 +1833,13 @@ export class VideoDubbingMediaCoordinator {
       for (let index = 0; index < renderItems.length; index++) {
         this.assertNotCancelled(active);
         const { cue, style } = renderItems[index];
+        const textAlign = "textAlign" in style && style.textAlign
+          ? style.textAlign
+          : style.position.endsWith("-left")
+            ? "left"
+            : style.position.endsWith("-right")
+              ? "right"
+              : "center";
         const horizontal = style.position.endsWith("-left") ? "flex-start" : style.position.endsWith("-right") ? "flex-end" : "center";
         const vertical = style.position.startsWith("top-") ? "flex-start" : style.position.startsWith("bottom-") ? "flex-end" : "center";
         const cacheKey = [
@@ -1802,6 +1850,7 @@ export class VideoDubbingMediaCoordinator {
           style.bold, style.italic, style.underline, style.textCase,
           style.outlineEnabled, style.outlineColor, style.outlineWidthPx,
           style.characterSpacingPx, style.lineSpacingPx,
+          textAlign,
         ].join("|");
         if (!imageCache.has(cacheKey)) {
           const subtitle = renderToStaticMarkup(React.createElement(SubtitleOverlayRenderer, {
@@ -1825,12 +1874,34 @@ export class VideoDubbingMediaCoordinator {
             backgroundImage: style.backgroundImage,
             paddingPx: style.paddingPx,
             position: style.position,
+            textAlign: "textAlign" in style ? style.textAlign : undefined,
+            wrap: style.wrap,
+            maxWidth: style.wrap ? undefined : "none",
             assetUrlFor,
           }));
           const hasCustomPosition = Number.isFinite(style.xPercent) && Number.isFinite(style.yPercent);
-          const content = hasCustomPosition
-            ? `<div style="position:absolute;left:${style.xPercent}%;top:${style.yPercent}%;transform:translate(-50%,-50%);box-sizing:border-box">${subtitle}</div>`
-            : `<div style="position:absolute;inset:0;display:flex;align-items:${vertical};justify-content:${horizontal};padding:${style.marginPx}px;box-sizing:border-box">${subtitle}</div>`;
+          const translateX = textAlign === "left"
+            ? "0%"
+            : textAlign === "right"
+              ? "-100%"
+              : "-50%";
+          const translateY = hasCustomPosition || style.position.startsWith("middle-")
+            ? "-50%"
+            : style.position.startsWith("bottom-")
+              ? "-100%"
+              : "0%";
+          const isTextOverlay = "isTitle" in cue;
+          const content = !isTextOverlay
+            ? hasCustomPosition
+              ? `<div style="position:absolute;left:${style.xPercent}%;top:${style.yPercent}%;transform:translate(-50%,-50%);box-sizing:border-box">${subtitle}</div>`
+              : `<div style="position:absolute;inset:0;display:flex;align-items:${vertical};justify-content:${horizontal};padding:${style.marginPx}px;box-sizing:border-box">${subtitle}</div>`
+            : cue.isTitle
+              ? hasCustomPosition
+                ? `<div style="position:absolute;left:${style.xPercent}%;top:${style.yPercent}%;transform:translate(-50%,-50%);box-sizing:border-box">${subtitle}</div>`
+                : `<div style="position:absolute;inset:0;display:flex;align-items:${vertical};justify-content:${horizontal};padding:${style.marginPx}px;box-sizing:border-box">${subtitle}</div>`
+              : hasCustomPosition
+                ? `<div style="position:absolute;left:${style.xPercent}%;top:${style.yPercent}%;transform:translate(${translateX},${translateY});box-sizing:border-box">${subtitle}</div>`
+                : `<div style="position:absolute;${style.position.endsWith("-left") ? `left:${style.marginPx}px;` : style.position.endsWith("-center") ? "left:50%;" : `right:${style.marginPx}px;`}${style.position.startsWith("top-") ? `top:${style.marginPx}px;` : style.position.startsWith("middle-") ? "top:50%;" : `bottom:${style.marginPx}px;`}transform:translate(${translateX},${translateY});box-sizing:border-box">${subtitle}</div>`;
           // Keep the screenshot target full-frame. Capturing a custom-positioned
           // child directly would crop it to its own box and lose its video x/y.
           const markup = `<div id="video-subtitle-stage" style="position:absolute;left:0;top:0;width:${width}px;height:${height}px;overflow:hidden">${content}</div>`;
@@ -2137,7 +2208,8 @@ export class VideoDubbingMediaCoordinator {
       ) {
         throw new Error("MP4 đầu ra không vượt qua xác minh stream video/audio, độ phân giải hoặc thời lượng.");
       }
-      const outputPath = this.getAvailableExportPath(job, directory);
+      const previousExportFileName = job.exportedVideoFileName;
+      const outputPath = path.join(directory, `${this.getExportBaseName(job)}.mp4`);
       this.publishFile(tempOutput, outputPath, directory);
       this.manager.setExportedVideoFileName(job.id, path.basename(outputPath));
       active.temporaryFiles.delete(tempOutput);
@@ -2156,6 +2228,16 @@ export class VideoDubbingMediaCoordinator {
         completedAtMs,
         elapsedSeconds,
       });
+      try {
+        this.removePreviousExportFiles(
+          job,
+          directory,
+          outputPath,
+          previousExportFileName,
+        );
+      } catch (error) {
+        console.error("[VideoDubbing] Không thể dọn các bản export cũ:", error);
+      }
     } catch (error) {
       this.failOrCancel(active, error);
     } finally {
@@ -2483,18 +2565,46 @@ export class VideoDubbingMediaCoordinator {
     }
   }
 
-  private getAvailableExportPath(job: VideoDubbingJob, directory: string): string {
+  private getExportBaseName(job: VideoDubbingJob): string {
     const sourceName = path.parse(job.fileName).name
       .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_")
       .replace(/[. ]+$/g, "") || "video";
-    const baseName = `${sourceName}_merged`;
-    let candidate = path.join(directory, `${baseName}.mp4`);
-    let suffix = 1;
-    while (fs.existsSync(candidate)) {
-      candidate = path.join(directory, `${baseName} (${suffix}).mp4`);
-      suffix++;
+    return `${sourceName}_merged`;
+  }
+
+  private removePreviousExportFiles(
+    job: VideoDubbingJob,
+    directory: string,
+    currentOutputPath: string,
+    previousExportFileName?: string,
+  ): void {
+    const baseName = this.getExportBaseName(job);
+    const oldExportPattern = new RegExp(
+      `^${baseName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?: \\(\\d+\\))?\\.mp4$`,
+      "i",
+    );
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      if (!entry.isFile()) continue;
+      const filePath = path.join(directory, entry.name);
+      if (path.resolve(filePath) !== path.resolve(currentOutputPath) && oldExportPattern.test(entry.name)) {
+        fs.rmSync(filePath);
+      }
     }
-    return candidate;
+
+    if (
+      previousExportFileName &&
+      path.basename(previousExportFileName) === previousExportFileName &&
+      previousExportFileName.toLowerCase().endsWith(".mp4")
+    ) {
+      const previousExportPath = path.join(directory, previousExportFileName);
+      if (
+        path.resolve(previousExportPath) !== path.resolve(currentOutputPath) &&
+        fs.existsSync(previousExportPath) &&
+        fs.statSync(previousExportPath).isFile()
+      ) {
+        fs.rmSync(previousExportPath);
+      }
+    }
   }
 
   private requireDirectory(jobId: string): string {
