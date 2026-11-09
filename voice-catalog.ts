@@ -62,6 +62,7 @@ export const LOCAL_MODEL_FILES: Record<string, string | string[]> = {
   "local:news-flash-tr43_1793847327446": "news-flash-tr43_1793847327446.onnx",
   "local:news-flash-tr47_1793850370993": "news-flash-tr47_1793850370993.onnx",
   "local:news-flash-tr48": "news-flash-tr48.onnx",
+  "local:news-flash-tr52_1794223720081": "news-flash-tr52_1794223720081.onnx",
   [CSA_VOICE_MODEL_ID]: "vi_VN-csa-voice-piper-v3-medium.onnx",
 };
 
@@ -263,6 +264,17 @@ export const AVAILABLE_MODELS: VoiceDefinition[] = [
     id: "local:news-flash-tr48",
     modelId: "local:news-flash-tr48",
     name: "News Flash v48",
+    tag: "Nam · Miền Nam · Giọng tùy chỉnh (Offline)",
+    gender: "male",
+    description: "Giọng nam News Flash được huấn luyện riêng.",
+    sampleText:
+      "Ta là tông chủ Thanh Vân Tiên Tông, Phong Thanh Dương. Cẩn tuân tông chủ chi lệnh.",
+    recommended: false,
+  },
+  {
+    id: "local:news-flash-tr52_1794223720081",
+    modelId: "local:news-flash-tr52_1794223720081",
+    name: "News Flash v52",
     tag: "Nam · Miền Nam · Giọng tùy chỉnh (Offline)",
     gender: "male",
     description: "Giọng nam News Flash được huấn luyện riêng.",
