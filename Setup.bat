@@ -27,10 +27,13 @@ where ffmpeg >nul 2>&1
 if not errorlevel 1 goto FFMPEG_OK
 
 if exist "%~dp0ffmpeg.exe" goto FFMPEG_LOCAL
+if exist "%~dp0bin\ffmpeg.exe" goto FFMPEG_LOCAL
+if exist "%~dp0ffmpeg\bin\ffmpeg.exe" goto FFMPEG_LOCAL
 
 echo [CANH BAO] Chua tim thay FFmpeg.
 echo Neu khong co FFmpeg, chuc nang chinh toc do va xu ly audio
-echo co the that bai. Hay cai dat FFmpeg truoc khi su dung.
+echo va tao dataset Voice Clone tu MP4 co the that bai.
+echo Hay cai dat FFmpeg hoac dat ffmpeg.exe trong thu muc ung dung.
 echo Tham khao: https://www.gyan.dev/ffmpeg/builds/
 goto FFMPEG_DONE
 

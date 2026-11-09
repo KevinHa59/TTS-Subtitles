@@ -457,16 +457,26 @@ export async function prepareOfflineDataset(
       const splitResult = spawnSync(
         ffmpegPath,
         [
+          "-hide_banner", "-loglevel", "error", "-nostdin",
           "-y", "-i", inputPath, "-vn",
           "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le",
           "-f", "segment", "-segment_time", "300", "-reset_timestamps", "1",
           fileChunkPattern,
         ],
-        { stdio: "pipe" }
+        { stdio: "pipe", windowsHide: true, maxBuffer: 10 * 1024 * 1024 }
       );
 
       if (splitResult.status !== 0) {
-        const err = splitResult.stderr?.toString().trim() || `FFmpeg không thể chia tệp âm thanh #${fileIdx + 1}.`;
+        const processError = splitResult.error;
+        const errorCode = (processError as NodeJS.ErrnoException | undefined)?.code;
+        const stderr = splitResult.stderr?.toString().trim();
+        const err = errorCode === "ENOENT"
+          ? `Không tìm thấy hoặc không thể chạy FFmpeg tại "${ffmpegPath}". Cài FFmpeg vào PATH, chép ffmpeg.exe vào thư mục ứng dụng (hoặc bin\\ / ffmpeg\\bin\\), hoặc cấu hình FFMPEG_PATH rồi khởi động lại ứng dụng.`
+          : processError
+            ? `Không thể khởi chạy FFmpeg tại "${ffmpegPath}": ${processError.message}`
+            : stderr
+              ? `FFmpeg tại "${ffmpegPath}" kết thúc với mã ${splitResult.status ?? splitResult.signal ?? "không xác định"}: ${stderr}`
+              : `FFmpeg tại "${ffmpegPath}" kết thúc với mã ${splitResult.status ?? splitResult.signal ?? "không xác định"} mà không có thông tin lỗi.`;
         throw new Error(`Không thể chuẩn bị đoạn âm thanh cho ${origName}: ${err}`);
       }
 
