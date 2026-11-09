@@ -100,6 +100,7 @@ import SubtitleEditorPage from "./components/SubtitleEditorPage";
 import SrtFromTextPage from "./components/SrtFromTextPage";
 import JoinSplitVideoPage from "./components/JoinSplitVideoPage";
 import SubtitleTranslationSetupModal from "./components/SubtitleTranslationSetupModal";
+import FileTransferPage from "./components/FileTransferPage";
 import { copyAudioToClipboard } from "./utils/clipboardAudio";
 
 const VoiceEffectsPage = React.lazy(() => import("./components/VoiceEffectsPage"));
@@ -135,7 +136,8 @@ type AppTab =
   | "subtitle-editor"
   | "srt-from-text"
   | "join-split-video"
-  | "voice-effects";
+  | "voice-effects"
+  | "file-transfer";
 
 const DEFAULT_PRESETS: ProjectPreset[] = [
   {
@@ -187,6 +189,7 @@ export default function App() {
       if (path === "/srt-from-text") return "srt-from-text";
       if (path === "/join-split-video") return "join-split-video";
       if (path === "/voice-effects") return "voice-effects";
+      if (path === "/file-transfer") return "file-transfer";
       if (path === "/voice-clone") return "voice-clone";
       if (path === "/story") return "story";
       if (path === "/bgm") return "bgm";
@@ -215,6 +218,8 @@ export default function App() {
           ? "/join-split-video"
           : tab === "voice-effects"
           ? "/voice-effects"
+          : tab === "file-transfer"
+          ? "/file-transfer"
           : tab === "video-dubbing"
           ? "/video-dubbing"
           : tab === "voice-clone"
@@ -1760,6 +1765,7 @@ export default function App() {
                   {activeTab === "subtitle-editor" && "Dịch & Sửa SRT"}
                   {activeTab === "join-split-video" && "Join / Split Video"}
                   {activeTab === "voice-effects" && "Voice Effects"}
+                  {activeTab === "file-transfer" && "Transfer"}
                 </span>
               </div>
               <p className="text-xs text-slate-400 hidden xl:block">
@@ -1833,7 +1839,8 @@ export default function App() {
                   activeTab === "bgm" ||
                   activeTab === "voice-effects" ||
                   activeTab === "srt-from-text" ||
-                  activeTab === "join-split-video"
+                  activeTab === "join-split-video" ||
+                  activeTab === "file-transfer"
                     ? "bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/20"
                     : "text-slate-400 hover:text-white"
                 }`}
@@ -2075,6 +2082,18 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => {
+                      handleNavigateTab("file-transfer");
+                      setMobileMenuOpen(false);
+                    }}
+                    className="flex items-center justify-center gap-2 px-3 py-2.5 text-xs font-semibold text-cyan-200 bg-cyan-500/10 hover:bg-cyan-500/20 rounded-xl border border-cyan-500/30 transition-colors"
+                  >
+                    <UploadCloud className="w-4 h-4 text-cyan-300" />
+                    <span>Transfer File</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
                       setShowAudioCleanupModal(true);
                       setMobileMenuOpen(false);
                     }}
@@ -2264,6 +2283,27 @@ export default function App() {
                 join-split-video
                 <span className={`mt-0.5 block text-xs ${activeTab === "join-split-video" ? "text-slate-800" : "text-slate-500"}`}>
                   Nối, cắt và xuất video
+                </span>
+              </span>
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                handleNavigateTab("file-transfer");
+                setMoreMenuOpen(false);
+              }}
+              className={`mt-1 flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm font-medium transition-colors ${
+                activeTab === "file-transfer"
+                  ? "bg-cyan-400 text-slate-950"
+                  : "text-slate-200 hover:bg-slate-800 hover:text-white"
+              }`}
+            >
+              <UploadCloud className="h-4 w-4" />
+              <span>
+                Transfer File
+                <span className={`mt-0.5 block text-xs ${activeTab === "file-transfer" ? "text-slate-800" : "text-slate-500"}`}>
+                  Gửi và nhận file qua mạng LAN
                 </span>
               </span>
             </button>
@@ -4511,6 +4551,7 @@ export default function App() {
         {activeTab === "subtitle-ocr" && <SubtitleOcrPage onOpenSetup={() => setShowSetupModal(true)} />}
         {activeTab === "subtitle-editor" && <SubtitleEditorPage onOpenSetup={() => setShowSetupModal(true)} />}
         {activeTab === "srt-from-text" && <SrtFromTextPage />}
+        {activeTab === "file-transfer" && <FileTransferPage />}
         {activeTab === "join-split-video" && <JoinSplitVideoPage />}
         {activeTab === "voice-effects" && (
           <React.Suspense

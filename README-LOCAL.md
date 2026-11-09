@@ -34,6 +34,10 @@ Các model lớn không cần được tải cùng lúc. Whisper và OCR có th�
 
 Trong **Setup → Chế độ xử lý GPU**, chọn **Tự động** (mặc định để từng backend tự chọn), **Chỉ CPU**, hoặc **Ưu tiên GPU** (dùng GPU khi backend hỗ trợ, fallback theo khả năng của engine). Cấu hình lưu cục bộ tại `%LOCALAPPDATA%/PiperTTSStudio/gpu-execution.json`. Chế độ áp dụng cho Whisper Vulkan, llama.cpp và tách audio Video Dubbing; không bật GPU cho PaddleOCR hoặc MusicGen/AudioLDM vì cấu hình hiện tại của các engine này chỉ chạy CPU. Chưa hỗ trợ chọn một GPU cụ thể; lựa chọn adapter do backend và driver quyết định. Thay đổi áp dụng cho tác vụ mới; nếu engine dịch phụ đề đang chạy thì dừng rồi nạp lại engine.
 
+### Chuyển file qua mạng LAN
+
+Mở **More → Transfer File** trên cả hai PC, kết nối cùng mạng Wi-Fi/Ethernet. Trên máy nhận, nhấn **Tạo mã nhận file**; nhập một trong các IPv4 LAN, cổng hiển thị (mặc định `39815`) và mã tạm thời trên máy gửi, chọn file rồi nhấn **Gửi**. File được ghi vào `%LOCALAPPDATA%/PiperTTSStudio/received-files/`; có thể gửi nhiều file trong cùng phiên, tối đa 4 GiB/file và 16 GiB/phiên. Phiên tự hết hạn sau 10 phút kể từ lúc tạo; đang chuyển file thì phiên được giữ đến khi file hoàn tất. Chỉ mở cổng LAN trong phiên nhận. Nếu kết nối thất bại, kiểm tra Windows Firewall và cho phép cổng TCP trên mạng Private. Chuyển trực tiếp không qua cloud, nhưng dùng HTTP không mã hóa; chỉ sử dụng trên mạng riêng đáng tin cậy.
+
 ## Cài đặt trên PC mới
 
 1. Giải nén `TTS-Subtitles-Core.zip` vào một thư mục không bị hạn chế quyền ghi.

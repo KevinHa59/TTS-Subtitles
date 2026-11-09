@@ -107,6 +107,11 @@ import {
   getGpuExecutionSettings,
   saveGpuExecutionSettings,
 } from "./gpuExecutionSettings";
+import {
+  getFileTransferStatus,
+  startFileTransferSession,
+  stopFileTransferSession,
+} from "./fileTransferManager";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -4359,6 +4364,30 @@ const isLocalSubtitleTranslationRequest = (req: Request, res: Response, next: ()
   }
   next();
 };
+
+app.get("/api/file-transfer/status", isLocalSubtitleTranslationRequest, (_req: Request, res: Response) => {
+  try {
+    res.json({ success: true, status: getFileTransferStatus() });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+app.post("/api/file-transfer/session", isLocalSubtitleTranslationRequest, async (_req: Request, res: Response) => {
+  try {
+    res.json({ success: true, status: await startFileTransferSession() });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+app.delete("/api/file-transfer/session", isLocalSubtitleTranslationRequest, async (_req: Request, res: Response) => {
+  try {
+    res.json({ success: true, status: await stopFileTransferSession() });
+  } catch (error) {
+    res.status(409).json({ success: false, error: error instanceof Error ? error.message : String(error) });
+  }
+});
 
 app.get("/api/gpu-settings", isLocalSubtitleTranslationRequest, (_req: Request, res: Response) => {
   try {
