@@ -12,6 +12,7 @@ import {
   X,
 } from "lucide-react";
 import SetupModelDownloads from "./SetupModelDownloads";
+import GpuExecutionModePanel from "./GpuExecutionModePanel";
 
 type TranslationConfig = {
   selectedModel: string;
@@ -171,6 +172,8 @@ export default function SubtitleTranslationSetupModal({ open, onClose }: { open:
         <div className="space-y-4 overflow-y-auto p-4 sm:p-5">
           {error && <div role="alert" className="flex items-start gap-2 rounded-xl border border-rose-500/30 bg-rose-950/30 p-3 text-xs text-rose-200"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /><span className="whitespace-pre-wrap">{error}</span></div>}
           {notice && !error && <div className="flex items-center gap-2 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3 text-xs text-emerald-300"><CheckCircle2 className="h-4 w-4" />{notice}</div>}
+
+          <GpuExecutionModePanel />
 
           <section className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-950/35">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 px-4 py-3">

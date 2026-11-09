@@ -5,6 +5,7 @@ import { spawn, spawnSync, execSync } from "child_process";
 import https from "https";
 import http from "http";
 import AdmZip from "adm-zip";
+import { shouldUseGpu } from "./gpuExecutionSettings";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -282,7 +283,7 @@ export function getCpuWhisperCliPath(): string | null {
 }
 
 export function getWhisperCliPath(): string | null {
-  return getVulkanCliPath() || getCpuWhisperCliPath();
+  return (shouldUseGpu() ? getVulkanCliPath() : null) || getCpuWhisperCliPath();
 }
 
 export function getSystemToolsStatus() {

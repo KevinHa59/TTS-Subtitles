@@ -5,6 +5,7 @@ import https from "https";
 import { spawn, type ChildProcess } from "child_process";
 import { parseSubtitleTranslations } from "./src/utils/translationResponse";
 import { TranslationStreamParser } from "./src/utils/translationStreamParser";
+import { shouldUseGpu } from "./gpuExecutionSettings";
 
 const ROOT = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local"), "PiperTTSStudio", "subtitle-translation");
 const ENGINE_DIR = path.join(ROOT, "engine");
@@ -391,7 +392,7 @@ async function startSubtitleTranslationEngineInternal(): Promise<SubtitleTransla
     "--port", String(SERVER_PORT),
     "--ctx-size", "32768",
     "--parallel", "1",
-    "--n-gpu-layers", String(model.gpuLayers),
+    "--n-gpu-layers", String(shouldUseGpu() ? model.gpuLayers : 0),
     "--batch-size", "256",
     "--jinja",
   ], { cwd: path.dirname(executable), windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });

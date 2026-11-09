@@ -103,6 +103,10 @@ import {
   getSubtitleOcrInstallStatus,
   startSubtitleOcrInstall,
 } from "./subtitleOcrManager";
+import {
+  getGpuExecutionSettings,
+  saveGpuExecutionSettings,
+} from "./gpuExecutionSettings";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -4355,6 +4359,22 @@ const isLocalSubtitleTranslationRequest = (req: Request, res: Response, next: ()
   }
   next();
 };
+
+app.get("/api/gpu-settings", isLocalSubtitleTranslationRequest, (_req: Request, res: Response) => {
+  try {
+    res.json({ success: true, settings: getGpuExecutionSettings() });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+app.put("/api/gpu-settings", isLocalSubtitleTranslationRequest, (req: Request, res: Response) => {
+  try {
+    res.json({ success: true, settings: saveGpuExecutionSettings(req.body) });
+  } catch (error) {
+    res.status(400).json({ success: false, error: error instanceof Error ? error.message : String(error) });
+  }
+});
 
 app.get("/api/subtitle-translation/state", isLocalSubtitleTranslationRequest, (_req: Request, res: Response) => {
   res.json({ success: true, state: getSubtitleTranslationState() });

@@ -9,6 +9,7 @@ import {
   VideoDubbingSeparationTask,
 } from "./src/types/videoDubbing";
 import { VideoDubbingManager } from "./videoDubbingManager";
+import { getGpuExecutionSettings } from "./gpuExecutionSettings";
 
 const MODEL_NAME = "htdemucs";
 const MDX_MODEL_NAME = "UVR-MDX-NET-Inst_HQ_3.onnx";
@@ -181,6 +182,7 @@ export interface VideoDubbingSeparationOptions {
 export class VideoDubbingSeparationCoordinator {
   private readonly activeTasks = new Map<string, ActiveSeparation>();
   private availabilityPromise?: Promise<VideoDubbingSeparationAvailability>;
+  private availabilityMode?: ReturnType<typeof getGpuExecutionSettings>["mode"];
 
   constructor(
     private readonly manager: VideoDubbingManager,
@@ -192,6 +194,11 @@ export class VideoDubbingSeparationCoordinator {
   }
 
   getAvailability(): Promise<VideoDubbingSeparationAvailability> {
+    const mode = getGpuExecutionSettings().mode;
+    if (this.availabilityMode !== mode) {
+      this.availabilityMode = mode;
+      this.availabilityPromise = undefined;
+    }
     if (!this.availabilityPromise) {
       this.availabilityPromise = this.options.checkAvailability
         ? this.options.checkAvailability()
@@ -273,7 +280,10 @@ export class VideoDubbingSeparationCoordinator {
         mdx?: boolean;
         dml?: boolean;
       };
-      const requestedBackend = process.env.VIDEO_DUBBING_SEPARATION_BACKEND || "auto";
+      const gpuMode = getGpuExecutionSettings().mode;
+      const requestedBackend = gpuMode === "cpu"
+        ? "demucs"
+        : process.env.VIDEO_DUBBING_SEPARATION_BACKEND || "auto";
       const mdxReady = Boolean(result.mdx);
       const demucsReady = Boolean(result.demucs && result.torch && result.model);
       if (requestedBackend === "mdx" && mdxReady && demucsReady) {
@@ -309,10 +319,13 @@ export class VideoDubbingSeparationCoordinator {
           status: "ready",
           backend: "demucs",
           model: MODEL_NAME,
-          device: result.cuda ? "cuda" : "cpu",
+          device: gpuMode !== "cpu" && result.cuda ? "cuda" : "cpu",
           message: result.cuda
+            && gpuMode !== "cpu"
             ? "Demucs htdemucs sẵn sàng; sẽ sử dụng CUDA."
-            : "Demucs htdemucs sẵn sàng; sẽ chạy bằng CPU.",
+            : gpuMode === "cpu"
+              ? "Chế độ CPU đang bật; Demucs htdemucs sẽ chạy bằng CPU."
+              : "Demucs htdemucs sẵn sàng; sẽ chạy bằng CPU.",
         };
       }
       return {
