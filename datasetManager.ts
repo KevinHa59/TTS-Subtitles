@@ -3,6 +3,19 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { spawn, spawnSync, execSync } from "child_process";
 import { availableParallelism } from "node:os";
+import {
+  getCpuWhisperCliPath,
+  getWhisperBackend as getInstalledWhisperBackend,
+  getWhisperCliPath as getInstalledWhisperCliPath,
+} from "./systemToolsManager";
+import {
+  constrainWhisperSegmentsToAudio,
+  mergeShortWhisperSegments,
+  splitLongWhisperSegment,
+  WhisperClipSegment,
+  WhisperTranscriptionSegment,
+} from "./datasetTranscription";
+import { getPcmWavDurationMs, isValidPiperPcmWav } from "./datasetAudio";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -37,6 +50,12 @@ export interface DatasetChunkStatus {
   status: "pending" | "processing" | "completed" | "failed";
   progressPercent: number;
   clipsFound?: number;
+  segmentsRecognized?: number;
+  segmentsTooLong?: number;
+  segmentsTooShort?: number;
+  segmentsRejected?: number;
+  segmentsUnsplittable?: number;
+  diagnostic?: string;
   error?: string;
 }
 
@@ -56,28 +75,7 @@ if (!fs.existsSync(DATASETS_ROOT)) {
 
 // Locate whisper-cli executable (Cross-platform: Windows .exe and Linux/macOS)
 export function getWhisperCliPath(): string | null {
-  const isWin = process.platform === "win32";
-  const names = isWin
-    ? ["whisper-cli.exe", "main.exe", "whisper-cli", "main"]
-    : ["whisper-cli", "main", "whisper-cli.exe", "main.exe"];
-
-  const searchDirs = [
-    path.resolve(__dirname, "tools", "whisper.cpp", "build", "bin"),
-    path.resolve(__dirname, "tools", "whisper.cpp", "build", "bin", "Release"),
-    path.resolve(__dirname, "tools", "whisper.cpp", "bin"),
-    path.resolve(__dirname, "tools", "whisper.cpp"),
-    path.resolve(__dirname, "tools", "bin"),
-    path.resolve(__dirname, "tools"),
-  ];
-
-  for (const dir of searchDirs) {
-    for (const name of names) {
-      const full = path.resolve(dir, name);
-      if (fs.existsSync(full)) return full;
-    }
-  }
-
-  return null;
+  return getInstalledWhisperCliPath();
 }
 
 // Locate models for whisper.cpp
@@ -292,10 +290,21 @@ function runWhisper(
     const whisperProc = spawn(whisperCli, args, { stdio: ["ignore", "pipe", "pipe"] });
     let outputTail = "";
     let lastProgress = 0;
+    const reportedBackendLines = new Set<string>();
 
     const collectOutput = (chunk: Buffer) => {
       const output = chunk.toString();
       outputTail = `${outputTail}${output}`.slice(-400);
+
+      for (const line of output.split(/\r?\n/)) {
+        if (
+          /loaded .* backend|vulkan.*device|device.*vulkan|using device/i.test(line) &&
+          !reportedBackendLines.has(line.trim())
+        ) {
+          reportedBackendLines.add(line.trim());
+          console.info(`[OfflineDataset][Whisper.cpp] ${line.trim()}`);
+        }
+      }
 
       for (const match of output.matchAll(/(\d{1,3})%/g)) {
         const progressPercent = Number(match[1]);
@@ -328,7 +337,7 @@ export async function prepareOfflineDataset(
   originalFilename: string | string[],
   voiceName: string,
   whisperModelId: string = "small",
-  minDurationSec: number = 1.0,
+  minDurationSec: number = 3.0,
   maxDurationSec: number = 12.0,
   onProgress?: (progress: DatasetPreparationProgress) => void,
   ffmpegPath: string = process.env.FFMPEG_PATH || "ffmpeg",
@@ -339,6 +348,7 @@ export async function prepareOfflineDataset(
   if (!whisperCli) {
     throw new Error("Không tìm thấy bộ thực thi whisper-cli trên máy chủ.");
   }
+  const whisperBackend = getInstalledWhisperBackend(whisperCli);
 
   const modelsDir = path.resolve(__dirname, "tools", "whisper.cpp", "models");
   let modelFile = path.join(modelsDir, `ggml-${whisperModelId}.bin`);
@@ -385,6 +395,35 @@ export async function prepareOfflineDataset(
   fs.mkdirSync(datasetDir, { recursive: true });
   fs.mkdirSync(wavDir, { recursive: true });
   fs.mkdirSync(tempDir, { recursive: true });
+
+  if (existingInfo && Array.isArray(existingInfo.clips)) {
+    const validExistingClips = existingInfo.clips.filter((clip) =>
+      isValidPiperPcmWav(path.join(wavDir, clip.filename))
+    );
+    for (const clip of existingInfo.clips) {
+      if (!validExistingClips.includes(clip)) {
+        fs.rmSync(path.join(wavDir, clip.filename), { force: true });
+      }
+    }
+    existingInfo = {
+      ...existingInfo,
+      clips: validExistingClips,
+      totalClips: validExistingClips.length,
+      totalDurationSec: Math.round(
+        validExistingClips.reduce((sum, clip) => sum + (clip.durationSec || 0), 0) * 10
+      ) / 10,
+    };
+    fs.writeFileSync(
+      path.join(datasetDir, "metadata.csv"),
+      validExistingClips.map((clip) => `${clip.id}|${clip.text}`).join("\n"),
+      "utf-8"
+    );
+    fs.writeFileSync(
+      path.join(datasetDir, "info.json"),
+      JSON.stringify(existingInfo, null, 2),
+      "utf-8"
+    );
+  }
 
   try {
     const inputSources: (Buffer | string)[] = Array.isArray(audioSource) ? audioSource : [audioSource];
@@ -452,7 +491,10 @@ export async function prepareOfflineDataset(
     }
 
     const requestedConcurrency = Math.max(1, Math.min(8, Number(concurrency) || 2));
-    const effectiveConcurrency = Math.min(requestedConcurrency, allChunkJobs.length);
+    const effectiveConcurrency = Math.min(
+      whisperBackend === "vulkan" ? 1 : requestedConcurrency,
+      allChunkJobs.length,
+    );
     const totalCores = availableParallelism();
     const threadsPerJob = Math.max(1, Math.min(8, Math.floor(totalCores / effectiveConcurrency)));
 
@@ -482,6 +524,7 @@ export async function prepareOfflineDataset(
     });
 
     let completedChunks = 0;
+    let vulkanRuntimeFailed = false;
 
     const emitProgress = (message: string) => {
       const sumProgress = chunksStatus.reduce(
@@ -546,29 +589,54 @@ export async function prepareOfflineDataset(
           chunksStatus[currentIndex].error = "Lỗi chuyển đổi 22050Hz";
           throw new Error(`Không thể chuyển đổi đoạn ${chunkName} sang định dạng 22050Hz.`);
         }
+        const audioDurationMs = getPcmWavDurationMs(full22kWavPath);
+        if (audioDurationMs <= 0) {
+          chunksStatus[currentIndex].status = "failed";
+          chunksStatus[currentIndex].error = "Đoạn audio không có dữ liệu PCM hợp lệ";
+          throw new Error(`Đoạn ${chunkName} không có âm thanh PCM 22050Hz hợp lệ.`);
+        }
 
         // Run whisper.cpp with real-time percentage callback
-        await runWhisper(
-          whisperCli,
-          [
-            "-m", modelFile,
-            "-f", chunkJob.whisperWavPath,
-            "-l", "vi",
-            "-oj",
-            "-of", jsonOutPrefix,
-            "-t", String(threadsPerJob),
-            "-pp",
-            "--max-len", "0",
-          ],
-          (percent) => {
-            chunksStatus[currentIndex].progressPercent = Math.min(99, percent);
-            emitProgress(
-              `Đang phiên âm: ${completedChunks}/${allChunkJobs.length} đoạn xong (đoạn ${currentIndex + 1} đạt ${percent}%)...`
-            );
-          }
-        );
+        const useVulkanForChunk = whisperBackend === "vulkan" && !vulkanRuntimeFailed;
+        const cpuWhisperCli = whisperBackend === "vulkan" ? getCpuWhisperCliPath() : null;
+        const activeWhisperCli = useVulkanForChunk
+          ? whisperCli
+          : cpuWhisperCli || whisperCli;
+        const whisperArgs = [
+          "-m", modelFile,
+          "-f", chunkJob.whisperWavPath,
+          "-l", "vi",
+          "-ojf",
+          "-of", jsonOutPrefix,
+          "-t", String(threadsPerJob),
+          "-pp",
+          "--split-on-word",
+        ];
+        const onWhisperProgress = (percent: number) => {
+          chunksStatus[currentIndex].progressPercent = Math.min(99, percent);
+          emitProgress(
+            `Đang phiên âm: ${completedChunks}/${allChunkJobs.length} đoạn xong (đoạn ${currentIndex + 1} đạt ${percent}%)...`
+          );
+        };
+        if (useVulkanForChunk) {
+          whisperArgs.push("--device", "0");
+        }
 
         const jsonResultPath = `${jsonOutPrefix}.json`;
+        try {
+          await runWhisper(activeWhisperCli, whisperArgs, onWhisperProgress);
+        } catch (error) {
+          const cpuCli = useVulkanForChunk ? getCpuWhisperCliPath() : null;
+          if (!cpuCli || path.resolve(cpuCli) === path.resolve(whisperCli)) throw error;
+
+          vulkanRuntimeFailed = true;
+          const reason = error instanceof Error ? error.message : String(error);
+          console.warn(`[OfflineDataset] Vulkan Whisper thất bại; chuyển sang CPU: ${reason}`);
+          emitProgress(`GPU Vulkan gặp lỗi ở đoạn ${currentIndex + 1}; đang chạy lại đoạn này bằng CPU...`);
+          fs.rmSync(jsonResultPath, { force: true });
+          await runWhisper(cpuCli, whisperArgs.slice(0, -2), onWhisperProgress);
+        }
+
         if (!fs.existsSync(jsonResultPath)) {
           chunksStatus[currentIndex].status = "failed";
           chunksStatus[currentIndex].error = "Không có kết quả JSON";
@@ -585,25 +653,73 @@ export async function prepareOfflineDataset(
         }
 
         let clipsInThisChunk = 0;
-        for (const seg of whisperData.transcription || []) {
-          const cleanText = cleanPiperText(seg.text || "");
-          if (!cleanText || cleanText.length < 2) continue;
-
-          const fromMs = Number(seg.offsets?.from) || 0;
-          const toMs = Number(seg.offsets?.to) || 0;
-          const durationSec = (toMs - fromMs) / 1000;
-          if (durationSec < minDurationSec || durationSec > maxDurationSec || toMs <= fromMs) {
+        let segmentsTooLong = 0;
+        let segmentsTooShort = 0;
+        let segmentsRejected = 0;
+        let segmentsUnsplittable = 0;
+        let segmentsOutsideAudio = 0;
+        const candidatePieces: WhisperClipSegment[] = [];
+        const transcription = Array.isArray(whisperData.transcription) ? whisperData.transcription : [];
+        for (const seg of transcription) {
+          const pieces = splitLongWhisperSegment(
+            seg as WhisperTranscriptionSegment,
+            maxDurationSec,
+            minDurationSec,
+          );
+          if (!pieces) {
+            const segmentFromMs = Number(seg.offsets?.from);
+            const segmentToMs = Number(seg.offsets?.to);
+            if (
+              Number.isFinite(segmentFromMs) &&
+              Number.isFinite(segmentToMs) &&
+              segmentToMs - segmentFromMs > maxDurationSec * 1000
+            ) {
+              segmentsTooLong++;
+              segmentsUnsplittable++;
+            } else {
+              segmentsRejected++;
+            }
             continue;
           }
 
+          for (const piece of pieces) {
+            const cleanText = cleanPiperText(piece.text);
+            if (!cleanText || cleanText.length < 2) {
+              segmentsRejected++;
+              continue;
+            }
+            const durationSec = (piece.toMs - piece.fromMs) / 1000;
+            if (durationSec > maxDurationSec) {
+              segmentsTooLong++;
+              continue;
+            }
+            candidatePieces.push({ ...piece, text: cleanText });
+          }
+        }
+
+        const usablePieces = mergeShortWhisperSegments(
+          candidatePieces,
+          minDurationSec,
+          maxDurationSec,
+        );
+        segmentsTooShort = usablePieces.rejectedCount;
+        const boundedPieces = constrainWhisperSegmentsToAudio(
+          usablePieces.segments,
+          audioDurationMs,
+          minDurationSec,
+        );
+        segmentsOutsideAudio = boundedPieces.rejectedCount;
+        segmentsRejected += segmentsOutsideAudio;
+        for (const piece of boundedPieces.segments) {
+          const durationSec = (piece.toMs - piece.fromMs) / 1000;
           rawClips.push({
             fileIndex: chunkJob.fileIndex,
-            startMs: chunkJob.chunkStartMs + fromMs,
-            endMs: chunkJob.chunkStartMs + toMs,
-            durationSec: Math.round(durationSec * 10) / 10,
-            text: cleanText,
+            startMs: chunkJob.chunkStartMs + piece.fromMs,
+            endMs: chunkJob.chunkStartMs + piece.toMs,
+            durationSec: Math.round(durationSec * 1000) / 1000,
+            text: cleanPiperText(piece.text),
             full22kWavPath,
-            fromMs,
+            fromMs: piece.fromMs,
           });
           clipsInThisChunk++;
         }
@@ -613,6 +729,19 @@ export async function prepareOfflineDataset(
         chunksStatus[currentIndex].status = "completed";
         chunksStatus[currentIndex].progressPercent = 100;
         chunksStatus[currentIndex].clipsFound = clipsInThisChunk;
+        chunksStatus[currentIndex].segmentsRecognized = transcription.length;
+        chunksStatus[currentIndex].segmentsTooLong = segmentsTooLong;
+        chunksStatus[currentIndex].segmentsTooShort = segmentsTooShort;
+        chunksStatus[currentIndex].segmentsRejected = segmentsRejected;
+        chunksStatus[currentIndex].segmentsUnsplittable = segmentsUnsplittable;
+        if (clipsInThisChunk === 0) {
+          chunksStatus[currentIndex].diagnostic = transcription.length === 0
+            ? "Whisper không nhận diện được đoạn thoại nào trong chunk này."
+            : `Whisper nhận diện ${transcription.length} đoạn nhưng không tạo clip: ${segmentsTooLong} đoạn dài hơn ${maxDurationSec}s (${segmentsUnsplittable} đoạn thiếu timestamp từ để tách), ${segmentsTooShort} đoạn ngắn hơn ${minDurationSec}s, ${segmentsOutsideAudio} đoạn có timestamp vượt thời lượng audio, ${segmentsRejected - segmentsOutsideAudio} đoạn thiếu nội dung hoặc thời gian hợp lệ.`;
+        } else if (segmentsTooLong || segmentsTooShort || segmentsRejected) {
+          chunksStatus[currentIndex].diagnostic =
+            `Đã bỏ qua ${segmentsTooLong + segmentsTooShort + segmentsRejected} đoạn: ${segmentsTooLong} quá dài (${segmentsUnsplittable} đoạn không đủ timestamp để tách), ${segmentsTooShort} quá ngắn, ${segmentsOutsideAudio} đoạn có timestamp vượt thời lượng audio, ${segmentsRejected - segmentsOutsideAudio} đoạn thiếu nội dung/thời gian hợp lệ.`;
+        }
 
         emitProgress(
           `Đã hoàn tất đoạn ${currentIndex + 1}/${allChunkJobs.length} (${clipsInThisChunk} câu thoại).`
@@ -670,23 +799,36 @@ export async function prepareOfflineDataset(
           "-y", "-ss", (clipData.fromMs / 1000).toFixed(3),
           "-i", clipData.full22kWavPath,
           "-t", clipData.durationSec.toFixed(3),
+          "-ar", "22050",
+          "-ac", "1",
           "-c:a", "pcm_s16le",
           clipDestPath,
         ],
-        { stdio: "ignore" }
+        { stdio: "pipe" }
       );
 
-      if (sliceProc.status === 0 && fs.existsSync(clipDestPath)) {
-        newClips.push({
-          id: clipId,
-          filename: clipFilename,
-          text: clipData.text,
-          startMs: clipData.startMs,
-          endMs: clipData.endMs,
-          durationSec: clipData.durationSec,
-        });
-        clipIndex++;
+      if (sliceProc.status !== 0 || !fs.existsSync(clipDestPath)) {
+        const details = sliceProc.error?.message ||
+          sliceProc.stderr?.toString().trim() ||
+          `mã thoát ${sliceProc.status}`;
+        throw new Error(`Không thể trích xuất ${clipFilename}: ${details}`);
       }
+      if (!isValidPiperPcmWav(clipDestPath)) {
+        fs.rmSync(clipDestPath, { force: true });
+        throw new Error(
+          `FFmpeg không trích được dữ liệu âm thanh hợp lệ cho ${clipFilename}; dataset chưa được lưu clip rỗng.`,
+        );
+      }
+
+      newClips.push({
+        id: clipId,
+        filename: clipFilename,
+        text: clipData.text,
+        startMs: clipData.startMs,
+        endMs: clipData.endMs,
+        durationSec: clipData.durationSec,
+      });
+      clipIndex++;
 
       if ((idx + 1) % 10 === 0 || idx === rawClips.length - 1) {
         const sliceProgress = 82 + Math.floor(((idx + 1) / rawClips.length) * 15);
@@ -772,19 +914,57 @@ export function createDatasetZip(datasetId: string): string {
   const info = JSON.parse(fs.readFileSync(infoPath, "utf-8")) as DatasetInfo;
   const zipFilename = `${datasetId}_dataset.zip`;
   const zipPath = path.join(datasetDir, zipFilename);
+  const wavDir = path.join(datasetDir, "wav");
+  const validClips = info.clips.filter((clip) =>
+    isValidPiperPcmWav(path.join(wavDir, clip.filename))
+  );
+  const validFilenames = new Set(validClips.map((clip) => clip.filename));
+
+  if (validClips.length !== info.clips.length) {
+    for (const clip of info.clips) {
+      if (!validFilenames.has(clip.filename)) {
+        fs.rmSync(path.join(wavDir, clip.filename), { force: true });
+      }
+    }
+    info.clips = validClips;
+    info.totalClips = validClips.length;
+    info.totalDurationSec = Math.round(
+      validClips.reduce((sum, clip) => sum + (clip.durationSec || 0), 0) * 10
+    ) / 10;
+    fs.writeFileSync(infoPath, JSON.stringify(info, null, 2), "utf-8");
+  }
+
+  const metadataPath = path.join(datasetDir, "metadata.csv");
+  if (fs.existsSync(metadataPath)) {
+    const validMetadataLines = fs.readFileSync(metadataPath, "utf-8")
+      .split(/\r?\n/)
+      .filter((line) => {
+        const clipId = line.split("|", 1)[0]?.trim();
+        return Boolean(clipId && validFilenames.has(`${clipId}.wav`));
+      });
+    fs.writeFileSync(metadataPath, validMetadataLines.join("\n"), "utf-8");
+  }
+
+  const hasInvalidClips = info.clips.some((clip) => {
+    const wavPath = path.join(wavDir, clip.filename);
+    return !isValidPiperPcmWav(wavPath);
+  });
 
   // If already zipped and fresh, reuse
-  if (fs.existsSync(zipPath)) {
+  if (fs.existsSync(zipPath) && !hasInvalidClips) {
     const zipStat = fs.statSync(zipPath);
     const metaStat = fs.statSync(path.join(datasetDir, "metadata.csv"));
-    if (zipStat.mtimeMs > metaStat.mtimeMs) {
+    if (
+      zipStat.mtimeMs > metaStat.mtimeMs &&
+      zipStat.mtimeMs > fs.statSync(infoPath).mtimeMs
+    ) {
       return zipPath;
     }
   }
 
-  // Use python3 zipfile to pack dataset/wav and dataset/metadata.csv
+  // Filter invalid WAV clips in legacy datasets before making the training archive.
   const pyCode = [
-    "import os, sys, zipfile",
+    "import os, sys, wave, zipfile, struct",
     "dataset_dir, zip_path = sys.argv[1:3]",
     "metadata_path = os.path.join(dataset_dir, 'metadata.csv')",
     "wav_dir = os.path.join(dataset_dir, 'wav')",
@@ -792,11 +972,32 @@ export function createDatasetZip(datasetId: string): string {
     "    raise FileNotFoundError(f'Missing dataset metadata: {metadata_path}')",
     "if not os.path.isdir(wav_dir):",
     "    raise FileNotFoundError(f'Missing dataset audio directory: {wav_dir}')",
-    "wav_files = sorted(name for name in os.listdir(wav_dir) if name.lower().endswith('.wav'))",
+    "rows = []",
+    "wav_files = []",
+    "with open(metadata_path, 'r', encoding='utf-8-sig') as source:",
+    "    for line in source:",
+    "        row = line.rstrip('\\r\\n')",
+    "        if not row or '|' not in row:",
+    "            continue",
+    "        clip_id = row.split('|', 1)[0].strip()",
+    "        name = clip_id + '.wav'",
+    "        wav_path = os.path.join(wav_dir, name)",
+    "        try:",
+    "            with wave.open(wav_path, 'rb') as audio:",
+    "                nframes = audio.getnframes()",
+    "                base_valid = (nframes > 0 and audio.getframerate() == 22050 and audio.getnchannels() == 1 and audio.getsampwidth() == 2)",
+    "                pcm = audio.readframes(nframes) if base_valid else b''",
+    "                has_audio = len(pcm) >= 2 and any(sample != 0 for sample in struct.unpack('<' + 'h' * (len(pcm) // 2), pcm[:len(pcm) // 2 * 2]))",
+    "                valid = base_valid and has_audio",
+    "        except (OSError, EOFError, wave.Error):",
+    "            valid = False",
+    "        if valid:",
+    "            rows.append(row)",
+    "            wav_files.append(name)",
     "if not wav_files:",
-    "    raise ValueError('Dataset does not contain any WAV audio clips')",
+    "    raise ValueError('Dataset does not contain any valid Piper WAV audio clips')",
     "with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as archive:",
-    "    archive.write(metadata_path, 'metadata.csv')",
+    "    archive.writestr('metadata.csv', '\\n'.join(rows))",
     "    for name in wav_files:",
     "        archive.write(os.path.join(wav_dir, name), os.path.join('wav', name))",
   ].join("\n");

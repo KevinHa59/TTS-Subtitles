@@ -14,12 +14,18 @@ bun.lock
 # Heavy compiled binaries & external repositories (Initialized on-demand directly in system)
 tools/
 tools/**/*
+!tools/
+!tools/subtitle-ocr/
+!tools/subtitle-ocr/worker.py
 
 # Dynamic runtime storage & datasets
 datasets_storage/
 jobs_storage/
 stories_storage/
 bgm_storage/
+join_audio_storage/
+join_split_video_storage/
+video_dubbing_storage/
 piper_workspace/
 
 # Model checkpoints & heavy binaries

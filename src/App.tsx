@@ -63,6 +63,8 @@ import {
   Menu,
   Zap,
   Scissors,
+  Film,
+  Captions,
 } from "lucide-react";
 
 import {
@@ -92,7 +94,15 @@ import StorytellingTab from "./components/StorytellingTab";
 import BgmGeneratorTab from "./components/BgmGeneratorTab";
 import AudioCleanupModal from "./components/AudioCleanupModal";
 import VoiceClonePage from "./components/VoiceClonePage";
+import VideoDubbingTab from "./components/VideoDubbingTab";
+import SubtitleOcrPage from "./components/SubtitleOcrPage";
+import SubtitleEditorPage from "./components/SubtitleEditorPage";
+import SrtFromTextPage from "./components/SrtFromTextPage";
+import JoinSplitVideoPage from "./components/JoinSplitVideoPage";
+import SubtitleTranslationSetupModal from "./components/SubtitleTranslationSetupModal";
 import { copyAudioToClipboard } from "./utils/clipboardAudio";
+
+const VoiceEffectsPage = React.lazy(() => import("./components/VoiceEffectsPage"));
 
 export interface ProjectPreset {
   id: string;
@@ -113,6 +123,19 @@ export interface ProjectPreset {
   soundOnlyUnfocused?: boolean;
   customPronunciationRules?: PronunciationRule[];
 }
+
+type AppTab =
+  | "subtitles"
+  | "single"
+  | "story"
+  | "bgm"
+  | "voice-clone"
+  | "video-dubbing"
+  | "subtitle-ocr"
+  | "subtitle-editor"
+  | "srt-from-text"
+  | "join-split-video"
+  | "voice-effects";
 
 const DEFAULT_PRESETS: ProjectPreset[] = [
   {
@@ -155,10 +178,15 @@ interface VoiceOption {
 }
 
 export default function App() {
-  // Navigation: 'subtitles' (Phụ đề Timeline) | 'single' (Đọc văn bản đơn) | 'story' (Kể Truyện) | 'bgm' (Tạo Nhạc Nền) | 'voice-clone' (Clone Giọng)
-  const getInitialTab = (): "subtitles" | "single" | "story" | "bgm" | "voice-clone" => {
+  const getInitialTab = (): AppTab => {
     if (typeof window !== "undefined") {
       const path = window.location.pathname;
+      if (path === "/video-dubbing") return "video-dubbing";
+      if (path === "/subtitle-ocr") return "subtitle-ocr";
+      if (path === "/subtitle-editor") return "subtitle-editor";
+      if (path === "/srt-from-text") return "srt-from-text";
+      if (path === "/join-split-video") return "join-split-video";
+      if (path === "/voice-effects") return "voice-effects";
       if (path === "/voice-clone") return "voice-clone";
       if (path === "/story") return "story";
       if (path === "/bgm") return "bgm";
@@ -167,17 +195,29 @@ export default function App() {
     return "subtitles";
   };
 
-  const [activeTab, setActiveTab] = useState<
-    "subtitles" | "single" | "story" | "bgm" | "voice-clone"
-  >(getInitialTab);
+  const [activeTab, setActiveTab] = useState<AppTab>(getInitialTab);
   const [showAudioCleanupModal, setShowAudioCleanupModal] = useState<boolean>(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState<boolean>(false);
+  const [moreMenuOpen, setMoreMenuOpen] = useState<boolean>(false);
+  const headerRef = useRef<HTMLElement>(null);
 
-  const handleNavigateTab = (tab: "subtitles" | "single" | "story" | "bgm" | "voice-clone") => {
+  const handleNavigateTab = (tab: AppTab) => {
     setActiveTab(tab);
     if (typeof window !== "undefined") {
       const path =
-        tab === "voice-clone"
+        tab === "subtitle-ocr"
+          ? "/subtitle-ocr"
+          : tab === "subtitle-editor"
+          ? "/subtitle-editor"
+          : tab === "srt-from-text"
+          ? "/srt-from-text"
+          : tab === "join-split-video"
+          ? "/join-split-video"
+          : tab === "voice-effects"
+          ? "/voice-effects"
+          : tab === "video-dubbing"
+          ? "/video-dubbing"
+          : tab === "voice-clone"
           ? "/voice-clone"
           : tab === "story"
           ? "/story"
@@ -195,7 +235,13 @@ export default function App() {
   useEffect(() => {
     const handlePopState = () => {
       const path = window.location.pathname;
-      if (path === "/voice-clone") setActiveTab("voice-clone");
+      if (path === "/subtitle-ocr") setActiveTab("subtitle-ocr");
+      else if (path === "/subtitle-editor") setActiveTab("subtitle-editor");
+      else if (path === "/srt-from-text") setActiveTab("srt-from-text");
+      else if (path === "/join-split-video") setActiveTab("join-split-video");
+      else if (path === "/voice-effects") setActiveTab("voice-effects");
+      else if (path === "/video-dubbing") setActiveTab("video-dubbing");
+      else if (path === "/voice-clone") setActiveTab("voice-clone");
       else if (path === "/story") setActiveTab("story");
       else if (path === "/bgm") setActiveTab("bgm");
       else if (path === "/single") setActiveTab("single");
@@ -203,6 +249,23 @@ export default function App() {
     };
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
+
+  useEffect(() => {
+    const handlePointerDown = (event: MouseEvent) => {
+      if (headerRef.current && !headerRef.current.contains(event.target as Node)) {
+        setMoreMenuOpen(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMoreMenuOpen(false);
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
   }, []);
 
   // Voices
@@ -372,6 +435,7 @@ export default function App() {
 
   // Modal API code
   const [showApiModal, setShowApiModal] = useState<boolean>(false);
+  const [showSetupModal, setShowSetupModal] = useState<boolean>(false);
   const [copiedCode, setCopiedCode] = useState<boolean>(false);
 
   // Clipboard Audio states
@@ -1417,6 +1481,11 @@ export default function App() {
   useEffect(() => {
     let dragCounter = 0;
     const handleWindowDragEnter = (e: DragEvent) => {
+      if (activeTab !== "subtitles") {
+        dragCounter = 0;
+        setIsWindowDragging(false);
+        return;
+      }
       e.preventDefault();
       dragCounter++;
       if (e.dataTransfer?.types?.includes("Files")) {
@@ -1424,12 +1493,17 @@ export default function App() {
       }
     };
     const handleWindowDragOver = (e: DragEvent) => {
+      if (activeTab !== "subtitles") {
+        if (activeTab === "video-dubbing") e.preventDefault();
+        return;
+      }
       e.preventDefault();
       if (e.dataTransfer) {
         e.dataTransfer.dropEffect = "copy";
       }
     };
     const handleWindowDragLeave = (e: DragEvent) => {
+      if (activeTab !== "subtitles") return;
       e.preventDefault();
       dragCounter--;
       if (dragCounter <= 0) {
@@ -1441,6 +1515,7 @@ export default function App() {
       e.preventDefault();
       dragCounter = 0;
       setIsWindowDragging(false);
+      if (activeTab !== "subtitles") return;
       const files = e.dataTransfer?.files;
       if (files && files.length > 0) {
         processSubtitleFile(files[0]);
@@ -1457,7 +1532,7 @@ export default function App() {
       window.removeEventListener("dragleave", handleWindowDragLeave);
       window.removeEventListener("drop", handleWindowDrop);
     };
-  }, []);
+  }, [activeTab]);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -1658,7 +1733,7 @@ export default function App() {
       <audio ref={singleAudioRef} />
 
       {/* Header */}
-      <header className="border-b border-slate-800/80 bg-slate-900/80 backdrop-blur sticky top-0 z-40 w-full max-w-full">
+      <header ref={headerRef} className="relative border-b border-slate-800/80 bg-slate-900/80 backdrop-blur sticky top-0 z-40 w-full max-w-full">
         <div className="w-full px-3 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-2 sm:gap-4 max-w-full">
           {/* Logo & Brand */}
           <div className="flex items-center gap-2.5 sm:gap-3 shrink-0">
@@ -1680,6 +1755,11 @@ export default function App() {
                   {activeTab === "story" && "Kể Truyện"}
                   {activeTab === "bgm" && "Tạo Nhạc Nền"}
                   {activeTab === "voice-clone" && "Clone Giọng"}
+                  {activeTab === "video-dubbing" && "Video Dubbing"}
+                  {activeTab === "subtitle-ocr" && "OCR Phụ Đề"}
+                  {activeTab === "subtitle-editor" && "Dịch & Sửa SRT"}
+                  {activeTab === "join-split-video" && "Join / Split Video"}
+                  {activeTab === "voice-effects" && "Voice Effects"}
                 </span>
               </div>
               <p className="text-xs text-slate-400 hidden xl:block">
@@ -1702,6 +1782,42 @@ export default function App() {
                 }`}
               >
                 Đồng Bộ Phụ Đề (SRT)
+              </button>
+              <button
+                type="button"
+                onClick={() => handleNavigateTab("video-dubbing")}
+                className={`px-3 py-1.5 rounded-lg font-medium transition-all flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
+                  activeTab === "video-dubbing"
+                    ? "bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/20"
+                    : "text-slate-400 hover:text-white"
+                }`}
+              >
+                <Film className="w-3.5 h-3.5" />
+                <span>Video Dubbing</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleNavigateTab("subtitle-ocr")}
+                className={`px-3 py-1.5 rounded-lg font-medium transition-all flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
+                  activeTab === "subtitle-ocr"
+                    ? "bg-cyan-400 text-slate-950 font-bold shadow-md shadow-cyan-500/20"
+                    : "text-slate-400 hover:text-white"
+                }`}
+              >
+                <Captions className="w-3.5 h-3.5" />
+                <span>OCR Phụ Đề</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleNavigateTab("subtitle-editor")}
+                className={`px-3 py-1.5 rounded-lg font-medium transition-all flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
+                  activeTab === "subtitle-editor"
+                    ? "bg-violet-400 text-slate-950 font-bold shadow-md shadow-violet-500/20"
+                    : "text-slate-400 hover:text-white"
+                }`}
+              >
+                <Captions className="w-3.5 h-3.5" />
+                <span>Dịch & Sửa SRT</span>
               </button>
               <button
                 type="button"
@@ -1751,6 +1867,20 @@ export default function App() {
                 <Sparkles className="w-3.5 h-3.5" />
                 <span>Clone Giọng (Colab)</span>
               </button>
+              <button
+                type="button"
+                onClick={() => setMoreMenuOpen((open) => !open)}
+                aria-expanded={moreMenuOpen}
+                aria-haspopup="menu"
+                className={`px-3 py-1.5 rounded-lg font-medium transition-all flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
+                  moreMenuOpen || activeTab === "voice-effects" || activeTab === "srt-from-text" || activeTab === "join-split-video"
+                    ? "bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/20"
+                    : "text-slate-400 hover:text-white"
+                }`}
+              >
+                <span>More...</span>
+                <ChevronDown className={`h-3.5 w-3.5 transition-transform ${moreMenuOpen ? "rotate-180" : ""}`} />
+              </button>
             </nav>
 
             {/* Nút Dọn Dẹp Audio trên Header */}
@@ -1762,6 +1892,15 @@ export default function App() {
             >
               <Trash2 className="w-3.5 h-3.5 text-rose-400" />
               <span>Dọn Dẹp Audio</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setShowSetupModal(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-amber-200 hover:text-white bg-amber-500/10 hover:bg-amber-500/20 rounded-xl transition-all border border-amber-500/30 shrink-0 whitespace-nowrap"
+            >
+              <Settings className="w-3.5 h-3.5 text-amber-300" />
+              <span>Setup</span>
             </button>
 
             {/* Mã Nguồn Button */}
@@ -1801,6 +1940,28 @@ export default function App() {
                 <Menu className="w-5 h-5 text-slate-200" />
               )}
             </button>
+            <button
+              type="button"
+              onClick={() => {
+              handleNavigateTab("voice-effects");
+              setMobileMenuOpen(false);
+              }}
+              className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl font-medium text-sm transition-all ${
+              activeTab === "voice-effects"
+                ? "bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/20"
+                : "bg-slate-950/60 text-slate-300 hover:text-white hover:bg-slate-800/60 border border-slate-800/70"
+              }`}
+            >
+              <div className="flex items-center gap-2.5">
+              <Sparkles className={`w-4 h-4 ${activeTab === "voice-effects" ? "text-slate-950" : "text-amber-400"}`} />
+              <span>Voice Effects</span>
+              </div>
+              {activeTab === "voice-effects" && (
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-950/20 text-slate-950">
+                Đang chọn
+              </span>
+              )}
+            </button>
           </div>
         </div>
 
@@ -1835,6 +1996,75 @@ export default function App() {
                       <span>Đồng Bộ Phụ Đề (SRT)</span>
                     </div>
                     {activeTab === "subtitles" && (
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-950/20 text-slate-950">
+                        Đang chọn
+                      </span>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      handleNavigateTab("video-dubbing");
+                      setMobileMenuOpen(false);
+                    }}
+                    className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl font-medium text-sm transition-all ${
+                      activeTab === "video-dubbing"
+                        ? "bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/20"
+                        : "bg-slate-950/60 text-slate-300 hover:text-white hover:bg-slate-800/60 border border-slate-800/70"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <Film className={`w-4 h-4 ${activeTab === "video-dubbing" ? "text-slate-950" : "text-amber-400"}`} />
+                      <span>Video Dubbing</span>
+                    </div>
+                    {activeTab === "video-dubbing" && (
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-950/20 text-slate-950">
+                        Đang chọn
+                      </span>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      handleNavigateTab("subtitle-ocr");
+                      setMobileMenuOpen(false);
+                    }}
+                    className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl font-medium text-sm transition-all ${
+                      activeTab === "subtitle-ocr"
+                        ? "bg-cyan-400 text-slate-950 font-bold shadow-md shadow-cyan-500/20"
+                        : "bg-slate-950/60 text-slate-300 hover:text-white hover:bg-slate-800/60 border border-slate-800/70"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <Captions className={`w-4 h-4 ${activeTab === "subtitle-ocr" ? "text-slate-950" : "text-cyan-300"}`} />
+                      <span>Trích xuất phụ đề cứng</span>
+                    </div>
+                    {activeTab === "subtitle-ocr" && (
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-950/20 text-slate-950">
+                        Đang chọn
+                      </span>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      handleNavigateTab("subtitle-editor");
+                      setMobileMenuOpen(false);
+                    }}
+                    className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl font-medium text-sm transition-all ${
+                      activeTab === "subtitle-editor"
+                        ? "bg-violet-400 text-slate-950 font-bold shadow-md shadow-violet-500/20"
+                        : "bg-slate-950/60 text-slate-300 hover:text-white hover:bg-slate-800/60 border border-slate-800/70"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <Captions className={`w-4 h-4 ${activeTab === "subtitle-editor" ? "text-slate-950" : "text-violet-300"}`} />
+                      <span>Dịch & sửa phụ đề</span>
+                    </div>
+                    {activeTab === "subtitle-editor" && (
                       <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-950/20 text-slate-950">
                         Đang chọn
                       </span>
@@ -1956,6 +2186,18 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => {
+                      setShowSetupModal(true);
+                      setMobileMenuOpen(false);
+                    }}
+                    className="flex items-center justify-center gap-2 px-3 py-2.5 text-xs font-semibold text-amber-200 bg-amber-500/10 hover:bg-amber-500/20 rounded-xl border border-amber-500/30 transition-colors"
+                  >
+                    <Settings className="w-4 h-4 text-amber-300" />
+                    <span>Setup</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
                       setShowApiModal(true);
                       setMobileMenuOpen(false);
                     }}
@@ -1969,10 +2211,80 @@ export default function App() {
             </div>
           </>
         )}
+        {moreMenuOpen && (
+          <div
+            role="menu"
+            className="absolute right-4 top-full z-50 mt-2 w-64 rounded-xl border border-slate-700 bg-slate-900/98 p-2 shadow-2xl shadow-black/40 backdrop-blur-xl"
+          >
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                handleNavigateTab("voice-effects");
+                setMoreMenuOpen(false);
+              }}
+              className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm font-medium transition-colors ${
+                activeTab === "voice-effects"
+                  ? "bg-amber-500 text-slate-950"
+                  : "text-slate-200 hover:bg-slate-800 hover:text-white"
+              }`}
+            >
+              <Sparkles className="h-4 w-4" />
+              <span>
+                Voice Effects
+                <span className={`mt-0.5 block text-xs ${activeTab === "voice-effects" ? "text-slate-800" : "text-slate-500"}`}>
+                  Tạo và lưu preset giọng nói
+                </span>
+              </span>
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                handleNavigateTab("srt-from-text");
+                setMoreMenuOpen(false);
+              }}
+              className={`mt-1 flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm font-medium transition-colors ${
+                activeTab === "srt-from-text"
+                  ? "bg-amber-500 text-slate-950"
+                  : "text-slate-200 hover:bg-slate-800 hover:text-white"
+              }`}
+            >
+              <Captions className="h-4 w-4" />
+              <span>
+                SRT from Text
+                <span className={`mt-0.5 block text-xs ${activeTab === "srt-from-text" ? "text-slate-800" : "text-slate-500"}`}>
+                  Tách văn bản thành nhiều file SRT
+                </span>
+              </span>
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                handleNavigateTab("join-split-video");
+                setMoreMenuOpen(false);
+              }}
+              className={`mt-1 flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm font-medium transition-colors ${
+                activeTab === "join-split-video"
+                  ? "bg-amber-500 text-slate-950"
+                  : "text-slate-200 hover:bg-slate-800 hover:text-white"
+              }`}
+            >
+              <Scissors className="h-4 w-4" />
+              <span>
+                join-split-video
+                <span className={`mt-0.5 block text-xs ${activeTab === "join-split-video" ? "text-slate-800" : "text-slate-500"}`}>
+                  Nối, cắt và xuất video
+                </span>
+              </span>
+            </button>
+          </div>
+        )}
       </header>
 
       {/* Main Container */}
-      <main className="flex-1 max-w-[1680px] w-full mx-auto px-3 sm:px-6 py-6 pb-36 sm:pb-44 space-y-6">
+      <main className={`w-full mx-auto ${activeTab === "voice-effects" || activeTab === "join-split-video" ? "flex-none h-[calc(100dvh-4.1rem)] min-h-0 overflow-hidden py-0 pb-0 space-y-0 max-w-none px-0" : `flex-1 py-6 pb-36 sm:pb-44 space-y-6 ${activeTab === "video-dubbing" || activeTab === "subtitle-ocr" || activeTab === "subtitle-editor" ? "max-w-none px-0" : "max-w-[1680px] px-3 sm:px-6"}`}`}>
         {/* ========================================================= */}
         {/* TAB 1: SUBTITLE TIMELINE SYNCHRONIZATION STUDIO */}
         {/* ========================================================= */}
@@ -4168,6 +4480,20 @@ export default function App() {
         {activeTab === "voice-clone" && (
           <VoiceClonePage onVoiceInstalled={() => loadVoices()} />
         )}
+        {activeTab === "subtitle-ocr" && <SubtitleOcrPage onOpenSetup={() => setShowSetupModal(true)} />}
+        {activeTab === "subtitle-editor" && <SubtitleEditorPage onOpenSetup={() => setShowSetupModal(true)} />}
+        {activeTab === "srt-from-text" && <SrtFromTextPage />}
+        {activeTab === "join-split-video" && <JoinSplitVideoPage />}
+        {activeTab === "voice-effects" && (
+          <React.Suspense
+            fallback={<div className="p-8 text-center text-sm text-slate-400">Đang tải trang Voice Effects...</div>}
+          >
+            <VoiceEffectsPage />
+          </React.Suspense>
+        )}
+        <div className={activeTab === "video-dubbing" ? "" : "hidden"}>
+          <VideoDubbingTab />
+        </div>
       </main>
 
       {/* ========================================================= */}
@@ -5013,6 +5339,8 @@ const { audio, sampleRate } = await tts.synthesize("Xin chào! Đây là Piper T
         </div>
       )}
 
+      <SubtitleTranslationSetupModal open={showSetupModal} onClose={() => setShowSetupModal(false)} />
+
       {/* ========================================================= */}
       {/* FLOATING AI STUDIO COMPLETION PANEL (Requirement 3)       */}
       {/* Xuất hiện khi hoàn tất xử lý phụ đề                       */}
@@ -5341,7 +5669,7 @@ const { audio, sampleRate } = await tts.synthesize("Xin chào! Đây là Piper T
       )}
 
       {/* Footer */}
-      <footer className="border-t border-slate-900 py-6 mt-12 mb-20 bg-slate-950/80 text-xs text-slate-400">
+      <footer className={`${activeTab === "voice-effects" ? "hidden" : "border-t border-slate-900 py-6 mt-12 mb-20 bg-slate-950/80 text-xs text-slate-400"}`}>
         <div className="max-w-7xl mx-auto px-4 sm:px-6 flex flex-col sm:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-2">
             <span>Piper TTS Studio</span>
@@ -5363,7 +5691,7 @@ const { audio, sampleRate } = await tts.synthesize("Xin chào! Đây là Piper T
       {/* FULL-SCREEN DRAG & DROP OVERLAY (Requirement 1)            */}
       {/* Kéo thả phụ đề vào bất kỳ đâu trên màn hình               */}
       {/* ========================================================= */}
-      {isWindowDragging && (
+      {activeTab === "subtitles" && isWindowDragging && (
         <div
           onDragOver={(e) => {
             e.preventDefault();

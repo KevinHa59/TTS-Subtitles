@@ -1,5 +1,30 @@
 @import "tailwindcss";
 
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(71 85 105 / 0.9) rgb(15 23 42 / 0.75);
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  border-radius: 9999px;
+  background: rgb(15 23 42 / 0.75);
+}
+
+*::-webkit-scrollbar-thumb {
+  border: 2px solid rgb(15 23 42 / 0.75);
+  border-radius: 9999px;
+  background: rgb(71 85 105 / 0.9);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: rgb(34 211 238 / 0.8);
+}
+
 @keyframes subtitleFade {
   0% {
     opacity: 0;
