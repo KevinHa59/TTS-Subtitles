@@ -109,6 +109,8 @@ import {
 } from "./gpuExecutionSettings";
 import {
   getFileTransferStatus,
+  respondToFileTransferRequest,
+  setReceivedFilesDirectory,
   startFileTransferSession,
   stopFileTransferSession,
 } from "./fileTransferManager";
@@ -4373,11 +4375,30 @@ app.get("/api/file-transfer/status", isLocalSubtitleTranslationRequest, (_req: R
   }
 });
 
-app.post("/api/file-transfer/session", isLocalSubtitleTranslationRequest, async (_req: Request, res: Response) => {
+app.post("/api/file-transfer/session", isLocalSubtitleTranslationRequest, async (req: Request, res: Response) => {
   try {
-    res.json({ success: true, status: await startFileTransferSession() });
+    res.json({ success: true, status: await startFileTransferSession(req.body?.requiresApproval === true) });
   } catch (error) {
     res.status(500).json({ success: false, error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+app.put("/api/file-transfer/directory", isLocalSubtitleTranslationRequest, (req: Request, res: Response) => {
+  try {
+    res.json({ success: true, status: setReceivedFilesDirectory(req.body?.directory) });
+  } catch (error) {
+    res.status(400).json({ success: false, error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+app.put("/api/file-transfer/requests/:id", isLocalSubtitleTranslationRequest, (req: Request, res: Response) => {
+  if (typeof req.body?.approved !== "boolean") {
+    return res.status(400).json({ success: false, error: "Thiếu trạng thái chấp thuận hợp lệ." });
+  }
+  try {
+    res.json({ success: true, status: respondToFileTransferRequest(req.params.id, req.body.approved) });
+  } catch (error) {
+    res.status(409).json({ success: false, error: error instanceof Error ? error.message : String(error) });
   }
 });
 

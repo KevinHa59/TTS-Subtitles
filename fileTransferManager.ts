@@ -12,11 +12,13 @@ const SESSION_TTL_MS = 10 * 60 * 1000;
 const MAX_FILE_BYTES = 4 * 1024 ** 3;
 const MAX_SESSION_BYTES = 16 * 1024 ** 3;
 const MAX_FAILED_CODES = 10;
-const RECEIVE_DIRECTORY = path.join(
+const APP_DATA_DIRECTORY = path.join(
   process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local"),
   "PiperTTSStudio",
-  "received-files",
 );
+const SETTINGS_FILE = path.join(APP_DATA_DIRECTORY, "file-transfer.json");
+const DEFAULT_RECEIVE_DIRECTORY = path.join(APP_DATA_DIRECTORY, "received-files");
+const APPROVAL_TTL_MS = 2 * 60 * 1000;
 const CODE_CHARACTERS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
 interface ReceivedFile {
@@ -26,12 +28,21 @@ interface ReceivedFile {
 }
 
 interface TransferSession {
-  code: string;
+  code: string | null;
+  requiresApproval: boolean;
   expiresAt: number;
   server: Server;
   sockets: Set<import("net").Socket>;
   failedCodes: number;
   activeFile: { name: string; receivedBytes: number; totalBytes: number } | null;
+  approvalRequest: {
+    id: string;
+    name: string;
+    totalBytes: number;
+    remoteAddress: string;
+    expiresAt: number;
+    status: "pending" | "approved" | "rejected" | "expired";
+  } | null;
   receivedBytes: number;
   receivedFiles: ReceivedFile[];
 }
@@ -39,13 +50,36 @@ interface TransferSession {
 export interface FileTransferStatus {
   active: boolean;
   code?: string;
+  requiresApproval: boolean;
   expiresAt?: string;
   port: number;
   addresses: string[];
   receiveDirectory: string;
   activeFile?: TransferSession["activeFile"];
+  approvalRequest?: {
+    id: string;
+    name: string;
+    totalBytes: number;
+    remoteAddress: string;
+    expiresAt: string;
+  } | null;
   receivedFiles: ReceivedFile[];
 }
+
+function loadReceiveDirectory(): string {
+  try {
+    const saved = JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf8")) as { receiveDirectory?: unknown };
+    if (typeof saved.receiveDirectory === "string" && path.isAbsolute(saved.receiveDirectory)) {
+      return path.resolve(saved.receiveDirectory);
+    }
+    return DEFAULT_RECEIVE_DIRECTORY;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return DEFAULT_RECEIVE_DIRECTORY;
+    throw new Error(`Không đọc được cài đặt thư mục nhận file: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+let receiveDirectory = loadReceiveDirectory();
 
 function isLocalAppOrigin(origin: string | undefined): boolean {
   if (!origin) return false;
@@ -95,10 +129,10 @@ function sanitizeFileName(input: string): string {
 function getUniqueDestination(fileName: string): string {
   const safeName = sanitizeFileName(fileName);
   const parsed = path.parse(safeName);
-  let destination = path.join(RECEIVE_DIRECTORY, safeName);
+  let destination = path.join(receiveDirectory, safeName);
   let suffix = 1;
   while (fs.existsSync(destination)) {
-    destination = path.join(RECEIVE_DIRECTORY, `${parsed.name} (${suffix++})${parsed.ext}`);
+    destination = path.join(receiveDirectory, `${parsed.name} (${suffix++})${parsed.ext}`);
   }
   return destination;
 }
@@ -106,14 +140,24 @@ function getUniqueDestination(fileName: string): string {
 function statusOf(session: TransferSession | null): FileTransferStatus {
   return {
     active: Boolean(session),
+    requiresApproval: session?.requiresApproval ?? false,
     ...(session ? {
-      code: session.code,
+      ...(session.code ? { code: session.code } : {}),
       expiresAt: new Date(session.expiresAt).toISOString(),
       activeFile: session.activeFile && { ...session.activeFile },
+      approvalRequest: session.approvalRequest?.status === "pending"
+        ? {
+          id: session.approvalRequest.id,
+          name: session.approvalRequest.name,
+          totalBytes: session.approvalRequest.totalBytes,
+          remoteAddress: session.approvalRequest.remoteAddress,
+          expiresAt: new Date(session.approvalRequest.expiresAt).toISOString(),
+        }
+        : null,
     } : {}),
     port: PORT,
     addresses: session ? getLanAddresses() : [],
-    receiveDirectory: RECEIVE_DIRECTORY,
+    receiveDirectory,
     receivedFiles: session ? [...session.receivedFiles] : lastReceivedFiles,
   };
 }
@@ -152,7 +196,7 @@ function sendJson(res: Response, status: number, body: Record<string, unknown>) 
   res.status(status).json(body);
 }
 
-export async function startFileTransferSession(): Promise<FileTransferStatus> {
+export async function startFileTransferSession(requiresApproval = false): Promise<FileTransferStatus> {
   if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65_535) {
     throw new Error("FILE_TRANSFER_PORT phải là một cổng từ 1 đến 65535.");
   }
@@ -166,18 +210,20 @@ export async function startFileTransferSession(): Promise<FileTransferStatus> {
   }
   await pendingSessionClose;
 
-  fs.mkdirSync(RECEIVE_DIRECTORY, { recursive: true });
-  const code = Array.from(
+  fs.mkdirSync(receiveDirectory, { recursive: true });
+  const code = requiresApproval ? null : Array.from(
     { length: 8 },
     () => CODE_CHARACTERS[crypto.randomInt(CODE_CHARACTERS.length)],
   ).join("");
   const session: TransferSession = {
     code,
+    requiresApproval,
     expiresAt: Date.now() + SESSION_TTL_MS,
     server: createServer(),
     sockets: new Set(),
     failedCodes: 0,
     activeFile: null,
+    approvalRequest: null,
     receivedBytes: 0,
     receivedFiles: [],
   };
@@ -191,11 +237,67 @@ export async function startFileTransferSession(): Promise<FileTransferStatus> {
     }
     res.setHeader("Access-Control-Allow-Origin", req.header("origin")!);
     res.setHeader("Vary", "Origin");
-    res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "X-Transfer-Code, X-File-Name, Content-Type");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "X-Transfer-Code, X-File-Name, X-File-Size, X-Transfer-Request, Content-Type");
     res.setHeader("Access-Control-Max-Age", "300");
     if (req.method === "OPTIONS") return res.sendStatus(204);
     next();
+  });
+  receiverApp.post("/request", (req: Request, res: Response) => {
+    if (currentSession !== session || !session.requiresApproval) {
+      return sendJson(res, 409, { success: false, error: "Máy nhận không mở phiên yêu cầu chấp thuận." });
+    }
+    const totalBytes = Number(req.header("x-file-size"));
+    if (!Number.isSafeInteger(totalBytes) || totalBytes <= 0 || totalBytes > MAX_FILE_BYTES) {
+      return sendJson(res, 413, { success: false, error: "Kích thước file không hợp lệ hoặc vượt giới hạn 4 GiB." });
+    }
+    if (session.receivedBytes + totalBytes > MAX_SESSION_BYTES) {
+      return sendJson(res, 413, { success: false, error: "Phiên nhận đã đạt giới hạn tổng 16 GiB." });
+    }
+    if (
+      session.activeFile ||
+      (session.approvalRequest &&
+        ["pending", "approved"].includes(session.approvalRequest.status) &&
+        Date.now() < session.approvalRequest.expiresAt)
+    ) {
+      return sendJson(res, 409, { success: false, error: "Máy nhận đang xem xét một yêu cầu khác." });
+    }
+    const rawName = req.header("x-file-name") || "received-file";
+    let suppliedName: string;
+    try {
+      suppliedName = decodeURIComponent(rawName);
+    } catch {
+      return sendJson(res, 400, { success: false, error: "Tên file không hợp lệ." });
+    }
+    session.approvalRequest = {
+      id: crypto.randomBytes(24).toString("hex"),
+      name: sanitizeFileName(suppliedName),
+      totalBytes,
+      remoteAddress: req.socket.remoteAddress?.replace(/^::ffff:/, "") || "unknown",
+      expiresAt: Date.now() + APPROVAL_TTL_MS,
+      status: "pending",
+    };
+    return sendJson(res, 202, {
+      success: true,
+      requestId: session.approvalRequest.id,
+      expiresAt: new Date(session.approvalRequest.expiresAt).toISOString(),
+    });
+  });
+  receiverApp.get("/request/:id", (req: Request, res: Response) => {
+    if (currentSession !== session) {
+      return sendJson(res, 410, { success: false, error: "Phiên nhận đã đóng hoặc hết hạn." });
+    }
+    const request = session.approvalRequest;
+    if (!request || request.id !== req.params.id) {
+      return sendJson(res, 404, { success: false, error: "Không tìm thấy yêu cầu nhận file." });
+    }
+    if (
+      (request.status === "pending" || request.status === "approved") &&
+      Date.now() >= request.expiresAt
+    ) {
+      request.status = "expired";
+    }
+    return sendJson(res, 200, { success: true, status: request.status });
   });
   receiverApp.post("/upload", async (req: Request, res: Response) => {
     if (
@@ -209,15 +311,29 @@ export async function startFileTransferSession(): Promise<FileTransferStatus> {
       }
       return sendJson(res, 410, { success: false, error: "Phiên nhận đã hết hạn hoặc đã đóng." });
     }
-    const suppliedCode = req.header("x-transfer-code") || "";
-    if (suppliedCode !== session.code) {
-      session.failedCodes += 1;
-      if (session.failedCodes >= MAX_FAILED_CODES) {
-        currentSession = null;
-        lastReceivedFiles = [...session.receivedFiles];
-        void scheduleSessionClose(session);
+    let approvalRequest: TransferSession["approvalRequest"] = null;
+    if (session.requiresApproval) {
+      const requestId = req.header("x-transfer-request") || "";
+      approvalRequest = session.approvalRequest;
+      if (
+        !approvalRequest ||
+        approvalRequest.id !== requestId ||
+        approvalRequest.status !== "approved" ||
+        Date.now() >= approvalRequest.expiresAt
+      ) {
+        return sendJson(res, 403, { success: false, error: "Yêu cầu gửi file chưa được máy nhận chấp thuận." });
       }
-      return sendJson(res, 403, { success: false, error: "Mã kết nối không đúng." });
+    } else {
+      const suppliedCode = req.header("x-transfer-code") || "";
+      if (suppliedCode !== session.code) {
+        session.failedCodes += 1;
+        if (session.failedCodes >= MAX_FAILED_CODES) {
+          currentSession = null;
+          lastReceivedFiles = [...session.receivedFiles];
+          void scheduleSessionClose(session);
+        }
+        return sendJson(res, 403, { success: false, error: "Mã kết nối không đúng." });
+      }
     }
     const totalBytes = Number(req.header("content-length"));
     if (!Number.isSafeInteger(totalBytes) || totalBytes <= 0 || totalBytes > MAX_FILE_BYTES) {
@@ -225,6 +341,17 @@ export async function startFileTransferSession(): Promise<FileTransferStatus> {
     }
     if (session.receivedBytes + totalBytes > MAX_SESSION_BYTES) {
       return sendJson(res, 413, { success: false, error: "Phiên nhận đã đạt giới hạn tổng 16 GiB. Tạo phiên mới để tiếp tục." });
+    }
+    if (approvalRequest) {
+      let uploadName: string;
+      try {
+        uploadName = sanitizeFileName(decodeURIComponent(req.header("x-file-name") || ""));
+      } catch {
+        return sendJson(res, 400, { success: false, error: "Tên file không hợp lệ." });
+      }
+      if (Number(req.header("content-length")) !== approvalRequest.totalBytes || uploadName !== approvalRequest.name) {
+        return sendJson(res, 403, { success: false, error: "Thông tin file không khớp yêu cầu đã được chấp thuận." });
+      }
     }
     if (session.activeFile) {
       return sendJson(res, 409, { success: false, error: "Đang nhận một file khác; hãy thử lại sau." });
@@ -237,12 +364,14 @@ export async function startFileTransferSession(): Promise<FileTransferStatus> {
     }
     const fileName = sanitizeFileName(suppliedName);
     const destination = getUniqueDestination(fileName);
-    const directory = path.resolve(RECEIVE_DIRECTORY);
-    if (!path.resolve(destination).startsWith(`${directory}${path.sep}`)) {
+    const directory = path.resolve(receiveDirectory);
+    const directoryPrefix = directory.endsWith(path.sep) ? directory : `${directory}${path.sep}`;
+    if (!path.resolve(destination).startsWith(directoryPrefix)) {
       return sendJson(res, 400, { success: false, error: "Tên file không hợp lệ." });
     }
 
     session.activeFile = { name: fileName, receivedBytes: 0, totalBytes };
+    if (approvalRequest) approvalRequest.status = "expired";
     const progress = new Transform({
       transform(chunk: Buffer, _encoding, callback) {
         session.activeFile!.receivedBytes += chunk.length;
@@ -314,10 +443,41 @@ export async function stopFileTransferSession(): Promise<FileTransferStatus> {
   return statusOf(null);
 }
 
+export function respondToFileTransferRequest(requestId: string, approved: boolean): FileTransferStatus {
+  const session = getCurrentSession();
+  const request = session?.approvalRequest;
+  if (!session?.requiresApproval || !request || request.id !== requestId || request.status !== "pending") {
+    throw new Error("Yêu cầu nhận file không còn chờ xử lý.");
+  }
+  if (Date.now() >= request.expiresAt) {
+    request.status = "expired";
+    throw new Error("Yêu cầu nhận file đã hết hạn.");
+  }
+  request.status = approved ? "approved" : "rejected";
+  request.expiresAt = Date.now() + APPROVAL_TTL_MS;
+  return statusOf(session);
+}
+
+export function setReceivedFilesDirectory(directory: unknown): FileTransferStatus {
+  if (getCurrentSession()) {
+    throw new Error("Hãy đóng phiên nhận file trước khi đổi thư mục lưu.");
+  }
+  if (typeof directory !== "string" || !directory.trim() || !path.isAbsolute(directory.trim())) {
+    throw new Error("Nhập đường dẫn thư mục tuyệt đối hợp lệ.");
+  }
+  const nextDirectory = path.resolve(directory.trim());
+  fs.mkdirSync(nextDirectory, { recursive: true });
+  fs.accessSync(nextDirectory, fs.constants.W_OK);
+  fs.mkdirSync(APP_DATA_DIRECTORY, { recursive: true });
+  fs.writeFileSync(SETTINGS_FILE, JSON.stringify({ receiveDirectory: nextDirectory }, null, 2), "utf8");
+  receiveDirectory = nextDirectory;
+  return statusOf(null);
+}
+
 export function getFileTransferStatus(): FileTransferStatus {
   return statusOf(getCurrentSession());
 }
 
 export function getReceivedFilesDirectory(): string {
-  return RECEIVE_DIRECTORY;
+  return receiveDirectory;
 }
