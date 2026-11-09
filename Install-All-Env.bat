@@ -40,15 +40,28 @@ if defined PYTHON_LAUNCHER goto PYTHON_FOUND
 py -3.12 --version >nul 2>&1
 if not errorlevel 1 set "PYTHON_LAUNCHER=py -3.12"
 if defined PYTHON_LAUNCHER goto PYTHON_FOUND
-python --version >nul 2>&1
+python -c "import struct,sys; sys.exit(0 if sys.version_info[:2] in ((3,10),(3,11),(3,12)) and struct.calcsize('P')==8 else 1)" >nul 2>&1
 if not errorlevel 1 set "PYTHON_LAUNCHER=python"
 if defined PYTHON_LAUNCHER goto PYTHON_FOUND
-goto NO_PYTHON
+goto INSTALL_PYTHON
+
+:INSTALL_PYTHON
+if defined PYTHON_BOOTSTRAP_ATTEMPTED goto NO_PYTHON
+set "PYTHON_BOOTSTRAP_ATTEMPTED=1"
+echo No supported Python was found. Trying to install Python 3.12 with winget...
+where winget >nul 2>&1
+if errorlevel 1 goto NO_PYTHON
+winget install --id Python.Python.3.12 --exact --scope user --silent --accept-package-agreements --accept-source-agreements
+if errorlevel 1 goto PYTHON_INSTALL_ERROR
+py -3.12 --version >nul 2>&1
+if errorlevel 1 goto PYTHON_RESTART_REQUIRED
+set "PYTHON_LAUNCHER=py -3.12"
+goto PYTHON_FOUND
 
 :PYTHON_FOUND
 echo Using %PYTHON_LAUNCHER%
 call %PYTHON_LAUNCHER% -c "import struct,sys; print(sys.version); sys.exit(0 if sys.version_info[:2] in ((3,10),(3,11),(3,12)) and struct.calcsize('P')==8 else 1)"
-if errorlevel 1 goto NO_PYTHON
+if errorlevel 1 goto INSTALL_PYTHON
 
 echo.
 echo [3/7] Installing background-music environment...
@@ -150,7 +163,17 @@ echo [ERROR] npm is not available. Repair the Node.js installation.
 goto FAILED
 :NO_PYTHON
 echo [ERROR] Python 3.10, 3.11 or 3.12 was not found.
-echo Install Python 3.10-3.12 (64-bit) and enable the Python launcher.
+echo Install Python 3.12 (64-bit) from https://www.python.org/downloads/
+echo Enable the Python launcher, then run this installer again.
+goto FAILED
+:PYTHON_INSTALL_ERROR
+echo [ERROR] winget could not install Python 3.12.
+echo Install Python 3.12 (64-bit) from https://www.python.org/downloads/
+echo Enable the Python launcher, then run this installer again.
+goto FAILED
+:PYTHON_RESTART_REQUIRED
+echo [ERROR] Python 3.12 was installed, but this CMD session cannot find the py launcher.
+echo Close this window, open a new CMD window, and run Install-All-Env.bat again.
 goto FAILED
 :NPM_ERROR
 echo [ERROR] npm install failed.

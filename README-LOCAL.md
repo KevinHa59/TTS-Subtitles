@@ -39,7 +39,7 @@ Các model lớn không cần được tải cùng lúc. Whisper và OCR có th�
 5. Để dùng Piper TTS, chép file model `.onnx` **và** file `.onnx.json` tương ứng vào `models/`. Để dùng VieNeu, làm theo [HD-VIENEU-TTS.md](./HD-VIENEU-TTS.md).
 6. Các chức năng AI Python là tùy chọn. Nếu không chạy installer tổng, cài đúng file `requirements-*.txt` trong môi trường riêng cho tính năng muốn kích hoạt.
 
-`Install-All-Env.bat` yêu cầu Node.js/npm và Python 3.10, 3.11 hoặc 3.12 64-bit. Nó tạo `.venv-bgm`, `.venv-video-dubbing`, `.venv-vieneu` và runtime OCR tại `%LOCALAPPDATA%`. `Start-App.bat` tự dùng các venv của project nếu chúng tồn tại. Whisper và engine dịch local được cài riêng từ trang quản lý tương ứng trong ứng dụng; model Whisper, OCR, Piper, VieNeu, BGM và MDX vẫn cần tải riêng.
+`Install-All-Env.bat` yêu cầu Node.js/npm và Python 3.10, 3.11 hoặc 3.12 64-bit. Nếu không tìm thấy Python tương thích, script thử cài Python 3.12 qua `winget`; nếu Python Launcher chưa nhận ra bản vừa cài, hãy mở CMD mới và chạy lại. Script tạo `.venv-bgm`, `.venv-video-dubbing`, `.venv-vieneu` và runtime OCR tại `%LOCALAPPDATA%`. `Start-App.bat` tự dùng các venv của project nếu chúng tồn tại. Whisper và engine dịch local được cài riêng từ trang quản lý tương ứng trong ứng dụng; model Whisper, OCR, Piper, VieNeu, BGM và MDX vẫn cần tải riêng.
 
 Để chạy Whisper bằng tay sau khi giải nén: `npm run init:tools`. Trên Windows, ứng dụng cũng có thể tự tải Whisper binary; thao tác này không tải model Whisper nếu chưa chọn/tải model trong ứng dụng.
 
