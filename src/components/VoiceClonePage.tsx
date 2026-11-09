@@ -358,11 +358,16 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
     });
 
     try {
-      const res = await fetch("/api/system/download-model", {
+      const res = await fetch("/api/system/download-whisper-model", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ modelId }),
       });
+      if (!res.headers.get("content-type")?.includes("application/json")) {
+        throw new Error(
+          `Máy chủ không trả về JSON (HTTP ${res.status}). Hãy cập nhật và khởi động lại ứng dụng.`,
+        );
+      }
       const data = await res.json();
       if (!res.ok || !data.success) {
         throw new Error(data.error || "Không thể tải mô hình.");
