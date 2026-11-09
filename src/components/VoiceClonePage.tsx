@@ -133,9 +133,10 @@ interface WhisperModelItem {
 
 interface VoiceClonePageProps {
   onVoiceInstalled: () => void;
+  onOpenSetup: () => void;
 }
 
-export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps) {
+export default function VoiceClonePage({ onVoiceInstalled, onOpenSetup }: VoiceClonePageProps) {
   const [activeTab, setActiveTab] = useState<"dataset" | "join-audio" | "tools" | "guide" | "upload" | "manage">("dataset");
 
   // === SYSTEM TOOLS & MODELS STATE ===
@@ -349,44 +350,6 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
     }
   };
 
-  // Action: Download Whisper GGML model
-  const handleDownloadModel = async (modelId: string) => {
-    setIsOperatingTools(true);
-    setToolsFeedback({
-      type: "info",
-      message: `Đang gửi yêu cầu tải mô hình ${modelId} về máy...`,
-    });
-
-    try {
-      const res = await fetch("/api/system/download-whisper-model", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ modelId }),
-      });
-      if (!res.headers.get("content-type")?.includes("application/json")) {
-        throw new Error(
-          `Máy chủ không trả về JSON (HTTP ${res.status}). Hãy cập nhật và khởi động lại ứng dụng.`,
-        );
-      }
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        throw new Error(data.error || "Không thể tải mô hình.");
-      }
-      setToolsFeedback({
-        type: "info",
-        message: data.message || `Đang tải mô hình ${modelId}... Bạn có thể theo dõi tiến trình bên dưới.`,
-      });
-      fetchSystemToolsStatus();
-    } catch (err: any) {
-      setToolsFeedback({
-        type: "error",
-        message: err.message || "Lỗi khi bắt đầu tải mô hình.",
-      });
-    } finally {
-      setIsOperatingTools(false);
-    }
-  };
-
   // Action: Compile Whisper.cpp
   const handleInitWhisper = async (forceRecompile: boolean = false) => {
     setIsOperatingTools(true);
@@ -419,29 +382,6 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
       });
     } finally {
       setIsOperatingTools(false);
-    }
-  };
-
-  // Action: Delete GGML model
-  const handleDeleteModel = async (modelId: string, modelName: string) => {
-    if (!confirm(`Bạn có chắc muốn xóa file mô hình "${modelName}" để giải phóng dung lượng?`)) return;
-
-    try {
-      const res = await fetch(`/api/system/models/${modelId}`, { method: "DELETE" });
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        throw new Error(data.error || "Không thể xóa file mô hình.");
-      }
-      setToolsFeedback({
-        type: "success",
-        message: `Đã xóa file mô hình ${modelName}.`,
-      });
-      fetchSystemToolsStatus();
-    } catch (err: any) {
-      setToolsFeedback({
-        type: "error",
-        message: err.message || "Lỗi khi xóa file mô hình.",
-      });
     }
   };
 
@@ -1446,13 +1386,10 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
                       </label>
                       <button
                         type="button"
-                        onClick={() => {
-                          setActiveTab("tools");
-                          fetchSystemToolsStatus();
-                        }}
+                        onClick={onOpenSetup}
                         className="text-[10px] text-amber-400 hover:underline flex items-center gap-1 cursor-pointer"
                       >
-                        <span>Quản lý</span>
+                        <span>Mở Setup</span>
                       </button>
                     </div>
                     <select
@@ -1477,14 +1414,12 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
                     </select>
                     {systemStatus && !systemStatus.models.find((m) => m.id === whisperModel)?.isDownloaded && (
                       <div className="mt-1.5 flex items-center justify-between text-[10px] text-amber-400 bg-amber-500/10 px-2 py-1 rounded-lg border border-amber-500/20">
-                        <span>Chưa có file mô hình này.</span>
                         <button
                           type="button"
-                          onClick={() => handleDownloadModel(whisperModel)}
-                          disabled={isOperatingTools || systemStatus?.activeJob?.status === "running"}
+                          onClick={onOpenSetup}
                           className="font-bold underline hover:text-amber-300 cursor-pointer"
                         >
-                          Tải về ngay
+                          Chưa có file mô hình này · Tải trong Setup
                         </button>
                       </div>
                     )}
@@ -2321,83 +2256,12 @@ export default function VoiceClonePage({ onVoiceInstalled }: VoiceClonePageProps
             </div>
           </div>
 
-          {/* SECTION 2: WHISPER GGML MODELS CATALOG */}
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <div>
-                <h4 className="text-sm font-bold text-white flex items-center gap-2">
-                  <Layers className="w-4 h-4 text-amber-400" />
-                  Kho Mô Hình Whisper AI (GGML Binary Models)
-                </h4>
-                <p className="text-xs text-slate-400">
-                  Tải về máy để dùng hoàn toàn offline hoặc xóa để giải phóng dung lượng ổ đĩa.
-                </p>
-              </div>
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
+            <div>
+              <h4 className="text-sm font-bold text-white">Quản lý model Whisper trong Setup</h4>
+              <p className="mt-1 text-xs text-slate-400">Tải, xóa và theo dõi tiến trình model Whisper tại panel Setup.</p>
             </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {systemStatus?.models.map((model) => (
-                <div
-                  key={model.id}
-                  className={`p-4 rounded-2xl border transition-all space-y-3 ${
-                    model.isDownloaded
-                      ? "bg-slate-950/80 border-emerald-500/30 shadow-lg shadow-emerald-500/5"
-                      : "bg-slate-950/40 border-slate-800"
-                  }`}
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <h5 className="text-sm font-bold text-white">{model.name}</h5>
-                        {model.isDownloaded ? (
-                          <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
-                            <Check className="w-3 h-3" />
-                            Đã có ({model.sizeMb}MB)
-                          </span>
-                        ) : (
-                          <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700">
-                            Chưa tải (~{model.expectedSizeMb}MB)
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-xs text-slate-400 mt-1 leading-relaxed">
-                        {model.description}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center justify-between pt-2 border-t border-slate-800/60 text-xs">
-                    <span className="text-slate-500 font-mono text-[11px]">
-                      {model.filename}
-                    </span>
-
-                    <div className="flex items-center gap-2">
-                      {model.isDownloaded ? (
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteModel(model.id, model.name)}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-slate-400 hover:text-red-400 hover:bg-red-500/10 text-xs font-semibold transition-all border border-slate-800 hover:border-red-500/30 cursor-pointer"
-                          title="Xóa mô hình để giải phóng dung lượng đĩa"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                          <span>Xóa giải phóng đĩa</span>
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => handleDownloadModel(model.id)}
-                          disabled={isOperatingTools || systemStatus?.activeJob?.status === "running"}
-                          className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 text-slate-950 text-xs font-bold transition-all shadow-md shadow-amber-500/20 disabled:opacity-50 cursor-pointer"
-                        >
-                          <Download className="w-3.5 h-3.5" />
-                          <span>Tải về máy ({model.expectedSizeMb}MB)</span>
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
+            <button type="button" onClick={onOpenSetup} className="rounded-lg bg-amber-500/15 px-3 py-2 text-xs font-semibold text-amber-200 hover:bg-amber-500/25">Mở Setup</button>
           </div>
 
           {/* SECTION 3: GIT SYNC & CLI GUIDE */}

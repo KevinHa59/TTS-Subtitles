@@ -52,6 +52,7 @@ interface VoiceOption {
 
 interface BgmGeneratorTabProps {
   voices: VoiceOption[];
+  onOpenSetup: () => void;
 }
 
 const PRESET_MOODS: BgmMoodPreset[] = [
@@ -177,7 +178,7 @@ const PRESET_MOODS: BgmMoodPreset[] = [
   },
 ];
 
-export default function BgmGeneratorTab({ voices }: BgmGeneratorTabProps) {
+export default function BgmGeneratorTab({ voices, onOpenSetup }: BgmGeneratorTabProps) {
   const availableCpuThreads =
     typeof navigator === "undefined"
       ? 8
@@ -191,7 +192,6 @@ export default function BgmGeneratorTab({ voices }: BgmGeneratorTabProps) {
 
   // System & Model Download Status
   const [systemStatus, setSystemStatus] = useState<BgmSystemStatus | null>(null);
-  const [showModelManager, setShowModelManager] = useState<boolean>(false);
   const [actionInProgressModelId, setActionInProgressModelId] = useState<string | null>(null);
 
   // Input State
@@ -895,16 +895,11 @@ export default function BgmGeneratorTab({ voices }: BgmGeneratorTabProps) {
             )}
             <button
               type="button"
-              onClick={() => setShowModelManager(!showModelManager)}
+              onClick={onOpenSetup}
               className="text-xs px-3.5 py-1.5 rounded-xl bg-purple-950/50 hover:bg-purple-900/60 border border-purple-800/60 text-purple-300 font-medium flex items-center gap-1.5 transition-colors cursor-pointer"
             >
               <HardDrive className="w-3.5 h-3.5 text-purple-400" />
-              <span>Quản lý Model AI (Tải theo yêu cầu)</span>
-              {showModelManager ? (
-                <ChevronUp className="w-3.5 h-3.5" />
-              ) : (
-                <ChevronDown className="w-3.5 h-3.5" />
-              )}
+              <span>Quản lý model trong Setup</span>
             </button>
           </div>
         </div>
@@ -913,7 +908,7 @@ export default function BgmGeneratorTab({ voices }: BgmGeneratorTabProps) {
       {/* ========================================================= */}
       {/* ON-DEMAND AI MODEL MANAGER ACCORDION / DRAWER               */}
       {/* ========================================================= */}
-      {showModelManager && (
+      {false && (
         <div className="bg-slate-900 border border-purple-900/40 rounded-3xl p-5 sm:p-6 shadow-2xl space-y-4 animate-in fade-in slide-in-from-top-2">
           <div className="flex items-center justify-between pb-3 border-b border-slate-800">
             <div className="flex items-center gap-2.5">
@@ -1167,7 +1162,7 @@ export default function BgmGeneratorTab({ voices }: BgmGeneratorTabProps) {
                   <span
                     onClick={(e) => {
                       e.stopPropagation();
-                      setShowModelManager(true);
+                      onOpenSetup();
                     }}
                     className="text-purple-400 hover:underline cursor-pointer font-bold"
                   >
@@ -1213,10 +1208,10 @@ export default function BgmGeneratorTab({ voices }: BgmGeneratorTabProps) {
                   {activeModel?.status !== "ready" && (
                     <button
                       type="button"
-                      onClick={() => setShowModelManager(true)}
+                      onClick={onOpenSetup}
                       className="text-[11px] font-semibold text-purple-300 hover:text-purple-200 hover:underline"
                     >
-                      Mở quản lý model để tải {activeModel?.name || "mô hình đã chọn"}
+                      Tải {activeModel?.name || "mô hình đã chọn"} trong Setup
                     </button>
                   )}
                 </div>
@@ -1517,14 +1512,11 @@ export default function BgmGeneratorTab({ voices }: BgmGeneratorTabProps) {
                 <div className="flex items-center gap-2 shrink-0">
                   <button
                     type="button"
-                    onClick={() => {
-                      setShowModelManager(true);
-                      handleStartDownload(selectedModelId);
-                    }}
+                    onClick={onOpenSetup}
                     className="px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-md"
                   >
                     <DownloadCloud className="w-3.5 h-3.5" />
-                    <span>Tải Model ({activeModel?.sizeFormatted || "1.2GB"})</span>
+                    <span>Mở Setup để tải ({activeModel?.sizeFormatted || "1.2GB"})</span>
                   </button>
                   <button
                     type="button"
@@ -1560,10 +1552,10 @@ export default function BgmGeneratorTab({ voices }: BgmGeneratorTabProps) {
                     <span>Vui lòng đợi tải xong để tạo nhạc AI chất lượng cao.</span>
                     <button
                       type="button"
-                      onClick={() => handleCancelDownload(selectedModelId)}
+                      onClick={onOpenSetup}
                       className="text-rose-400 hover:text-rose-300 font-semibold"
                     >
-                      Hủy tải
+                      Quản lý trong Setup
                     </button>
                   </div>
                 </div>
@@ -1571,14 +1563,11 @@ export default function BgmGeneratorTab({ voices }: BgmGeneratorTabProps) {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   <button
                     type="button"
-                    onClick={() => {
-                      setShowModelManager(true);
-                      handleStartDownload(selectedModelId);
-                    }}
+                    onClick={onOpenSetup}
                     className="py-4 px-5 rounded-2xl bg-gradient-to-r from-purple-600 via-indigo-600 to-purple-700 hover:from-purple-500 hover:to-indigo-500 text-white font-black text-xs sm:text-sm flex items-center justify-center gap-2 shadow-xl shadow-purple-900/30 transition-all cursor-pointer"
                   >
                     <DownloadCloud className="w-4 h-4 shrink-0 text-amber-300" />
-                    <span>Tải Model AI ({activeModel?.sizeFormatted || "2.2GB"})</span>
+                    <span>Mở Setup để tải ({activeModel?.sizeFormatted || "2.2GB"})</span>
                   </button>
 
                   <button
@@ -2082,13 +2071,12 @@ export default function BgmGeneratorTab({ voices }: BgmGeneratorTabProps) {
                 type="button"
                 onClick={() => {
                   setShowModelPromptModal(false);
-                  setShowModelManager(true);
-                  handleStartDownload(selectedModelId);
+                  onOpenSetup();
                 }}
                 className="py-3 px-4 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-lg shadow-purple-900/30 transition-all cursor-pointer"
               >
                 <DownloadCloud className="w-4 h-4" />
-                <span>Tải Model AI ({activeModel?.sizeFormatted || "1.2GB"})</span>
+                <span>Mở Setup để tải ({activeModel?.sizeFormatted || "1.2GB"})</span>
               </button>
 
               <button

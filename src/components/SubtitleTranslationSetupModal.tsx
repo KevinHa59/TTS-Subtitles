@@ -11,6 +11,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import SetupModelDownloads from "./SetupModelDownloads";
 
 type TranslationConfig = {
   selectedModel: string;
@@ -195,6 +196,8 @@ export default function SubtitleTranslationSetupModal({ open, onClose }: { open:
               <p className="text-[10px] leading-relaxed text-slate-500">PaddleOCR dùng môi trường Python riêng (3.10–3.12), không thay đổi Python, model hay dữ liệu project khác.</p>
             </div>
           </section>
+
+          <SetupModelDownloads />
 
           <section className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-950/35">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 px-4 py-3">

@@ -1809,53 +1809,6 @@ export default function App() {
               </button>
               <button
                 type="button"
-                onClick={() => handleNavigateTab("subtitle-editor")}
-                className={`px-3 py-1.5 rounded-lg font-medium transition-all flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
-                  activeTab === "subtitle-editor"
-                    ? "bg-violet-400 text-slate-950 font-bold shadow-md shadow-violet-500/20"
-                    : "text-slate-400 hover:text-white"
-                }`}
-              >
-                <Captions className="w-3.5 h-3.5" />
-                <span>Dịch & Sửa SRT</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => handleNavigateTab("single")}
-                className={`px-3 py-1.5 rounded-lg font-medium transition-all whitespace-nowrap cursor-pointer ${
-                  activeTab === "single"
-                    ? "bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/20"
-                    : "text-slate-400 hover:text-white"
-                }`}
-              >
-                Đọc Đoạn Văn Nhanh
-              </button>
-              <button
-                type="button"
-                onClick={() => handleNavigateTab("story")}
-                className={`px-3 py-1.5 rounded-lg font-medium transition-all flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
-                  activeTab === "story"
-                    ? "bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/20"
-                    : "text-slate-400 hover:text-white"
-                }`}
-              >
-                <BookOpen className="w-3.5 h-3.5" />
-                <span>Kể Truyện</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => handleNavigateTab("bgm")}
-                className={`px-3 py-1.5 rounded-lg font-medium transition-all flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
-                  activeTab === "bgm"
-                    ? "bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/20"
-                    : "text-slate-400 hover:text-white"
-                }`}
-              >
-                <Music className="w-3.5 h-3.5" />
-                <span>Tạo Nhạc Nền</span>
-              </button>
-              <button
-                type="button"
                 onClick={() => handleNavigateTab("voice-clone")}
                 className={`px-3 py-1.5 rounded-lg font-semibold transition-all flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
                   activeTab === "voice-clone"
@@ -1873,7 +1826,14 @@ export default function App() {
                 aria-expanded={moreMenuOpen}
                 aria-haspopup="menu"
                 className={`px-3 py-1.5 rounded-lg font-medium transition-all flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
-                  moreMenuOpen || activeTab === "voice-effects" || activeTab === "srt-from-text" || activeTab === "join-split-video"
+                  moreMenuOpen ||
+                  activeTab === "subtitle-editor" ||
+                  activeTab === "single" ||
+                  activeTab === "story" ||
+                  activeTab === "bgm" ||
+                  activeTab === "voice-effects" ||
+                  activeTab === "srt-from-text" ||
+                  activeTab === "join-split-video"
                     ? "bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/20"
                     : "text-slate-400 hover:text-white"
                 }`}
@@ -1883,47 +1843,10 @@ export default function App() {
               </button>
             </nav>
 
-            {/* Nút Dọn Dẹp Audio trên Header */}
-            <button
-              type="button"
-              onClick={() => setShowAudioCleanupModal(true)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-rose-300 hover:text-rose-100 bg-rose-950/50 hover:bg-rose-900/70 rounded-xl transition-all border border-rose-800/80 shadow-sm shrink-0 whitespace-nowrap"
-              title="Dọn dẹp toàn bộ file audio TTS tạm thời trong hệ thống"
-            >
-              <Trash2 className="w-3.5 h-3.5 text-rose-400" />
-              <span>Dọn Dẹp Audio</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setShowSetupModal(true)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-amber-200 hover:text-white bg-amber-500/10 hover:bg-amber-500/20 rounded-xl transition-all border border-amber-500/30 shrink-0 whitespace-nowrap"
-            >
-              <Settings className="w-3.5 h-3.5 text-amber-300" />
-              <span>Setup</span>
-            </button>
-
-            {/* Mã Nguồn Button */}
-            <button
-              type="button"
-              onClick={() => setShowApiModal(true)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-300 hover:text-white bg-slate-800/80 hover:bg-slate-700/80 rounded-lg transition-colors border border-slate-700/60 shrink-0 whitespace-nowrap"
-            >
-              <Code className="w-3.5 h-3.5 text-amber-400" />
-              <span>Mã Nguồn</span>
-            </button>
           </div>
 
           {/* Mobile Hamburger Controls (< lg screens) */}
           <div className="flex items-center gap-2 lg:hidden shrink-0">
-            <button
-              type="button"
-              onClick={() => setShowAudioCleanupModal(true)}
-              className="p-2 rounded-xl text-rose-300 bg-rose-950/40 border border-rose-900/60 hover:bg-rose-900/60 transition-colors"
-              title="Dọn dẹp Audio"
-            >
-              <Trash2 className="w-4 h-4 text-rose-400" />
-            </button>
             <button
               type="button"
               onClick={() => setMobileMenuOpen((prev) => !prev)}
@@ -1938,28 +1861,6 @@ export default function App() {
                 <X className="w-5 h-5 text-amber-400" />
               ) : (
                 <Menu className="w-5 h-5 text-slate-200" />
-              )}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-              handleNavigateTab("voice-effects");
-              setMobileMenuOpen(false);
-              }}
-              className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl font-medium text-sm transition-all ${
-              activeTab === "voice-effects"
-                ? "bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/20"
-                : "bg-slate-950/60 text-slate-300 hover:text-white hover:bg-slate-800/60 border border-slate-800/70"
-              }`}
-            >
-              <div className="flex items-center gap-2.5">
-              <Sparkles className={`w-4 h-4 ${activeTab === "voice-effects" ? "text-slate-950" : "text-amber-400"}`} />
-              <span>Voice Effects</span>
-              </div>
-              {activeTab === "voice-effects" && (
-              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-950/20 text-slate-950">
-                Đang chọn
-              </span>
               )}
             </button>
           </div>
@@ -2214,8 +2115,95 @@ export default function App() {
         {moreMenuOpen && (
           <div
             role="menu"
-            className="absolute right-4 top-full z-50 mt-2 w-64 rounded-xl border border-slate-700 bg-slate-900/98 p-2 shadow-2xl shadow-black/40 backdrop-blur-xl"
+            className="absolute right-4 top-full z-50 mt-2 max-h-[calc(100dvh-5rem)] w-72 overflow-y-auto rounded-xl border border-slate-700 bg-slate-900/98 p-2 shadow-2xl shadow-black/40 backdrop-blur-xl"
           >
+            <div className="px-3 pb-1 pt-1 text-[10px] font-bold uppercase tracking-wider text-slate-500">
+              Công cụ
+            </div>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                handleNavigateTab("subtitle-editor");
+                setMoreMenuOpen(false);
+              }}
+              className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm font-medium transition-colors ${
+                activeTab === "subtitle-editor"
+                  ? "bg-violet-400 text-slate-950"
+                  : "text-slate-200 hover:bg-slate-800 hover:text-white"
+              }`}
+            >
+              <Captions className="h-4 w-4" />
+              <span>
+                Dịch & Sửa SRT
+                <span className={`mt-0.5 block text-xs ${activeTab === "subtitle-editor" ? "text-slate-800" : "text-slate-500"}`}>
+                  Dịch và chỉnh sửa phụ đề
+                </span>
+              </span>
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                handleNavigateTab("single");
+                setMoreMenuOpen(false);
+              }}
+              className={`mt-1 flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm font-medium transition-colors ${
+                activeTab === "single"
+                  ? "bg-amber-500 text-slate-950"
+                  : "text-slate-200 hover:bg-slate-800 hover:text-white"
+              }`}
+            >
+              <Zap className="h-4 w-4" />
+              <span>
+                Đọc Đoạn Văn Nhanh
+                <span className={`mt-0.5 block text-xs ${activeTab === "single" ? "text-slate-800" : "text-slate-500"}`}>
+                  Tạo giọng đọc từ văn bản
+                </span>
+              </span>
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                handleNavigateTab("story");
+                setMoreMenuOpen(false);
+              }}
+              className={`mt-1 flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm font-medium transition-colors ${
+                activeTab === "story"
+                  ? "bg-amber-500 text-slate-950"
+                  : "text-slate-200 hover:bg-slate-800 hover:text-white"
+              }`}
+            >
+              <BookOpen className="h-4 w-4" />
+              <span>
+                Kể Truyện
+                <span className={`mt-0.5 block text-xs ${activeTab === "story" ? "text-slate-800" : "text-slate-500"}`}>
+                  Kể chuyện đa nhân vật
+                </span>
+              </span>
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                handleNavigateTab("bgm");
+                setMoreMenuOpen(false);
+              }}
+              className={`mt-1 flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm font-medium transition-colors ${
+                activeTab === "bgm"
+                  ? "bg-amber-500 text-slate-950"
+                  : "text-slate-200 hover:bg-slate-800 hover:text-white"
+              }`}
+            >
+              <Music className="h-4 w-4" />
+              <span>
+                Tạo Nhạc Nền
+                <span className={`mt-0.5 block text-xs ${activeTab === "bgm" ? "text-slate-800" : "text-slate-500"}`}>
+                  Tạo nhạc nền và âm thanh AI
+                </span>
+              </span>
+            </button>
             <button
               type="button"
               role="menuitem"
@@ -2278,6 +2266,46 @@ export default function App() {
                   Nối, cắt và xuất video
                 </span>
               </span>
+            </button>
+            <div className="my-2 border-t border-slate-800" />
+            <div className="px-3 pb-1 text-[10px] font-bold uppercase tracking-wider text-slate-500">
+              Tiện ích
+            </div>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setShowAudioCleanupModal(true);
+                setMoreMenuOpen(false);
+              }}
+              className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm font-medium text-rose-300 transition-colors hover:bg-rose-950/60 hover:text-rose-200"
+            >
+              <Trash2 className="h-4 w-4" />
+              <span>Dọn Dẹp Audio</span>
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setShowSetupModal(true);
+                setMoreMenuOpen(false);
+              }}
+              className="mt-1 flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm font-medium text-slate-200 transition-colors hover:bg-slate-800 hover:text-white"
+            >
+              <Settings className="h-4 w-4" />
+              <span>Setup</span>
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setShowApiModal(true);
+                setMoreMenuOpen(false);
+              }}
+              className="mt-1 flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm font-medium text-slate-200 transition-colors hover:bg-slate-800 hover:text-white"
+            >
+              <Code className="h-4 w-4" />
+              <span>Mã Nguồn</span>
             </button>
           </div>
         )}
@@ -4471,14 +4499,14 @@ export default function App() {
         {/* TAB 4: BGM GENERATOR (TẠO NHẠC NỀN & LOOP AUDIO OFFLINE) */}
         {/* ========================================================= */}
         {activeTab === "bgm" && (
-          <BgmGeneratorTab voices={voices} />
+          <BgmGeneratorTab voices={voices} onOpenSetup={() => setShowSetupModal(true)} />
         )}
 
         {/* ========================================================= */}
         {/* TAB 5: VOICE CLONE PAGE (HUẤN LUYỆN & CLONE GIỌNG COLAB)  */}
         {/* ========================================================= */}
         {activeTab === "voice-clone" && (
-          <VoiceClonePage onVoiceInstalled={() => loadVoices()} />
+          <VoiceClonePage onVoiceInstalled={() => loadVoices()} onOpenSetup={() => setShowSetupModal(true)} />
         )}
         {activeTab === "subtitle-ocr" && <SubtitleOcrPage onOpenSetup={() => setShowSetupModal(true)} />}
         {activeTab === "subtitle-editor" && <SubtitleEditorPage onOpenSetup={() => setShowSetupModal(true)} />}
