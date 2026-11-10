@@ -252,7 +252,7 @@ function getWindowsCppEnvironment(): NodeJS.ProcessEnv | null {
   for (const line of result.stdout.split(/\r?\n/)) {
     const separator = line.indexOf("=");
     if (separator <= 0) continue;
-    const name = line.slice(0, separator);
+    const name = line.slice(0, separator).toUpperCase();
     const value = line.slice(separator + 1);
     if (name) environment[name] = value;
   }
