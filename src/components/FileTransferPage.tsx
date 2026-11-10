@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import {
   CheckCircle2,
   Copy,
@@ -10,6 +10,7 @@ import {
   X,
   RefreshCw,
   Send,
+  MessageSquare,
   ShieldAlert,
   Square,
   Wifi,
@@ -45,6 +46,13 @@ interface UploadProgress {
   loaded: number;
   total: number;
   status: "waiting" | "uploading" | "done" | "error";
+}
+
+interface ChatMessage {
+  id: string;
+  clientId: string;
+  text: string;
+  sentAt: string;
 }
 
 async function readJson(response: Response) {
@@ -133,6 +141,95 @@ export default function FileTransferPage() {
   const [copied, setCopied] = useState("");
   const [dragging, setDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const chatClientIdRef = useRef(`chat-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const chatSocketRef = useRef<WebSocket | null>(null);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatDraft, setChatDraft] = useState("");
+  const [chatConnected, setChatConnected] = useState(false);
+  const [chatError, setChatError] = useState("");
+
+  const hasLocalChatSession = Boolean(status?.active && status.code && !status.requiresApproval);
+  const normalizedChatCode = (hasLocalChatSession ? status?.code : code)?.trim().toUpperCase() || "";
+  const remoteChatReady =
+    !status?.active &&
+    /^\d{1,3}$/.test(host.trim()) &&
+    Number(host) >= 1 &&
+    Number(host) <= 254 &&
+    Number.isInteger(Number(port)) &&
+    Number(port) >= 1 &&
+    Number(port) <= 65_535 &&
+    /^[A-HJ-NP-Z2-9]{8}$/.test(normalizedChatCode);
+  const chatUrl = hasLocalChatSession
+    ? `ws://127.0.0.1:${status!.port}/chat`
+    : remoteChatReady
+      ? `ws://192.168.1.${host.trim()}:${Number(port)}/chat`
+      : "";
+
+  useEffect(() => {
+    setChatMessages([]);
+    setChatConnected(false);
+    setChatError("");
+    if (!chatUrl || !normalizedChatCode) {
+      chatSocketRef.current = null;
+      return;
+    }
+
+    let disposed = false;
+    const socket = new WebSocket(chatUrl);
+    chatSocketRef.current = socket;
+    socket.onopen = () => {
+      socket.send(JSON.stringify({
+        type: "authenticate",
+        code: normalizedChatCode,
+        clientId: chatClientIdRef.current,
+      }));
+    };
+    socket.onmessage = (event) => {
+      let payload: {
+        type?: string;
+        messages?: ChatMessage[];
+        message?: ChatMessage;
+        text?: string;
+        error?: string;
+      };
+      try {
+        payload = JSON.parse(String(event.data)) as typeof payload;
+      } catch {
+        setChatError("Máy nhận gửi dữ liệu chat không hợp lệ.");
+        return;
+      }
+      if (payload.type === "authenticated") {
+        setChatConnected(true);
+        setChatError("");
+      } else if (payload.type === "history" && Array.isArray(payload.messages)) {
+        setChatMessages(payload.messages);
+      } else if (payload.type === "message" && payload.message) {
+        setChatMessages((current) => current.some((message) => message.id === payload.message!.id)
+          ? current
+          : [...current, payload.message!].slice(-100),
+        );
+      } else if (payload.type === "error" && payload.error) {
+        setChatError(payload.error);
+      }
+    };
+    socket.onerror = () => {
+      if (!disposed) setChatError("Không kết nối được chat. Kiểm tra IP, mã nhận, Wi-Fi và Firewall.");
+    };
+    socket.onclose = (event) => {
+      if (!disposed) {
+        setChatConnected(false);
+        setChatError(event.code === 1008
+          ? "Mã chat không đúng hoặc phiên nhận không còn hoạt động."
+          : "Kết nối chat đã đóng.");
+      }
+    };
+
+    return () => {
+      disposed = true;
+      if (chatSocketRef.current === socket) chatSocketRef.current = null;
+      socket.close();
+    };
+  }, [chatUrl, normalizedChatCode]);
 
   const refreshStatus = useCallback(async () => {
     try {
@@ -307,6 +404,16 @@ export default function FileTransferPage() {
     }
   };
 
+  const sendChatMessage = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const text = chatDraft.trim();
+    const socket = chatSocketRef.current;
+    if (!text || !socket || socket.readyState !== WebSocket.OPEN || !chatConnected) return;
+    socket.send(JSON.stringify({ type: "message", text }));
+    setChatDraft("");
+    setChatError("");
+  };
+
   const totalSize = files.reduce((total, file) => total + file.size, 0);
 
   return (
@@ -449,6 +556,71 @@ export default function FileTransferPage() {
           <p className="text-[10px] leading-relaxed text-amber-300/80">Chuyển trực tiếp trong mạng LAN, không qua cloud. Kết nối HTTP chưa được mã hóa; chỉ dùng trên mạng riêng đáng tin cậy, không dùng Wi-Fi công cộng. Nếu cổng bị chặn, cho phép TCP {status?.port || 39815} trên mạng Private trong Firewall.</p>
         </section>
       </div>
+
+      <section className="space-y-4 rounded-2xl border border-slate-800 bg-slate-900 p-5">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5">
+            <div className="rounded-lg border border-cyan-400/20 bg-cyan-400/10 p-2 text-cyan-300"><MessageSquare className="h-4 w-4" /></div>
+            <div>
+              <h2 className="text-sm font-bold text-white">Chat văn bản trực tiếp</h2>
+              <p className="mt-1 text-[10px] text-slate-500">Tin nhắn hai chiều trong phiên nhận file hiện tại; lịch sử chat sẽ mất khi đóng phiên.</p>
+            </div>
+          </div>
+          <span className={`shrink-0 rounded-full border px-2.5 py-1 text-[10px] font-semibold ${chatConnected ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300" : "border-slate-700 bg-slate-950 text-slate-500"}`}>
+            {chatConnected ? "Đã kết nối" : chatUrl ? "Đang kết nối..." : "Chưa kết nối"}
+          </span>
+        </div>
+
+        <div className="max-h-72 min-h-32 space-y-2 overflow-y-auto rounded-xl border border-slate-800 bg-slate-950/60 p-3" aria-live="polite">
+          {chatMessages.length ? chatMessages.map((message) => {
+            const ownMessage = message.clientId === chatClientIdRef.current;
+            return (
+              <div key={message.id} className={`flex ${ownMessage ? "justify-end" : "justify-start"}`}>
+                <div className={`max-w-[85%] rounded-xl px-3 py-2 ${ownMessage ? "bg-cyan-500/15 text-cyan-50" : "bg-slate-800 text-slate-100"}`}>
+                  <p className="whitespace-pre-wrap break-words text-xs">{message.text}</p>
+                  <p className={`mt-1 text-right text-[9px] ${ownMessage ? "text-cyan-200/50" : "text-slate-500"}`}>
+                    {ownMessage ? "Bạn" : "Máy bên kia"} · {new Date(message.sentAt).toLocaleTimeString()}
+                  </p>
+                </div>
+              </div>
+            );
+          }) : (
+            <p className="pt-8 text-center text-[11px] text-slate-600">
+              {chatConnected ? "Chưa có tin nhắn. Gửi nội dung lỗi hoặc văn bản cần trao đổi." : "Tin nhắn sẽ xuất hiện tại đây sau khi kết nối."}
+            </p>
+          )}
+        </div>
+
+        {!chatUrl && (
+          <p className="text-[10px] leading-relaxed text-amber-300">
+            {status?.active && status.requiresApproval
+              ? "Chat cần phiên nhận có mã. Hãy đóng phiên không mã và mở phiên nhận file có mã để dùng chat."
+              : status?.active
+                ? "Không thể mở chat cho phiên hiện tại."
+                : "Trên máy gửi, nhập IP, cổng và mã phiên nhận ở mục Gửi file để kết nối chat."}
+          </p>
+        )}
+        {chatError && <p role="alert" className="text-[10px] text-rose-300">{chatError}</p>}
+
+        <form onSubmit={sendChatMessage} className="flex items-end gap-2">
+          <textarea
+            value={chatDraft}
+            onChange={(event) => setChatDraft(event.target.value)}
+            disabled={!chatConnected}
+            maxLength={4000}
+            rows={2}
+            placeholder={chatConnected ? "Nhập tin nhắn..." : "Kết nối chat để gửi tin nhắn"}
+            className="min-h-11 flex-1 resize-y rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-xs text-white outline-none placeholder:text-slate-600 focus:border-cyan-500 disabled:opacity-50"
+          />
+          <button
+            type="submit"
+            disabled={!chatConnected || !chatDraft.trim()}
+            className="inline-flex h-11 shrink-0 items-center gap-2 rounded-xl bg-cyan-400 px-4 text-xs font-bold text-slate-950 hover:bg-cyan-300 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <Send className="h-3.5 w-3.5" /> Gửi
+          </button>
+        </form>
+      </section>
     </div>
   );
 }

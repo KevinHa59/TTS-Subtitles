@@ -6,12 +6,15 @@ import { Transform } from "stream";
 import { pipeline } from "stream/promises";
 import express, { type Request, type Response } from "express";
 import { createServer, type Server } from "http";
+import { WebSocket, WebSocketServer } from "ws";
 
 const PORT = Number.parseInt(process.env.FILE_TRANSFER_PORT || "39815", 10);
 const SESSION_TTL_MS = 10 * 60 * 1000;
 const MAX_FILE_BYTES = 4 * 1024 ** 3;
 const MAX_SESSION_BYTES = 16 * 1024 ** 3;
 const MAX_FAILED_CODES = 10;
+const MAX_CHAT_MESSAGES = 100;
+const MAX_CHAT_MESSAGE_LENGTH = 4000;
 const APP_DATA_DIRECTORY = path.join(
   process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local"),
   "PiperTTSStudio",
@@ -27,12 +30,22 @@ interface ReceivedFile {
   receivedAt: string;
 }
 
+interface FileTransferChatMessage {
+  id: string;
+  clientId: string;
+  text: string;
+  sentAt: string;
+}
+
 interface TransferSession {
   code: string | null;
   requiresApproval: boolean;
   expiresAt: number;
   server: Server;
+  chatServer: WebSocketServer;
   sockets: Set<import("net").Socket>;
+  chatClients: Set<WebSocket>;
+  chatMessages: FileTransferChatMessage[];
   failedCodes: number;
   activeFile: { name: string; receivedBytes: number; totalBytes: number } | null;
   approvalRequest: {
@@ -167,6 +180,7 @@ let lastReceivedFiles: ReceivedFile[] = [];
 let pendingSessionClose: Promise<void> = Promise.resolve();
 
 function closeSession(session: TransferSession): Promise<void> {
+  for (const client of session.chatClients) client.terminate();
   for (const socket of session.sockets) socket.destroy();
   return new Promise((resolve) => {
     session.server.close(() => resolve());
@@ -215,12 +229,16 @@ export async function startFileTransferSession(requiresApproval = false): Promis
     { length: 8 },
     () => CODE_CHARACTERS[crypto.randomInt(CODE_CHARACTERS.length)],
   ).join("");
+  const chatServer = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 });
   const session: TransferSession = {
     code,
     requiresApproval,
     expiresAt: Date.now() + SESSION_TTL_MS,
     server: createServer(),
+    chatServer,
     sockets: new Set(),
+    chatClients: new Set(),
+    chatMessages: [],
     failedCodes: 0,
     activeFile: null,
     approvalRequest: null,
@@ -410,6 +428,98 @@ export async function startFileTransferSession(requiresApproval = false): Promis
     } finally {
       session.activeFile = null;
     }
+  });
+  session.server.on("upgrade", (request, socket, head) => {
+    let requestPath = "";
+    try {
+      requestPath = new URL(request.url || "/", `http://${request.headers.host || "localhost"}`).pathname;
+    } catch {
+      socket.destroy();
+      return;
+    }
+    if (currentSession !== session || Date.now() >= session.expiresAt) {
+      socket.write("HTTP/1.1 410 Gone\r\nConnection: close\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+    if (
+      requestPath !== "/chat" ||
+      session.requiresApproval ||
+      !session.code ||
+      !isLocalAppOrigin(request.headers.origin)
+    ) {
+      socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+
+    chatServer.handleUpgrade(request, socket, head, (client) => {
+      chatServer.emit("connection", client, request);
+    });
+  });
+  chatServer.on("connection", (client: WebSocket) => {
+    session.chatClients.add(client);
+    client.once("close", () => session.chatClients.delete(client));
+    client.on("error", (error) => {
+      console.warn("[FileTransfer] Lỗi kết nối chat:", error.message);
+    });
+    let clientId: string | null = null;
+    let lastMessageAt = 0;
+    client.on("message", (data) => {
+      let payload: { type?: unknown; code?: unknown; clientId?: unknown; text?: unknown };
+      try {
+        payload = JSON.parse(data.toString()) as typeof payload;
+      } catch {
+        client.close(1007, "Invalid message");
+        return;
+      }
+      if (!payload || typeof payload !== "object") {
+        client.close(1007, "Invalid message");
+        return;
+      }
+      if (!clientId) {
+        if (
+          payload.type !== "authenticate" ||
+          payload.code !== session.code ||
+          typeof payload.clientId !== "string" ||
+          !/^[A-Za-z0-9_-]{1,64}$/.test(payload.clientId)
+        ) {
+          client.close(1008, "Invalid chat code");
+          return;
+        }
+        clientId = payload.clientId;
+        client.send(JSON.stringify({ type: "authenticated" }));
+        client.send(JSON.stringify({ type: "history", messages: session.chatMessages }));
+        return;
+      }
+      if (payload.type !== "message" || typeof payload.text !== "string") {
+        client.close(1008, "Invalid chat message");
+        return;
+      }
+      const text = payload.text.trim();
+      if (!text) return;
+      if (text.length > MAX_CHAT_MESSAGE_LENGTH) {
+        client.send(JSON.stringify({ type: "error", error: `Tin nhắn tối đa ${MAX_CHAT_MESSAGE_LENGTH} ký tự.` }));
+        return;
+      }
+      if (Date.now() - lastMessageAt < 150) {
+        client.send(JSON.stringify({ type: "error", error: "Vui lòng đợi một chút trước khi gửi tiếp." }));
+        return;
+      }
+      lastMessageAt = Date.now();
+      const message: FileTransferChatMessage = {
+        id: crypto.randomUUID(),
+        clientId,
+        text,
+        sentAt: new Date().toISOString(),
+      };
+      session.chatMessages.push(message);
+      if (session.chatMessages.length > MAX_CHAT_MESSAGES) session.chatMessages.shift();
+      const serialized = JSON.stringify({ type: "message", message });
+      for (const recipient of session.chatClients) {
+        if (recipient.readyState === WebSocket.OPEN) recipient.send(serialized);
+      }
+    });
   });
   session.server.on("connection", (socket) => {
     session.sockets.add(socket);
