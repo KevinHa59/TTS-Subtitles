@@ -379,6 +379,13 @@ function runProcessAsync(
       shell: isWin,
       ...(env ? { env: { ...process.env, ...env } } : {}),
     });
+    const recentOutput: string[] = [];
+    const emitLine = (line: string) => {
+      if (!line.trim()) return;
+      recentOutput.push(line.trim());
+      if (recentOutput.length > 30) recentOutput.shift();
+      onLine(line.trim());
+    };
     let stdoutBuffer = "";
     let stderrBuffer = "";
 
@@ -387,7 +394,7 @@ function runProcessAsync(
       const lines = stdoutBuffer.split("\n");
       stdoutBuffer = lines.pop() || "";
       for (const line of lines) {
-        if (line.trim()) onLine(line.trim());
+        emitLine(line);
       }
     });
 
@@ -396,7 +403,7 @@ function runProcessAsync(
       const lines = stderrBuffer.split("\n");
       stderrBuffer = lines.pop() || "";
       for (const line of lines) {
-        if (line.trim()) onLine(line.trim());
+        emitLine(line);
       }
     });
 
@@ -405,12 +412,17 @@ function runProcessAsync(
     });
 
     proc.on("close", (code) => {
-      if (stdoutBuffer.trim()) onLine(stdoutBuffer.trim());
-      if (stderrBuffer.trim()) onLine(stderrBuffer.trim());
+      emitLine(stdoutBuffer);
+      emitLine(stderrBuffer);
       if (code === 0) {
         resolve();
       } else {
-        reject(new Error(`Lệnh '${cmd} ${args.join(" ")}' kết thúc với mã ${code}`));
+        const output = recentOutput.join("\n").slice(-6000);
+        reject(
+          new Error(
+            `Lệnh '${cmd} ${args.join(" ")}' kết thúc với mã ${code}.${output ? `\nOutput cuối:\n${output}` : " Tiến trình không trả về thông tin lỗi."}`,
+          ),
+        );
       }
     });
   });
