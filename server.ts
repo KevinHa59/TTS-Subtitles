@@ -3578,7 +3578,7 @@ app.get("/api/system/tools-status", (_req: Request, res: Response) => {
 // Start Whisper.cpp compilation/initialization
 app.post("/api/system/init-whisper", async (req: Request, res: Response) => {
   try {
-    const forceRebuild = !!req.body?.forceRebuild;
+    const forceRebuild = req.body?.forceRebuild === true || req.body?.forceRecompile === true;
     await startCompileWhisperCpp(forceRebuild);
     res.json({ success: true, message: "Đã bắt đầu khởi tạo Whisper.cpp." });
   } catch (err: any) {

@@ -583,8 +583,7 @@ export async function startCompileWhisperCpp(forceRebuild = false): Promise<bool
     isWindows &&
     hasCmake &&
     hasWindowsCppToolchain() &&
-    !!vulkanSdkPath &&
-    fs.existsSync(path.resolve(WHISPER_DIR, "CMakeLists.txt"));
+    !!vulkanSdkPath;
   const shouldUpgradeToVulkan =
     canBuildVulkan && existingCli !== null && getWhisperBackend(existingCli) !== "vulkan";
 

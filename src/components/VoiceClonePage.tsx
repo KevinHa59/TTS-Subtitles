@@ -351,12 +351,14 @@ export default function VoiceClonePage({ onVoiceInstalled, onOpenSetup }: VoiceC
   };
 
   // Action: Compile Whisper.cpp
-  const handleInitWhisper = async (forceRecompile: boolean = false) => {
+  const handleInitWhisper = async (forceRebuild: boolean = false) => {
     setIsOperatingTools(true);
     setToolsFeedback({
       type: "info",
-      message: forceRecompile
-        ? "Đang biên dịch lại Whisper.cpp..."
+      message: forceRebuild && systemStatus?.whisperBackend === "cpu"
+        ? "Đang build Whisper Vulkan cho GPU..."
+        : forceRebuild
+          ? "Đang biên dịch lại Whisper.cpp..."
         : "Đang khởi tạo mã nguồn và biên dịch Whisper.cpp...",
     });
 
@@ -364,7 +366,7 @@ export default function VoiceClonePage({ onVoiceInstalled, onOpenSetup }: VoiceC
       const res = await fetch("/api/system/init-whisper", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ forceRecompile }),
+        body: JSON.stringify({ forceRebuild }),
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
