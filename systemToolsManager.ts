@@ -373,10 +373,8 @@ function runProcessAsync(
   env?: NodeJS.ProcessEnv,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
-    const isWin = process.platform === "win32";
     const proc = spawn(cmd, args, {
       cwd,
-      shell: isWin,
       ...(env ? { env: { ...process.env, ...env } } : {}),
     });
     const recentOutput: string[] = [];
