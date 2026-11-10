@@ -32,7 +32,7 @@ Các model lớn không cần được tải cùng lúc. Whisper và OCR có th�
 
 ### Chế độ xử lý GPU
 
-Trong **Setup → Chế độ xử lý GPU**, chọn **Tự động** (mặc định để từng backend tự chọn), **Chỉ CPU**, hoặc **Ưu tiên GPU** (dùng GPU khi backend hỗ trợ, fallback theo khả năng của engine). Cấu hình lưu cục bộ tại `%LOCALAPPDATA%/PiperTTSStudio/gpu-execution.json`. Chế độ áp dụng cho Whisper Vulkan, llama.cpp và tách audio Video Dubbing; không bật GPU cho PaddleOCR hoặc MusicGen/AudioLDM vì cấu hình hiện tại của các engine này chỉ chạy CPU. Chưa hỗ trợ chọn một GPU cụ thể; lựa chọn adapter do backend và driver quyết định. Thay đổi áp dụng cho tác vụ mới; nếu engine dịch phụ đề đang chạy thì dừng rồi nạp lại engine.
+Trong **Setup → Chế độ xử lý GPU**, chọn **Tự động** (mặc định để từng backend tự chọn), **Chỉ CPU**, hoặc **Ưu tiên GPU** (dùng GPU khi backend hỗ trợ, fallback theo khả năng của engine). Cấu hình lưu cục bộ tại `%LOCALAPPDATA%/PiperTTSStudio/gpu-execution.json`. Chế độ áp dụng cho Whisper Vulkan, llama.cpp và tách audio Video Dubbing; không bật GPU cho PaddleOCR hoặc MusicGen/AudioLDM vì cấu hình hiện tại của các engine này chỉ chạy CPU. Chưa hỗ trợ chọn một GPU cụ thể; lựa chọn adapter do backend và driver quyết định. Trên Windows, **Setup → Cài thành phần GPU** có thể mở installer nâng quyền để cài Visual Studio C++ Build Tools, CMake và Vulkan SDK bằng winget; sau đó khởi động lại ứng dụng và build Whisper Vulkan trong trang Clone Giọng. Thay đổi chế độ áp dụng cho tác vụ mới; nếu engine dịch phụ đề đang chạy thì dừng rồi nạp lại engine.
 
 ### Chuyển file qua mạng LAN
 

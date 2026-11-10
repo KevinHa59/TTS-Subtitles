@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import SetupModelDownloads from "./SetupModelDownloads";
 import GpuExecutionModePanel from "./GpuExecutionModePanel";
+import WhisperGpuSetupPanel from "./WhisperGpuSetupPanel";
 
 type TranslationConfig = {
   selectedModel: string;
@@ -174,6 +175,7 @@ export default function SubtitleTranslationSetupModal({ open, onClose }: { open:
           {notice && !error && <div className="flex items-center gap-2 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3 text-xs text-emerald-300"><CheckCircle2 className="h-4 w-4" />{notice}</div>}
 
           <GpuExecutionModePanel />
+          <WhisperGpuSetupPanel />
 
           <section className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-950/35">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 px-4 py-3">

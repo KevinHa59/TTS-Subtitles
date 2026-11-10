@@ -122,6 +122,14 @@ const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 const isProd = process.env.NODE_ENV === "production";
 
+function isLocalSubtitleTranslationRequest(req: Request, res: Response, next: () => void) {
+  const address = req.socket.remoteAddress?.replace(/^::ffff:/, "");
+  if (address !== "127.0.0.1" && address !== "::1") {
+    return res.status(403).json({ success: false, error: "Tính năng dịch cục bộ chỉ cho phép truy cập từ máy này." });
+  }
+  next();
+}
+
 interface DatasetPreparationJob {
   id: string;
   status: "processing" | "completed" | "failed";
@@ -3578,6 +3586,36 @@ app.post("/api/system/init-whisper", async (req: Request, res: Response) => {
   }
 });
 
+app.post("/api/system/install-whisper-gpu-prerequisites", isLocalSubtitleTranslationRequest, (req: Request, res: Response) => {
+  if (process.platform !== "win32") {
+    return res.status(400).json({ success: false, error: "Trình cài đặt GPU này chỉ hỗ trợ Windows." });
+  }
+  const installerPath = path.resolve(__dirname, "Install-Whisper-GPU.bat");
+  if (!fs.existsSync(installerPath)) {
+    return res.status(404).json({ success: false, error: `Không tìm thấy trình cài đặt: ${installerPath}` });
+  }
+  const escapedInstallerPath = installerPath.replace(/'/g, "''");
+  const installer = spawn(
+    "powershell.exe",
+    ["-NoProfile", "-NonInteractive", "-Command", `Start-Process -FilePath '${escapedInstallerPath}' -Verb RunAs`],
+    { detached: true, stdio: "ignore", windowsHide: true },
+  );
+  installer.once("error", (error) => {
+    if (!res.headersSent) {
+      res.status(500).json({ success: false, error: `Không thể mở trình cài đặt nâng quyền: ${error.message}` });
+    }
+  });
+  installer.once("spawn", () => {
+    installer.unref();
+    if (!res.headersSent) {
+      res.status(202).json({
+        success: true,
+        message: "Đã mở trình cài đặt. Xác nhận hộp thoại UAC để bắt đầu cài các thành phần GPU.",
+      });
+    }
+  });
+});
+
 // Reset system active job
 app.post("/api/system/reset-job", (_req: Request, res: Response) => {
   try {
@@ -4360,14 +4398,6 @@ app.post("/api/subtitle-ocr/install", async (_req: Request, res: Response) => {
 app.post("/api/subtitle-ocr/install/cancel", (_req: Request, res: Response) => {
   res.json({ success: cancelSubtitleOcrInstall(), status: getSubtitleOcrInstallStatus() });
 });
-
-const isLocalSubtitleTranslationRequest = (req: Request, res: Response, next: () => void) => {
-  const address = req.socket.remoteAddress?.replace(/^::ffff:/, "");
-  if (address !== "127.0.0.1" && address !== "::1") {
-    return res.status(403).json({ success: false, error: "Tính năng dịch cục bộ chỉ cho phép truy cập từ máy này." });
-  }
-  next();
-};
 
 app.get("/api/file-transfer/status", isLocalSubtitleTranslationRequest, (_req: Request, res: Response) => {
   try {
