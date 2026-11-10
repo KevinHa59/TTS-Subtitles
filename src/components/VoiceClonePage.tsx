@@ -2208,8 +2208,8 @@ export default function VoiceClonePage({ onVoiceInstalled, onOpenSetup }: VoiceC
                   {systemStatus?.whisperBackend === "cpu" && (
                     <p className="text-[11px] text-amber-300 mt-1">
                       {systemStatus.whisperVulkanBuildReady
-                        ? "Có thể build backend Vulkan; dùng nút bên phải để cài bản GPU, bản CPU hiện tại vẫn được giữ dự phòng."
-                        : "Muốn build Vulkan cho GPU cần CMake, Vulkan SDK và bộ công cụ C++ của Visual Studio."}
+                        ? "Đã đủ công cụ để build Vulkan; mã nguồn Whisper.cpp sẽ được tải tự động. Bản CPU hiện tại vẫn được giữ dự phòng."
+                        : "Muốn dùng GPU Vulkan, hãy mở Setup và cài các thành phần GPU cần thiết."}
                     </p>
                   )}
                 </div>
@@ -2217,7 +2217,17 @@ export default function VoiceClonePage({ onVoiceInstalled, onOpenSetup }: VoiceC
 
               <button
                 type="button"
-                onClick={() => handleInitWhisper(!!systemStatus?.isWhisperInstalled)}
+                onClick={() => {
+                  if (
+                    systemStatus?.isWhisperInstalled &&
+                    systemStatus.whisperBackend === "cpu" &&
+                    !systemStatus.whisperVulkanBuildReady
+                  ) {
+                    onOpenSetup();
+                    return;
+                  }
+                  void handleInitWhisper(!!systemStatus?.isWhisperInstalled);
+                }}
                 disabled={isOperatingTools || systemStatus?.activeJob?.status === "running"}
                 className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 text-white text-xs font-bold transition-all shadow-md shadow-sky-500/20 disabled:opacity-50 cursor-pointer"
               >
@@ -2226,7 +2236,9 @@ export default function VoiceClonePage({ onVoiceInstalled, onOpenSetup }: VoiceC
                   {systemStatus?.isWhisperInstalled
                     ? systemStatus.whisperBackend === "cpu" && systemStatus.whisperVulkanBuildReady
                       ? "Build Whisper Vulkan (GPU)"
-                      : "Biên dịch lại Whisper.cpp"
+                      : systemStatus.whisperBackend === "cpu"
+                        ? "Cài điều kiện GPU trong Setup"
+                        : "Biên dịch lại Whisper.cpp"
                     : "Khởi tạo Whisper.cpp (1-Click)"}
                 </span>
               </button>

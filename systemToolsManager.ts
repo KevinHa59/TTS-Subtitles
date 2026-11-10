@@ -68,6 +68,7 @@ export const WHISPER_MODEL_SPECS = [
 
 const TOOLS_DIR = path.resolve(__dirname, "tools");
 const WHISPER_DIR = path.resolve(TOOLS_DIR, "whisper.cpp");
+const WHISPER_VULKAN_SOURCE_DIR = path.resolve(TOOLS_DIR, "whisper.cpp-source-b5127");
 const MODELS_DIR = path.resolve(WHISPER_DIR, "models");
 const WHISPER_VULKAN_BUILD_DIR = path.resolve(WHISPER_DIR, "build-vulkan");
 const WHISPER_VULKAN_READY_FILE = path.resolve(WHISPER_VULKAN_BUILD_DIR, "whisper-vulkan-ready.json");
@@ -320,8 +321,7 @@ export function getSystemToolsStatus() {
       process.platform === "win32" &&
       !!getCmakePath() &&
       hasWindowsCppToolchain() &&
-      !!getVulkanSdkPath() &&
-      fs.existsSync(path.resolve(WHISPER_DIR, "CMakeLists.txt")),
+      !!getVulkanSdkPath(),
     modelsDir: MODELS_DIR,
     models,
     activeJob: currentJob,
@@ -638,6 +638,44 @@ export async function startCompileWhisperCpp(forceRebuild = false): Promise<bool
         if (!cppEnvironment) {
           throw new Error("Không thể nạp môi trường MSVC x64 từ vcvars64.bat.");
         }
+        let whisperSourceDir = fs.existsSync(path.resolve(WHISPER_DIR, "CMakeLists.txt"))
+          ? WHISPER_DIR
+          : WHISPER_VULKAN_SOURCE_DIR;
+        if (!fs.existsSync(path.resolve(whisperSourceDir, "CMakeLists.txt"))) {
+          currentJob.progressPercent = 8;
+          currentJob.message = "[8%] Đang tải mã nguồn Whisper.cpp...";
+          const sourceTempDir = fs.mkdtempSync(path.join(TOOLS_DIR, "whisper-source-download-"));
+          try {
+            const sourceZipPath = path.join(sourceTempDir, "whisper.cpp-b5127.zip");
+            const extractedDir = path.join(sourceTempDir, "extracted");
+            fs.mkdirSync(extractedDir, { recursive: true });
+            await downloadFileWithProgress(
+              "https://github.com/ggml-org/whisper.cpp/archive/refs/tags/b5127.zip",
+              sourceZipPath,
+              (received, total) => {
+                if (total > 0) {
+                  const percent = Math.min(100, Math.round((received / total) * 100));
+                  currentJob.message = `[8%] Đang tải mã nguồn Whisper.cpp (${percent}%)...`;
+                }
+              },
+            );
+            new AdmZip(sourceZipPath).extractAllTo(extractedDir, true);
+            const sourceRoot = fs.readdirSync(extractedDir, { withFileTypes: true })
+              .filter((entry) => entry.isDirectory())
+              .map((entry) => path.resolve(extractedDir, entry.name))
+              .find((candidate) => fs.existsSync(path.resolve(candidate, "CMakeLists.txt")));
+            if (!sourceRoot) {
+              throw new Error("Tải xong nhưng gói mã nguồn không có CMakeLists.txt.");
+            }
+            if (fs.existsSync(WHISPER_VULKAN_SOURCE_DIR)) {
+              throw new Error(`Thư mục mã nguồn Vulkan đã tồn tại nhưng không hợp lệ: ${WHISPER_VULKAN_SOURCE_DIR}`);
+            }
+            fs.renameSync(sourceRoot, WHISPER_VULKAN_SOURCE_DIR);
+            whisperSourceDir = WHISPER_VULKAN_SOURCE_DIR;
+          } finally {
+            fs.rmSync(sourceTempDir, { recursive: true, force: true });
+          }
+        }
         const buildEnvironment = {
           ...cppEnvironment,
           VULKAN_SDK: vulkanSdkPath,
@@ -653,7 +691,7 @@ export async function startCompileWhisperCpp(forceRebuild = false): Promise<bool
         await runProcessAsync(
           cmakePath,
           [
-            "-S", ".",
+            "-S", whisperSourceDir,
             "-B", buildDirName,
             "-G", "NMake Makefiles",
             "-DCMAKE_BUILD_TYPE=Release",
