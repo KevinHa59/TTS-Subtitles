@@ -223,20 +223,30 @@ function hasWindowsCppToolchain(): boolean {
 function getWindowsCppEnvironment(): NodeJS.ProcessEnv | null {
   if (process.platform !== "win32") return null;
   const installPath = getVisualStudioInstallPath();
-  if (!installPath) return commandExists("cl") ? process.env : null;
+  if (!installPath) {
+    if (commandExists("cl") && process.env.INCLUDE && process.env.LIB) return process.env;
+    throw new Error(
+      "Không tìm thấy Visual Studio C++ Build Tools có MSVC x64. Trong Visual Studio Installer, cài workload Desktop development with C++ cùng MSVC x64/x86 và Windows 10/11 SDK, rồi khởi động lại ứng dụng.",
+    );
+  }
 
   const vcvars = path.resolve(installPath, "VC", "Auxiliary", "Build", "vcvars64.bat");
-  const command = `call "${vcvars}" && set`;
+  const command = `call "${vcvars}" >nul && set`;
   const result = spawnSync("cmd.exe", ["/d", "/s", "/c", command], {
     encoding: "utf8",
     windowsHide: true,
-    // Node normally escapes embedded quotes for the Windows C runtime. cmd.exe
-    // needs the batch path quotes passed verbatim, otherwise it tries to run a
-    // command whose name literally starts with a quote.
     windowsVerbatimArguments: true,
     maxBuffer: 4 * 1024 * 1024,
   });
-  if (result.status !== 0 || !result.stdout) return null;
+  if (result.error) {
+    throw new Error(`Không thể chạy vcvars64.bat (${vcvars}): ${result.error.message}`);
+  }
+  if (result.status !== 0 || !result.stdout) {
+    const details = result.stderr?.trim() || result.stdout?.trim();
+    throw new Error(
+      `vcvars64.bat không nạp được môi trường MSVC x64 (mã thoát ${result.status ?? result.signal ?? "không xác định"}).${details ? ` Chi tiết: ${details}` : ""} Kiểm tra thành phần MSVC x64/x86 và Windows SDK trong Visual Studio Installer.`,
+    );
+  }
 
   const environment: NodeJS.ProcessEnv = {};
   for (const line of result.stdout.split(/\r?\n/)) {
@@ -246,7 +256,17 @@ function getWindowsCppEnvironment(): NodeJS.ProcessEnv | null {
     const value = line.slice(separator + 1);
     if (name) environment[name] = value;
   }
-  return environment.PATH && environment.INCLUDE && environment.LIB ? environment : null;
+  if (!environment.PATH || !environment.INCLUDE || !environment.LIB) {
+    const missing = [
+      !environment.PATH ? "PATH" : null,
+      !environment.INCLUDE ? "INCLUDE" : null,
+      !environment.LIB ? "LIB" : null,
+    ].filter((name): name is string => !!name);
+    throw new Error(
+      `vcvars64.bat chạy nhưng thiếu biến môi trường ${missing.join(", ")}. Cài MSVC x64/x86 và Windows 10/11 SDK trong Visual Studio Installer.`,
+    );
+  }
+  return environment;
 }
 
 export function getCpuWhisperCliPath(): string | null {
@@ -635,7 +655,7 @@ export async function startCompileWhisperCpp(forceRebuild = false): Promise<bool
       try {
         const cppEnvironment = getWindowsCppEnvironment();
         if (!cppEnvironment) {
-          throw new Error("Không thể nạp môi trường MSVC x64 từ vcvars64.bat.");
+          throw new Error("Không thể nạp môi trường MSVC x64. Kiểm tra Visual Studio C++ Build Tools.");
         }
         let whisperSourceDir = fs.existsSync(path.resolve(WHISPER_DIR, "CMakeLists.txt"))
           ? WHISPER_DIR

@@ -28,13 +28,13 @@ if "!VS_FOUND!"=="1" (
   echo Visual Studio is installed without the required C++ workload. Adding it...
   set "VS_INSTALLER=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\setup.exe"
   if not exist "!VS_INSTALLER!" goto INSTALL_ERROR
-  "!VS_INSTALLER!" modify --installPath "!VS_INSTALL_PATH!" --add Microsoft.VisualStudio.Workload.VCTools --passive --norestart
+  "!VS_INSTALLER!" modify --installPath "!VS_INSTALL_PATH!" --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended --passive --norestart
   if errorlevel 1 goto INSTALL_ERROR
   call :CHECK_VISUAL_STUDIO
   if "!VS_FOUND!"=="0" goto VERIFY_ERROR
 ) else (
   echo Installing Visual Studio 2022 C++ Build Tools...
-  winget install --id Microsoft.VisualStudio.2022.BuildTools --exact --scope machine --accept-package-agreements --accept-source-agreements --override "--wait --passive --norestart --add Microsoft.VisualStudio.Workload.VCTools"
+  winget install --id Microsoft.VisualStudio.2022.BuildTools --exact --scope machine --accept-package-agreements --accept-source-agreements --override "--wait --passive --norestart --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
   if errorlevel 1 goto INSTALL_ERROR
   call :CHECK_VISUAL_STUDIO
   if "!VS_FOUND!"=="0" goto VERIFY_ERROR
