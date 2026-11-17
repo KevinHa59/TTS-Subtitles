@@ -16,7 +16,7 @@ export function resolveVideoDubbingTtsItems(
   if (!overrides) return fallbackItems.map((item) => ({ ...item }));
 
   return overrides.map((cue, index) => ({
-    id: `timeline-${index + 1}`,
+    id: cue.id || `timeline-${index + 1}`,
     index: index + 1,
     startTime: cue.startTime,
     endTime: cue.endTime,

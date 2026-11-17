@@ -3,6 +3,8 @@ import type { VideoDubbingOverlayPosition } from "../types/videoDubbing";
 
 export interface SubtitleOverlayRendererProps {
   text: string;
+  secondaryText?: string;
+  secondaryFontSize?: number;
   scale: number;
   fontSize: number;
   fontFamily: string;
@@ -40,6 +42,8 @@ export function getSubtitleTextAlignment(
 
 export default function SubtitleOverlayRenderer({
   text,
+  secondaryText,
+  secondaryFontSize,
   scale,
   fontSize,
   fontFamily,
@@ -160,7 +164,22 @@ export default function SubtitleOverlayRenderer({
           />
         </>
       )}
-      <span style={{ position: "relative", zIndex: 10 }}>{text}</span>
+      {secondaryText === undefined ? (
+        <span style={{ position: "relative", zIndex: 10 }}>{text}</span>
+      ) : (
+        <span style={{ position: "relative", zIndex: 10 }}>
+          <span style={{ display: "block" }}>{text}</span>
+          <span
+            style={{
+              display: "block",
+              fontSize: `${Math.max(8, (secondaryFontSize ?? Math.round(fontSize * 0.7)) * scale)}px`,
+              lineHeight: `calc(1.2em + ${lineSpacingPx * scale}px)`,
+            }}
+          >
+            {secondaryText}
+          </span>
+        </span>
+      )}
     </span>
   );
 }

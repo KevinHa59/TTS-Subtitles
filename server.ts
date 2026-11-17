@@ -95,13 +95,22 @@ import { VideoDubbingMasterEditCoordinator } from "./videoDubbingMasterEdit";
 import { normalizeVieNeuAudioForTimeline } from "./videoDubbingAudio";
 import { vieneuWorkerPool } from "./vieneuWorkerPool";
 import {
+  cancelCharacterCardReferenceScanJob,
   cancelSubtitleOcrInstall,
   cancelSubtitleOcrJob,
+  createCharacterCardReferenceScanJob,
   createSubtitleOcrJob,
+  createPersistentSubtitleOcrJob,
+  getCharacterCardReferenceScanJob,
   getSubtitleOcrJob,
   getSubtitleOcrMaxUploadBytes,
   getSubtitleOcrInstallStatus,
+  getSubtitleOcrWorkerStatus,
+  type CharacterCardReferenceScanOptions,
   startSubtitleOcrInstall,
+  startSubtitleOcrWorker,
+  stopSubtitleOcrWorker,
+  type OcrJobOptions,
 } from "./subtitleOcrManager";
 import {
   getGpuExecutionSettings,
@@ -453,6 +462,96 @@ app.use(
     videoDubbingMasterEditCoordinator,
   ),
 );
+app.post("/api/video-dubbing/jobs/:jobId/character-card-ocr", (req: Request, res: Response) => {
+  const { jobId } = req.params;
+  if (!videoDubbingManager.isValidJobId(jobId)) {
+    return res.status(400).json({ error: "ID video không hợp lệ." });
+  }
+  const job = videoDubbingManager.getJob(jobId);
+  let videoPath: string | null;
+  try {
+    videoPath = videoDubbingManager.getSourceVideoPath(jobId);
+  } catch (error) {
+    console.error("[VideoDubbing] Không thể xác minh video cho OCR card:", error);
+    return res.status(500).json({ error: "Không thể truy cập video nguồn cho OCR." });
+  }
+  if (!job || !videoPath || !job.metadata) {
+    return res.status(404).json({ error: "Video nguồn chưa sẵn sàng." });
+  }
+  const installStatus = getSubtitleOcrInstallStatus();
+  if (!installStatus.runtimeReady || !installStatus.modelsReady) {
+    return res.status(409).json({ error: "Cần cài bộ nhận diện OCR trước khi tạo card tự động." });
+  }
+
+  const timeStart = Number(req.body?.timeStart);
+  const requestedDuration = Number(req.body?.durationSeconds);
+  const region = req.body?.region;
+  const coordinates = [region?.left, region?.top, region?.width, region?.height].map(Number);
+  if (
+    !Number.isFinite(timeStart) ||
+    !Number.isFinite(requestedDuration) ||
+    requestedDuration < 0.1 ||
+    requestedDuration > 60 ||
+    timeStart < 0 ||
+    timeStart >= job.metadata.durationSeconds ||
+    !coordinates.every(Number.isFinite) ||
+    coordinates[0] < 0 ||
+    coordinates[1] < 0 ||
+    coordinates[2] <= 0 ||
+    coordinates[3] <= 0 ||
+    coordinates[0] + coordinates[2] > 1 ||
+    coordinates[1] + coordinates[3] > 1
+  ) {
+    return res.status(400).json({ error: "Khoảng quét hoặc vùng OCR không hợp lệ." });
+  }
+
+  const cropX = Math.floor(coordinates[0] * job.metadata.width);
+  const cropY = Math.floor(coordinates[1] * job.metadata.height);
+  const cropWidth = Math.max(1, Math.ceil(coordinates[2] * job.metadata.width));
+  const cropHeight = Math.max(1, Math.ceil(coordinates[3] * job.metadata.height));
+  const options: OcrJobOptions = {
+    timeStart,
+    timeEnd: Math.min(job.metadata.durationSeconds, timeStart + requestedDuration),
+    confidence: 0,
+    similarity: 75,
+    maxMergeGap: 0.4,
+    brightnessThreshold: null,
+    ssimThreshold: 92,
+    maxImageWidth: 720,
+    framesToSkip: 5,
+    minimumDuration: 0.1,
+    useFullFrame: false,
+    useDualZone: false,
+    zone1: "lower",
+    zone2: "center",
+    cropX,
+    cropY,
+    cropWidth: Math.min(cropWidth, job.metadata.width - cropX),
+    cropHeight: Math.min(cropHeight, job.metadata.height - cropY),
+    alignment1: "middle-center",
+    alignment2: "middle-center",
+    angleClassification: false,
+    normalizeTraditional: false,
+    cpuThreads: 8,
+    useGpu: true,
+    ocrBatchSize: 4,
+  };
+  try {
+    const workerStatus = getSubtitleOcrWorkerStatus();
+    if (workerStatus.status === "starting") {
+      return res.status(409).json({ error: "Đang nạp model OCR thường trực; hãy đợi trạng thái sẵn sàng rồi quét." });
+    }
+    const createJob = workerStatus.status === "ready" || workerStatus.status === "busy"
+      ? createPersistentSubtitleOcrJob
+      : createSubtitleOcrJob;
+    return res.status(202).json({ success: true, job: createJob(randomUUID(), videoPath, options) });
+  } catch (error) {
+    console.error("[VideoDubbing] Không thể bắt đầu OCR card nhân vật:", error);
+    return res.status(503).json({
+      error: error instanceof Error ? error.message : "Không thể bắt đầu OCR card nhân vật.",
+    });
+  }
+});
 
 // VieNeu-TTS v3 Turbo Model Directory (48 kHz Neural TTS)
 const VIENEU_MODELS_DIR = path.resolve(MODELS_DIR, "vieneu");
@@ -4387,6 +4486,22 @@ app.get("/api/subtitle-ocr/install/status", (_req: Request, res: Response) => {
   res.json({ success: true, ...getSubtitleOcrInstallStatus() });
 });
 
+app.get("/api/subtitle-ocr/worker/status", (_req: Request, res: Response) => {
+  res.json({ success: true, worker: getSubtitleOcrWorkerStatus() });
+});
+
+app.post("/api/subtitle-ocr/worker/start", (_req: Request, res: Response) => {
+  try {
+    res.status(202).json({ success: true, worker: startSubtitleOcrWorker() });
+  } catch (error) {
+    res.status(503).json({ error: error instanceof Error ? error.message : "Không thể bật OCR thường trực." });
+  }
+});
+
+app.post("/api/subtitle-ocr/worker/stop", (_req: Request, res: Response) => {
+  res.json({ success: true, worker: stopSubtitleOcrWorker() });
+});
+
 app.post("/api/subtitle-ocr/install", async (_req: Request, res: Response) => {
   try {
     res.json(await startSubtitleOcrInstall());
@@ -4531,6 +4646,7 @@ app.post("/api/subtitle-translation/translate", isLocalSubtitleTranslationReques
       req.body?.systemPrompt,
       cancellation.signal,
       (translation) => sendEvent({ type: "translation", ...translation }),
+      req.body?.translationStyle,
     );
     sendEvent({ type: "complete", count: translations.length });
     res.end();
@@ -4598,6 +4714,7 @@ app.post("/api/subtitle-ocr/jobs", async (req: Request, res: Response) => {
     angleClassification: queryText("angleClassification") === "true",
     normalizeTraditional: queryText("normalizeTraditional") === "true",
     cpuThreads: numberOption("cpuThreads", 8, 1, 32),
+    useGpu: queryText("useGpu") !== "false",
   };
   const jobId = randomUUID();
   const uploadDir = fs.mkdtempSync(path.join(os.tmpdir(), "subtitle-ocr-job-"));
@@ -4622,6 +4739,88 @@ app.post("/api/subtitle-ocr/jobs", async (req: Request, res: Response) => {
     const tooLarge = err.message === "UPLOAD_TOO_LARGE";
     res.status(tooLarge ? 413 : 400).json({ error: tooLarge ? "Video vượt quá giới hạn tải lên 4 GB." : err.message });
   }
+});
+
+app.post("/api/video-dubbing/jobs/:jobId/character-card-reference-scan", (req: Request, res: Response) => {
+  const { jobId } = req.params;
+  if (!videoDubbingManager.isValidJobId(jobId)) {
+    return res.status(400).json({ error: "ID video không hợp lệ." });
+  }
+  const job = videoDubbingManager.getJob(jobId);
+  let videoPath: string | null;
+  try {
+    videoPath = videoDubbingManager.getSourceVideoPath(jobId);
+  } catch (error) {
+    console.error("[VideoDubbing] Không thể xác minh video cho quét ảnh mẫu:", error);
+    return res.status(500).json({ error: "Không thể truy cập video nguồn để quét ảnh mẫu." });
+  }
+  if (!job || !videoPath || !job.metadata) {
+    return res.status(404).json({ error: "Video nguồn chưa sẵn sàng." });
+  }
+
+  const region = req.body?.region;
+  const coordinates = [region?.left, region?.top, region?.width, region?.height].map(Number);
+  const framesToSkip = Number(req.body?.framesToSkip);
+  const similarityThreshold = Number(req.body?.similarityThreshold);
+  const referenceImage = req.body?.referenceImage;
+  if (
+    typeof referenceImage !== "string" ||
+    referenceImage.length > 12 * 1024 * 1024 ||
+    !/^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(referenceImage) ||
+    !Number.isSafeInteger(framesToSkip) ||
+    framesToSkip < 0 ||
+    framesToSkip > 10000 ||
+    !Number.isFinite(similarityThreshold) ||
+    similarityThreshold < 0.3 ||
+    similarityThreshold > 0.99 ||
+    !coordinates.every(Number.isFinite) ||
+    coordinates[0] < 0 ||
+    coordinates[1] < 0 ||
+    coordinates[2] <= 0 ||
+    coordinates[3] <= 0 ||
+    coordinates[0] + coordinates[2] > 1 ||
+    coordinates[1] + coordinates[3] > 1
+  ) {
+    return res.status(400).json({ error: "Ảnh mẫu, vùng quét hoặc thông số so khớp không hợp lệ." });
+  }
+
+  const options: CharacterCardReferenceScanOptions = {
+    referenceImage,
+    region: {
+      left: coordinates[0],
+      top: coordinates[1],
+      width: coordinates[2],
+      height: coordinates[3],
+    },
+    framesToSkip,
+    similarityThreshold,
+  };
+  try {
+    return res.status(202).json({
+      success: true,
+      job: createCharacterCardReferenceScanJob(randomUUID(), videoPath, options),
+    });
+  } catch (error) {
+    console.error("[VideoDubbing] Không thể bắt đầu quét ảnh mẫu card:", error);
+    return res.status(503).json({
+      error: error instanceof Error ? error.message : "Không thể bắt đầu quét ảnh mẫu.",
+    });
+  }
+});
+
+app.get("/api/video-dubbing/character-card-reference-scans/:scanId", (req: Request, res: Response) => {
+  const scan = getCharacterCardReferenceScanJob(req.params.scanId);
+  if (!scan) return res.status(404).json({ error: "Không tìm thấy lần quét ảnh mẫu." });
+  res.json({ success: true, job: scan });
+});
+
+app.post("/api/video-dubbing/character-card-reference-scans/:scanId/cancel", (req: Request, res: Response) => {
+  const scan = getCharacterCardReferenceScanJob(req.params.scanId);
+  if (!scan) return res.status(404).json({ error: "Không tìm thấy lần quét ảnh mẫu." });
+  res.json({
+    success: cancelCharacterCardReferenceScanJob(req.params.scanId),
+    job: getCharacterCardReferenceScanJob(req.params.scanId),
+  });
 });
 
 app.get("/api/subtitle-ocr/jobs/:jobId", (req: Request, res: Response) => {

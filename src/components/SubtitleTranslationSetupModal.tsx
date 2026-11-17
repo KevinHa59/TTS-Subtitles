@@ -43,7 +43,9 @@ type OcrInstallState = {
   progressPercent: number | null;
   message: string;
   error?: string;
+  gpuRuntimeError?: string;
   runtimeReady: boolean;
+  gpuRuntimeReady: boolean;
   modelsReady: boolean;
 };
 
@@ -179,26 +181,28 @@ export default function SubtitleTranslationSetupModal({ open, onClose }: { open:
 
           <section className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-950/35">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 px-4 py-3">
-              <div><h3 className="text-sm font-bold text-white">Nhận diện phụ đề · PaddleOCR</h3><p className="mt-1 text-[11px] text-slate-500">PP-OCRv5 Mobile · chạy cục bộ trên CPU.</p></div>
+              <div><h3 className="text-sm font-bold text-white">Nhận diện phụ đề · DirectML + PaddleOCR</h3><p className="mt-1 text-[11px] text-slate-500">Ưu tiên Intel GPU qua DirectML, tự dự phòng bằng PaddleOCR CPU.</p></div>
               <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] ${ocrState?.status === "ready" ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300" : ocrState?.status === "running" ? "border-cyan-500/30 bg-cyan-500/10 text-cyan-300" : ocrState?.status === "error" ? "border-rose-500/30 bg-rose-500/10 text-rose-300" : "border-slate-700 bg-slate-900 text-slate-400"}`}>
                 {ocrState?.status === "ready" ? <CheckCircle2 className="h-3 w-3" /> : ocrState?.status === "running" ? <LoaderCircle className="h-3 w-3 animate-spin" /> : <Settings className="h-3 w-3" />}
                 {ocrState?.status === "ready" ? "Sẵn sàng" : ocrState?.status === "running" ? "Đang cài" : ocrState?.status === "error" ? "Cài đặt gặp lỗi" : "Chưa cài đủ"}
               </span>
             </div>
             <div className="space-y-3 p-4">
-              <div className="grid gap-2 text-[11px] sm:grid-cols-2">
-                <div className="rounded-lg border border-slate-800 bg-slate-900/60 p-3"><span className="text-slate-400">PaddleOCR runtime</span><div className={`mt-1 font-semibold ${ocrState?.runtimeReady ? "text-emerald-300" : "text-slate-500"}`}>{ocrState?.runtimeReady ? "Đã cài" : "Chưa cài"}</div></div>
+              <div className="grid gap-2 text-[11px] sm:grid-cols-3">
+                <div className="rounded-lg border border-slate-800 bg-slate-900/60 p-3"><span className="text-slate-400">PaddleOCR CPU fallback</span><div className={`mt-1 font-semibold ${ocrState?.runtimeReady ? "text-emerald-300" : "text-slate-500"}`}>{ocrState?.runtimeReady ? "Đã cài" : "Chưa cài"}</div></div>
+                <div className="rounded-lg border border-slate-800 bg-slate-900/60 p-3"><span className="text-slate-400">ONNX Runtime DirectML</span><div className={`mt-1 font-semibold ${ocrState?.gpuRuntimeReady ? "text-emerald-300" : "text-slate-500"}`}>{ocrState?.gpuRuntimeReady ? "Đã xác minh" : "Chưa sẵn sàng"}</div></div>
                 <div className="rounded-lg border border-slate-800 bg-slate-900/60 p-3"><span className="text-slate-400">Detection + Recognition</span><div className={`mt-1 font-semibold ${ocrState?.modelsReady ? "text-emerald-300" : "text-slate-500"}`}>{ocrState?.modelsReady ? "Đã tải đủ model" : "Chưa đủ model"}</div></div>
               </div>
               {ocrState?.status === "running" && <div><div className="mb-2 flex items-center justify-between gap-3 text-[10px] text-slate-400"><span className="truncate">{ocrState.message}</span>{ocrState.progressPercent != null && <span className="shrink-0 font-mono text-cyan-300">{ocrState.progressPercent}%</span>}</div><div className="h-1.5 overflow-hidden rounded-full bg-slate-800"><div className={`h-full bg-cyan-400 transition-all ${ocrState.progressPercent == null ? "w-1/3 animate-pulse" : ""}`} style={ocrState.progressPercent == null ? undefined : { width: `${ocrState.progressPercent}%` }} /></div></div>}
               {ocrState?.status === "error" && ocrState.error && <pre className="max-h-28 overflow-auto whitespace-pre-wrap rounded-xl border border-rose-500/20 bg-rose-950/20 p-3 text-[10px] text-rose-200">{ocrState.error}</pre>}
+              {ocrState?.gpuRuntimeError && <p className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-2 text-[10px] text-amber-200">DirectML GPU chưa sẵn sàng; OCR vẫn có thể chạy bằng CPU. {ocrState.gpuRuntimeError}</p>}
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <p className="text-[10px] text-slate-500">{ocrState?.message || "Đang lấy trạng thái OCR…"}</p>
                 {ocrState?.status === "running"
                   ? <button type="button" disabled={Boolean(pendingAction)} onClick={() => void cancelOcrInstall()} className="inline-flex items-center gap-1.5 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-[10px] font-semibold text-rose-200 disabled:opacity-50"><X className="h-3 w-3" />Hủy cài đặt</button>
-                  : ocrState?.status !== "ready" && <button type="button" disabled={Boolean(pendingAction) || !ocrState} onClick={() => void runOcrInstall()} className="inline-flex items-center gap-1.5 rounded-lg bg-cyan-400 px-3 py-2 text-[10px] font-bold text-slate-950 hover:bg-cyan-300 disabled:opacity-50"><Download className="h-3 w-3" />{ocrState?.status === "error" || ocrState?.status === "cancelled" ? "Thử cài lại" : ocrState?.modelsReady ? "Cập nhật thư viện OCR" : "Tải và cài bộ nhận diện"}</button>}
+                  : (ocrState?.status !== "ready" || !ocrState.gpuRuntimeReady) && <button type="button" disabled={Boolean(pendingAction) || !ocrState} onClick={() => void runOcrInstall()} className="inline-flex items-center gap-1.5 rounded-lg bg-cyan-400 px-3 py-2 text-[10px] font-bold text-slate-950 hover:bg-cyan-300 disabled:opacity-50"><Download className="h-3 w-3" />{ocrState?.runtimeReady && ocrState.modelsReady ? ocrState.gpuRuntimeReady ? "Cập nhật OCR" : "Cài DirectML GPU" : ocrState?.status === "error" || ocrState?.status === "cancelled" ? "Thử cài lại" : "Tải và cài bộ nhận diện"}</button>}
               </div>
-              <p className="text-[10px] leading-relaxed text-slate-500">PaddleOCR dùng môi trường Python riêng (3.10–3.12), không thay đổi Python, model hay dữ liệu project khác.</p>
+              <p className="text-[10px] leading-relaxed text-slate-500">OCR dùng môi trường Python riêng (3.10–3.12); runtime DirectML và Paddle CPU tách biệt, không thay đổi Python, model hay dữ liệu project khác.</p>
             </div>
           </section>
 

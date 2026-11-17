@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { adjustSubtitleCueTimings } from "../src/utils/videoDubbingSubtitleTiming";
+import {
+  adjustSubtitleCueTimings,
+  adjustSubtitleTimelineZoom,
+} from "../src/utils/videoDubbingSubtitleTiming";
 import type { VideoDubbingSubtitleCue } from "../src/types/videoDubbing";
 
 const cues: VideoDubbingSubtitleCue[] = [
@@ -8,6 +11,13 @@ const cues: VideoDubbingSubtitleCue[] = [
   { startTime: 2.2, endTime: 3, text: "Two" },
   { startTime: 4, endTime: 5, text: "Three" },
 ];
+
+test("zooms both ways from fit scale and clamps at both limits", () => {
+  assert.equal(adjustSubtitleTimelineZoom(0.25, "in", 0.25), 0.2875);
+  assert.equal(adjustSubtitleTimelineZoom(0.25, "out", 0.25), 0.25);
+  assert.equal(adjustSubtitleTimelineZoom(180, "in", 0.25), 180);
+  assert.ok(Math.abs(adjustSubtitleTimelineZoom(8, "out", 0.25) - 8 / 1.15) < 1e-10);
+});
 
 test("extends subtitle boundaries only into available gaps", () => {
   const startsEarlier = adjustSubtitleCueTimings(cues, "start", -0.5, 6);

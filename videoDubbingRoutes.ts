@@ -657,6 +657,163 @@ export function createVideoDubbingRouter(
     }
   });
 
+  router.get("/jobs/:jobId/subtitle-audio", (req: Request, res: Response) => {
+    if (!masterCoordinator) {
+      return res.status(501).json({ error: "Audio từng câu chưa được cấu hình." });
+    }
+    if (!videoDubbingManager.isValidJobId(req.params.jobId)) {
+      return res.status(400).json({ error: "ID job video không hợp lệ." });
+    }
+    if (!videoDubbingManager.getJob(req.params.jobId)) {
+      return res.status(404).json({ error: "Không tìm thấy job Video Dubbing." });
+    }
+    try {
+      return res.json({
+        success: true,
+        items: masterCoordinator.getSubtitleAudioItems(req.params.jobId),
+      });
+    } catch (error) {
+      return res.status(500).json({
+        error: error instanceof Error ? error.message : "Không đọc được audio từng câu.",
+      });
+    }
+  });
+
+  router.put("/jobs/:jobId/subtitle-audio", (req: Request, res: Response) => {
+    if (!masterCoordinator) {
+      return res.status(501).json({ error: "Audio từng câu chưa được cấu hình." });
+    }
+    if (!videoDubbingManager.isValidJobId(req.params.jobId)) {
+      return res.status(400).json({ error: "ID job video không hợp lệ." });
+    }
+    if (!videoDubbingManager.getJob(req.params.jobId)) {
+      return res.status(404).json({ error: "Không tìm thấy job Video Dubbing." });
+    }
+    try {
+      return res.json({
+        success: true,
+        items: masterCoordinator.syncSubtitleAudioItems(
+          req.params.jobId,
+          req.body?.items,
+        ),
+      });
+    } catch (error) {
+      return res.status(400).json({
+        error: error instanceof Error ? error.message : "Không lưu được danh sách phụ đề.",
+      });
+    }
+  });
+
+  router.post(
+    "/jobs/:jobId/subtitle-audio/:cueId/regenerate",
+    async (req: Request, res: Response) => {
+      if (!masterCoordinator) {
+        return res.status(501).json({ error: "Audio từng câu chưa được cấu hình." });
+      }
+      if (!videoDubbingManager.isValidJobId(req.params.jobId)) {
+        return res.status(400).json({ error: "ID job video không hợp lệ." });
+      }
+      if (!videoDubbingManager.getJob(req.params.jobId)) {
+        return res.status(404).json({ error: "Không tìm thấy job Video Dubbing." });
+      }
+      if (
+        mediaCoordinator?.isBusy(req.params.jobId) ||
+        videoDubbingManager.getJob(req.params.jobId)?.separation?.status === "processing"
+      ) {
+        return res.status(409).json({
+          error: "Hãy đợi tác vụ media hoặc tách audio hoàn tất trước khi tạo lại câu TTS.",
+        });
+      }
+      if (!Array.isArray(req.body?.items) || req.body.items.length !== 1 ||
+          req.body.items[0]?.id !== req.params.cueId) {
+        return res.status(400).json({ error: "ID câu phụ đề không khớp." });
+      }
+      try {
+        const items = await masterCoordinator.regenerateSubtitleAudioItem(
+          req.params.jobId,
+          req.body,
+        );
+        return res.json({ success: true, items });
+      } catch (error) {
+        return res.status(400).json({
+          error: error instanceof Error ? error.message : "Không thể tạo lại audio câu phụ đề.",
+        });
+      }
+    },
+  );
+
+  router.get(
+    "/jobs/:jobId/subtitle-audio/:cueId",
+    (req: Request, res: Response) => {
+      if (!masterCoordinator) {
+        return res.status(501).end("Audio từng câu chưa được cấu hình.");
+      }
+      if (
+        !videoDubbingManager.isValidJobId(req.params.jobId) ||
+        !videoDubbingManager.getJob(req.params.jobId)
+      ) {
+        return res.status(404).end("Không tìm thấy job Video Dubbing.");
+      }
+      try {
+        const filePath = masterCoordinator.getSubtitleAudioPath(
+          req.params.jobId,
+          req.params.cueId,
+        );
+        if (!filePath) return res.status(404).end("Audio câu phụ đề chưa sẵn sàng.");
+        res.setHeader("Cache-Control", "no-store, must-revalidate");
+        res.type("audio/wav");
+        return res.sendFile(filePath, (error) => {
+          if (error && !res.headersSent) {
+            console.error("[VideoDubbing] Lỗi gửi audio phụ đề:", error);
+            res.status(500).end();
+          }
+        });
+      } catch (error) {
+        return res.status(500).end(
+          error instanceof Error ? error.message : "Không thể gửi audio câu phụ đề.",
+        );
+      }
+    },
+  );
+
+  router.post(
+    "/jobs/:jobId/subtitle-audio/master",
+    (req: Request, res: Response) => {
+      if (!masterCoordinator) {
+        return res.status(501).json({ error: "Tạo TTS Master chưa được cấu hình." });
+      }
+      if (!videoDubbingManager.isValidJobId(req.params.jobId)) {
+        return res.status(400).json({ error: "ID job video không hợp lệ." });
+      }
+      if (!videoDubbingManager.getJob(req.params.jobId)) {
+        return res.status(404).json({ error: "Không tìm thấy job Video Dubbing." });
+      }
+      if (
+        mediaCoordinator?.isBusy(req.params.jobId) ||
+        videoDubbingManager.getJob(req.params.jobId)?.separation?.status === "processing"
+      ) {
+        return res.status(409).json({
+          error: "Hãy đợi tác vụ media hoặc tách audio hoàn tất trước khi tạo lại TTS Master.",
+        });
+      }
+      try {
+        const masterGeneration = masterCoordinator.rebuildMasterFromSubtitleAudio(
+          req.params.jobId,
+          req.body?.items,
+        );
+        return res.json({
+          success: true,
+          masterGeneration,
+          job: videoDubbingManager.getJob(req.params.jobId),
+        });
+      } catch (error) {
+        return res.status(400).json({
+          error: error instanceof Error ? error.message : "Không thể tạo lại TTS Master.",
+        });
+      }
+    },
+  );
+
   router.post(
     "/jobs/:jobId/master/cancel",
     async (req: Request, res: Response) => {
@@ -1104,6 +1261,37 @@ export function createVideoDubbingRouter(
     }
   });
 
+  router.post(
+    "/jobs/:jobId/update-rendered-audio",
+    (req: Request, res: Response) => {
+      if (!mediaCoordinator) {
+        return res.status(501).json({ error: "Cập nhật audio MP4 chưa được cấu hình." });
+      }
+      if (!videoDubbingManager.isValidJobId(req.params.jobId)) {
+        return res.status(400).json({ error: "ID job video không hợp lệ." });
+      }
+      if (!videoDubbingManager.getJob(req.params.jobId)) {
+        return res.status(404).json({ error: "Không tìm thấy job Video Dubbing." });
+      }
+      try {
+        const videoExport = mediaCoordinator.startUpdateRenderedAudio(
+          req.params.jobId,
+        );
+        return res.status(202).json({
+          success: true,
+          videoExport,
+          job: videoDubbingManager.getJob(req.params.jobId),
+        });
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : "Không thể cập nhật audio MP4.";
+        return res.status(400).json({ error: message });
+      }
+    },
+  );
+
   router.post("/exports/concat", async (req: Request, res: Response) => {
     if (!mediaCoordinator) return res.status(501).json({ error: "Ghép video chưa được cấu hình." });
     try {
@@ -1196,6 +1384,76 @@ export function createVideoDubbingRouter(
     return res.sendFile(filePath, (error) => {
       if (error && !res.headersSent) {
         console.error("[VideoDubbing] Lỗi gửi logo:", error);
+        res.status(500).end();
+      }
+    });
+  });
+
+  router.put("/jobs/:jobId/cover", async (req: Request, res: Response) => {
+    if (!mediaCoordinator) {
+      return res.status(501).json({ error: "Chèn ảnh cover chưa được cấu hình." });
+    }
+    if (!videoDubbingManager.isValidJobId(req.params.jobId)) {
+      return res.status(400).json({ error: "ID job video không hợp lệ." });
+    }
+    if (!videoDubbingManager.getJob(req.params.jobId)) {
+      return res.status(404).json({ error: "Không tìm thấy job Video Dubbing." });
+    }
+    if (!req.is("application/octet-stream")) {
+      return res.status(415).json({
+        error: "Ảnh cover phải được gửi dưới dạng luồng application/octet-stream.",
+      });
+    }
+    try {
+      const job = await mediaCoordinator.uploadCover(
+        req.params.jobId,
+        req,
+        req.query.extension,
+      );
+      return res.json({ success: true, job });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Không thể tải ảnh cover lên.";
+      console.error("[VideoDubbing] Lỗi khi nhận ảnh cover:", error);
+      if (!res.headersSent && !req.destroyed) {
+        return res.status(message.includes("không tìm thấy") ? 404 : 400).json({
+          error: message,
+        });
+      }
+    }
+  });
+
+  router.delete("/jobs/:jobId/cover", (req: Request, res: Response) => {
+    if (!mediaCoordinator) {
+      return res.status(501).json({ error: "Chèn ảnh cover chưa được cấu hình." });
+    }
+    if (!videoDubbingManager.isValidJobId(req.params.jobId)) {
+      return res.status(400).json({ error: "ID job video không hợp lệ." });
+    }
+    if (!videoDubbingManager.getJob(req.params.jobId)) {
+      return res.status(404).json({ error: "Không tìm thấy job Video Dubbing." });
+    }
+    try {
+      return res.json({ success: true, job: mediaCoordinator.removeCover(req.params.jobId) });
+    } catch (error) {
+      return res.status(400).json({
+        error: error instanceof Error ? error.message : "Không thể xóa ảnh cover.",
+      });
+    }
+  });
+
+  router.get("/jobs/:jobId/cover", (req: Request, res: Response) => {
+    if (!videoDubbingManager.isValidJobId(req.params.jobId)) {
+      return res.status(400).json({ error: "ID job video không hợp lệ." });
+    }
+    const filePath = mediaCoordinator?.getCoverPath(req.params.jobId);
+    if (!filePath) {
+      return res.status(404).json({ error: "Ảnh cover chưa được tải lên." });
+    }
+    res.setHeader("Cache-Control", "no-store, must-revalidate");
+    res.type(path.extname(filePath));
+    return res.sendFile(filePath, (error) => {
+      if (error && !res.headersSent) {
+        console.error("[VideoDubbing] Lỗi gửi ảnh cover:", error);
         res.status(500).end();
       }
     });

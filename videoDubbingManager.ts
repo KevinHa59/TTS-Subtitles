@@ -97,12 +97,51 @@ const OVERLAY_POSITIONS = new Set<VideoDubbingOverlayPosition>([
   "bottom-right",
 ]);
 
+function createDefaultOverlaySettings(): VideoDubbingOverlaySettings {
+  return {
+    logoEnabled: false,
+    logoWidthPercent: 15,
+    logoPaddingPx: 24,
+    logoPosition: "top-left",
+    coverEnabled: false,
+    coverFrameCount: 5,
+    subtitlesEnabled: false,
+    subtitles: [],
+    subtitleFontSize: 32,
+    subtitleFontFamily: "Arial",
+    subtitleColor: "#ffffff",
+    subtitleBackgroundColor: "#000000",
+    subtitleBackgroundTransparent: false,
+    subtitleBackgroundMode: "color",
+    subtitleBold: false,
+    subtitleItalic: false,
+    subtitlePaddingPx: 8,
+    subtitleMarginPx: 32,
+    subtitleFontSizeScale: 100,
+    subtitleVerticalOffsetPx: 0,
+    subtitleBackgroundSideScale: 100,
+    subtitlePosition: "bottom-center",
+    subtitleBackgroundImage: null,
+    subtitleBackgroundLeftSlicePx: 128,
+    subtitleBackgroundRightSlicePx: 128,
+  };
+}
+
 function isOverlaySettings(
   input: unknown,
 ): input is VideoDubbingOverlaySettings {
   if (!input || typeof input !== "object") return false;
   const settings = input as Record<string, unknown>;
   return (
+    (settings.coverEnabled === undefined ||
+      typeof settings.coverEnabled === "boolean") &&
+    (settings.coverFileName === undefined ||
+      (typeof settings.coverFileName === "string" &&
+        /^overlay-cover\.(png|jpe?g|webp)$/.test(settings.coverFileName))) &&
+    (settings.coverFrameCount === undefined ||
+      (Number.isSafeInteger(settings.coverFrameCount) &&
+        Number(settings.coverFrameCount) >= 5 &&
+        Number(settings.coverFrameCount) <= 10)) &&
     typeof settings.logoEnabled === "boolean" &&
     (settings.logoFileName === undefined ||
       (typeof settings.logoFileName === "string" &&
@@ -727,7 +766,10 @@ export class VideoDubbingManager {
     const previousSettings = job.state.overlaySettings;
     const settingsChanged =
       previousSettings &&
-      (previousSettings.logoEnabled !== settings.logoEnabled ||
+      (previousSettings.coverEnabled !== settings.coverEnabled ||
+        previousSettings.coverFileName !== settings.coverFileName ||
+        previousSettings.coverFrameCount !== settings.coverFrameCount ||
+        previousSettings.logoEnabled !== settings.logoEnabled ||
         previousSettings.logoFileName !== settings.logoFileName ||
         previousSettings.logoWidthPercent !== settings.logoWidthPercent ||
         previousSettings.logoPaddingPx !== settings.logoPaddingPx ||
@@ -789,29 +831,7 @@ export class VideoDubbingManager {
     if (fileName && !/^overlay-logo\.(png|jpe?g|webp)$/.test(fileName)) {
       throw new Error("Tên tệp logo không hợp lệ.");
     }
-    const settings = job.state.overlaySettings || {
-      logoEnabled: false,
-      logoWidthPercent: 15,
-      logoPaddingPx: 24,
-      logoPosition: "top-left" as const,
-      subtitlesEnabled: false,
-      subtitles: [],
-      subtitleFontSize: 32,
-      subtitleFontFamily: "Arial",
-      subtitleColor: "#ffffff",
-      subtitleBackgroundColor: "#000000",
-      subtitleBackgroundTransparent: false,
-      subtitleBackgroundMode: "color" as const,
-      subtitleBold: false,
-      subtitleItalic: false,
-      subtitlePaddingPx: 8,
-      subtitleMarginPx: 32,
-      subtitleFontSizeScale: 100,
-      subtitlePosition: "bottom-center" as const,
-      subtitleBackgroundImage: null,
-      subtitleBackgroundLeftSlicePx: 128,
-      subtitleBackgroundRightSlicePx: 128,
-    };
+    const settings = job.state.overlaySettings || createDefaultOverlaySettings();
     job.state.overlaySettings = {
       ...settings,
       logoEnabled: Boolean(fileName),
@@ -832,6 +852,52 @@ export class VideoDubbingManager {
     }
     job.state.updatedAt = Date.now();
     this.persistJob(job);
+  }
+
+  setOverlayCover(jobId: string, fileName: string | undefined): void {
+    const job = this.findJob(jobId);
+    if (!job) throw new Error("Không tìm thấy job Video Dubbing.");
+    if (fileName && !/^overlay-cover\.(png|jpe?g|webp)$/.test(fileName)) {
+      throw new Error("Tên tệp cover không hợp lệ.");
+    }
+    const currentFileName = job.state.overlaySettings?.coverFileName;
+    const settings = job.state.overlaySettings || createDefaultOverlaySettings();
+    job.state.overlaySettings = {
+      ...settings,
+      coverEnabled: Boolean(fileName),
+      coverFileName: fileName,
+      coverFrameCount: settings.coverFrameCount ?? 5,
+    };
+    if (job.state.videoExport?.sizeBytes) {
+      job.state.videoExport = {
+        ...job.state.videoExport,
+        status: "stale",
+        error: "Ảnh cover đầu video đã thay đổi; hãy xuất lại MP4.",
+      };
+      if (job.state.autoPipeline) job.state.autoPipeline.artifacts.export = undefined;
+    }
+    if (currentFileName && currentFileName !== fileName) {
+      fs.rmSync(path.join(job.directory, currentFileName), { force: true });
+    }
+    job.state.updatedAt = Date.now();
+    this.persistJob(job);
+  }
+
+  getOverlayCoverPath(jobId: string): string | null {
+    const job = this.findJob(jobId);
+    const fileName = job?.state.overlaySettings?.coverFileName;
+    if (!job || !fileName || !/^overlay-cover\.(png|jpe?g|webp)$/.test(fileName)) {
+      return null;
+    }
+    const localPath = path.resolve(job.directory, fileName);
+    if (!localPath.startsWith(`${path.resolve(job.directory)}${path.sep}`)) return null;
+    try {
+      const stats = fs.statSync(localPath);
+      return stats.isFile() && stats.size > 0 ? localPath : null;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      return null;
+    }
   }
 
   setSharedOverlayLogo(jobId: string, fileName: string | undefined, forceInvalidateExport = false): void {
@@ -1209,6 +1275,8 @@ export class VideoDubbingManager {
           } else {
             state.overlaySettings = {
               ...parsed.overlaySettings,
+              coverEnabled: parsed.overlaySettings.coverEnabled ?? false,
+              coverFrameCount: parsed.overlaySettings.coverFrameCount ?? 5,
               logoPaddingPx: parsed.overlaySettings.logoPaddingPx ?? 24,
               subtitleFontFamily:
                 parsed.overlaySettings.subtitleFontFamily ?? "Arial",

@@ -9,26 +9,31 @@ const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 
 export type SubtitleOcrInstallStatus = {
   status: "not_installed" | "running" | "ready" | "error" | "cancelled";
-  stage: "idle" | "python" | "runtime" | "detection" | "recognition" | "verify" | "done";
+  stage: "idle" | "python" | "runtime" | "detection" | "recognition" | "gpu-runtime" | "verify" | "done";
   progressPercent: number | null;
   message: string;
   error?: string;
+  gpuRuntimeError?: string;
   runtimeReady: boolean;
+  gpuRuntimeReady: boolean;
   modelsReady: boolean;
   updatedAt: number;
 };
 
 const ROOT = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local"), "PiperTTSStudio", "subtitle-ocr");
 const VENV = path.join(ROOT, "runtime");
+const GPU_VENV = path.join(ROOT, "runtime-directml");
 const MODELS = path.join(ROOT, "models");
+const GPU_MODELS = path.join(ROOT, "directml-models");
 const RUNTIME_READY_FILE = path.join(ROOT, "runtime-ready.json");
 const PYTHON = process.platform === "win32" ? path.join(VENV, "Scripts", "python.exe") : path.join(VENV, "bin", "python");
+const GPU_PYTHON = process.platform === "win32" ? path.join(GPU_VENV, "Scripts", "python.exe") : path.join(GPU_VENV, "bin", "python");
 const MODEL_SPECS = [
   { id: "detection", name: "PP-OCRv5_mobile_det", url: "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv5_mobile_det_infer.tar" },
   { id: "recognition", name: "PP-OCRv5_mobile_rec", url: "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv5_mobile_rec_infer.tar" },
 ];
 const MODEL_FILES = ["inference.json", "inference.pdiparams", "inference.yml"];
-const OCR_RUNTIME_SCHEMA = 2;
+const OCR_RUNTIME_SCHEMA = 3;
 
 export interface SubtitleOcrCue {
   startTime: number;
@@ -47,8 +52,17 @@ export interface SubtitleOcrJob {
   processedFrames: number;
   totalFrames: number;
   message: string;
+  backend?: "cpu" | "directml";
   subtitles: SubtitleOcrCue[];
   error?: string;
+  updatedAt: number;
+}
+
+export interface SubtitleOcrWorkerStatus {
+  status: "stopped" | "starting" | "ready" | "busy" | "error";
+  message: string;
+  backend?: "cpu" | "directml";
+  activeJobId?: string;
   updatedAt: number;
 }
 
@@ -76,19 +90,59 @@ export type OcrJobOptions = {
   angleClassification: boolean;
   normalizeTraditional: boolean;
   cpuThreads: number;
+  useGpu: boolean;
+  ocrBatchSize?: number;
 };
+
+export type CharacterCardReferenceScanResult = {
+  id: string;
+  startTime: number;
+  endTime: number;
+  time: number;
+  confidence: number;
+  thumbnail: string | null;
+};
+
+export type CharacterCardReferenceScanJob = {
+  id: string;
+  status: "running" | "completed" | "error" | "cancelled";
+  progressPercent: number;
+  processedFrames: number;
+  totalFrames: number;
+  message: string;
+  results: CharacterCardReferenceScanResult[];
+  error?: string;
+  updatedAt: number;
+};
+
+export type CharacterCardReferenceScanOptions = {
+  referenceImage: string;
+  region: { left: number; top: number; width: number; height: number };
+  framesToSkip: number;
+  similarityThreshold: number;
+};
+
 const OCR_JOBS = new Map<string, SubtitleOcrJob>();
 const OCR_CHILDREN = new Map<string, ChildProcess>();
+const REFERENCE_SCAN_JOBS = new Map<string, CharacterCardReferenceScanJob>();
+const REFERENCE_SCAN_CHILDREN = new Map<string, ChildProcess>();
 const OCR_MAX_UPLOAD_BYTES = 4 * 1024 * 1024 * 1024;
 const OCR_MAX_CONCURRENT_JOBS = 4;
 const OCR_JOB_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 
 let status: SubtitleOcrInstallStatus = {
   status: "not_installed", stage: "idle", progressPercent: null,
-  message: "Chưa cài bộ nhận diện.", runtimeReady: false, modelsReady: false, updatedAt: Date.now(),
+  message: "Chưa cài bộ nhận diện.", runtimeReady: false, gpuRuntimeReady: false, modelsReady: false, updatedAt: Date.now(),
 };
 let activeChild: ChildProcess | null = null;
 let cancelled = false;
+let persistentWorker: ChildProcess | null = null;
+let persistentWorkerGeneration = 0;
+let persistentWorkerJobId: string | null = null;
+let persistentWorkerIdleTimer: ReturnType<typeof setTimeout> | null = null;
+let persistentWorkerStatus: SubtitleOcrWorkerStatus = {
+  status: "stopped", message: "OCR thường trực đang tắt.", updatedAt: Date.now(),
+};
 
 function modelReady(name: string) {
   const dir = path.join(MODELS, name);
@@ -102,18 +156,27 @@ function publish(patch: Partial<SubtitleOcrInstallStatus>) {
 export function getSubtitleOcrInstallStatus(): SubtitleOcrInstallStatus {
   if (status.status !== "running") {
     let runtimeReady = false;
+    let runtimeInfo: { schema?: number; gpuRuntimeReady?: boolean; gpuRuntimeError?: string } = {};
     try {
-      runtimeReady = fs.existsSync(PYTHON) && JSON.parse(fs.readFileSync(RUNTIME_READY_FILE, "utf8")).schema === OCR_RUNTIME_SCHEMA;
-    } catch { runtimeReady = false; }
+      runtimeInfo = JSON.parse(fs.readFileSync(RUNTIME_READY_FILE, "utf8"));
+      runtimeReady = fs.existsSync(PYTHON) && runtimeInfo.schema === OCR_RUNTIME_SCHEMA;
+    } catch { runtimeInfo = {}; }
+    const gpuRuntimeReady = process.platform === "win32" && fs.existsSync(GPU_PYTHON) && runtimeInfo.gpuRuntimeReady === true;
+    const gpuRuntimeError = runtimeInfo.gpuRuntimeError;
     const modelsReady = MODEL_SPECS.every((model) => modelReady(model.name));
     if (runtimeReady && modelsReady) {
-      status = { ...status, status: "ready", stage: "done", progressPercent: 100, message: "PaddleOCR và hai model đã sẵn sàng.", runtimeReady, modelsReady, updatedAt: Date.now() };
+      const message = gpuRuntimeReady
+        ? "DirectML GPU và PaddleOCR CPU dự phòng đã sẵn sàng."
+        : gpuRuntimeError
+          ? `PaddleOCR CPU đã sẵn sàng; DirectML GPU chưa khả dụng: ${gpuRuntimeError}`
+          : "PaddleOCR CPU đã sẵn sàng; DirectML GPU chưa được cài.";
+      status = { ...status, status: "ready", stage: "done", progressPercent: 100, message, error: undefined, gpuRuntimeError, runtimeReady, gpuRuntimeReady, modelsReady, updatedAt: Date.now() };
     } else {
       status = {
         ...status,
         status: status.status === "error" ? "error" : "not_installed",
         message: modelsReady && !runtimeReady ? "Cần cập nhật thư viện OCR để bật chuyển Phồn thể → Giản thể." : status.message,
-        runtimeReady, modelsReady, updatedAt: Date.now(),
+        runtimeReady, gpuRuntimeReady, gpuRuntimeError, modelsReady, updatedAt: Date.now(),
       };
     }
   }
@@ -253,16 +316,45 @@ export async function startSubtitleOcrInstall() {
       await run(PYTHON, ["-m", "pip", "install", "--disable-pip-version-check", "paddlepaddle==3.3.1", "paddleocr==3.7.0", "opencc-python-reimplemented==0.1.7"], (line) => publish({ message: line.slice(-220) }));
       await run(PYTHON, ["-c", "import paddle,paddleocr; print('Paddle',paddle.__version__); print('PaddleOCR ready')"]);
       fs.writeFileSync(RUNTIME_READY_FILE, JSON.stringify({ schema: OCR_RUNTIME_SCHEMA, paddlepaddle: "3.3.1", paddleocr: "3.7.0", opencc: "0.1.7", installedAt: Date.now() }, null, 2));
-      publish({ runtimeReady: true });
+      publish({ runtimeReady: true, gpuRuntimeReady: false });
       await installModel(MODEL_SPECS[0], PYTHON);
       await installModel(MODEL_SPECS[1], PYTHON);
       publish({ stage: "verify", progressPercent: null, message: "Đang xác minh runtime và model…" });
       await run(PYTHON, ["-c", "from paddleocr import PaddleOCR; from opencc import OpenCC; print('OCR imports ready')"]);
       if (!MODEL_SPECS.every((model) => modelReady(model.name))) throw new Error("Không tìm thấy đủ file model sau khi cài.");
-      publish({ status: "ready", stage: "done", progressPercent: 100, message: "PaddleOCR và hai model đã sẵn sàng.", runtimeReady: true, modelsReady: true });
+      let gpuRuntimeReady = false;
+      let gpuRuntimeError: string | undefined;
+      if (process.platform === "win32") {
+        try {
+          if (!fs.existsSync(GPU_PYTHON)) {
+            publish({ stage: "gpu-runtime", progressPercent: null, message: "Đang tạo môi trường Python DirectML riêng…" });
+            await run(basePython.command, [...basePython.args, "-m", "venv", GPU_VENV]);
+          }
+          publish({ stage: "gpu-runtime", progressPercent: null, message: "Đang cài RapidOCR và ONNX Runtime DirectML…" });
+          await run(GPU_PYTHON, ["-m", "pip", "install", "--disable-pip-version-check", "--upgrade", "pip"]);
+          await run(GPU_PYTHON, ["-m", "pip", "install", "--disable-pip-version-check", "rapidocr==3.10.0", "onnxruntime-directml==1.23.0", "opencc-python-reimplemented==0.1.7"], (line) => publish({ message: line.slice(-220) }));
+          const worker = path.resolve(MODULE_DIR, "tools", "subtitle-ocr", "worker.py");
+          await run(GPU_PYTHON, [worker, "--verify-directml", JSON.stringify({ gpuModelRoot: GPU_MODELS })], (line) => publish({ message: line.slice(-220) }));
+          gpuRuntimeReady = true;
+        } catch (error) {
+          if (cancelled) throw error;
+          gpuRuntimeError = error instanceof Error ? error.message : String(error);
+        }
+      } else {
+        gpuRuntimeError = "DirectML chỉ được hỗ trợ trên Windows.";
+      }
+      fs.writeFileSync(RUNTIME_READY_FILE, JSON.stringify({
+        schema: OCR_RUNTIME_SCHEMA, paddlepaddle: "3.3.1", paddleocr: "3.7.0", opencc: "0.1.7",
+        gpuRuntimeReady, gpuRuntimeError, rapidocr: gpuRuntimeReady ? "3.10.0" : undefined,
+        onnxruntimeDirectml: gpuRuntimeReady ? "1.23.0" : undefined, installedAt: Date.now(),
+      }, null, 2));
+      const message = gpuRuntimeReady
+        ? "DirectML GPU và PaddleOCR CPU dự phòng đã sẵn sàng."
+        : `PaddleOCR CPU đã sẵn sàng; DirectML GPU chưa khả dụng${gpuRuntimeError ? `: ${gpuRuntimeError}` : "."}`;
+      publish({ status: "ready", stage: "done", progressPercent: 100, message, runtimeReady: true, gpuRuntimeReady, gpuRuntimeError, modelsReady: true });
     } catch (error) {
       const wasCancelled = cancelled;
-      publish({ status: wasCancelled ? "cancelled" : "error", stage: "idle", progressPercent: null, message: wasCancelled ? "Đã hủy cài đặt." : "Cài đặt không hoàn tất.", error: wasCancelled ? undefined : (error instanceof Error ? error.message : String(error)), runtimeReady: fs.existsSync(PYTHON), modelsReady: MODEL_SPECS.every((model) => modelReady(model.name)) });
+      publish({ status: wasCancelled ? "cancelled" : "error", stage: "idle", progressPercent: null, message: wasCancelled ? "Đã hủy cài đặt." : "Cài đặt không hoàn tất.", error: wasCancelled ? undefined : (error instanceof Error ? error.message : String(error)), runtimeReady: fs.existsSync(PYTHON), gpuRuntimeReady: fs.existsSync(GPU_PYTHON), modelsReady: MODEL_SPECS.every((model) => modelReady(model.name)) });
     }
   })();
   return { success: true, status: getSubtitleOcrInstallStatus() };
@@ -281,9 +373,147 @@ export function getSubtitleOcrRuntimePaths() {
   if (current.status !== "ready") throw new Error("Cài đặt PaddleOCR và model trước khi chạy nhận diện.");
   return {
     python: PYTHON,
+    gpuModelRoot: GPU_MODELS,
+    gpuRuntimeReady: current.gpuRuntimeReady,
     detectionModel: path.join(MODELS, MODEL_SPECS[0].name),
     recognitionModel: path.join(MODELS, MODEL_SPECS[1].name),
   };
+}
+
+export function getSubtitleOcrRuntimePythonPath() {
+  if (!getSubtitleOcrInstallStatus().runtimeReady) {
+    throw new Error("Cần cài runtime OCR/OpenCV trước khi quét ảnh mẫu.");
+  }
+  return PYTHON;
+}
+
+export function createCharacterCardReferenceScanJob(
+  id: string,
+  videoPath: string,
+  options: CharacterCardReferenceScanOptions,
+) {
+  if (Array.from(REFERENCE_SCAN_JOBS.values()).some((job) => job.status === "running")) {
+    throw new Error("Đang có một lần quét ảnh mẫu khác chạy.");
+  }
+  const worker = path.resolve(MODULE_DIR, "tools", "subtitle-ocr", "character_card_reference_scan.py");
+  const runtime = getSubtitleOcrRuntimePaths();
+  const child = spawn(PYTHON, [
+    worker,
+    videoPath,
+    runtime.detectionModel,
+    runtime.recognitionModel,
+  ], {
+    windowsHide: true,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  const job: CharacterCardReferenceScanJob = {
+    id,
+    status: "running",
+    progressPercent: 0,
+    processedFrames: 0,
+    totalFrames: 0,
+    message: "Đang khởi động bộ so khớp ảnh mẫu…",
+    results: [],
+    updatedAt: Date.now(),
+  };
+  REFERENCE_SCAN_JOBS.set(id, job);
+  REFERENCE_SCAN_CHILDREN.set(id, child);
+  let stdoutBuffer = "";
+  let stderr = "";
+  let completedResult = false;
+  let idleTimer: ReturnType<typeof setTimeout>;
+  const failJob = (message: string) => {
+    if (job.status !== "running") return;
+    job.status = "error";
+    job.error = message;
+    job.message = "Quét ảnh mẫu thất bại.";
+    job.updatedAt = Date.now();
+    child.kill();
+  };
+  const resetIdleTimer = () => {
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      failJob("Bộ quét ảnh mẫu không cập nhật tiến trình trong 5 phút; tác vụ đã tự dừng.");
+    }, OCR_JOB_IDLE_TIMEOUT_MS);
+  };
+  resetIdleTimer();
+
+  child.stdout?.on("data", (chunk: Buffer) => {
+    stdoutBuffer += chunk.toString("utf8");
+    const lines = stdoutBuffer.split(/\r?\n/);
+    stdoutBuffer = lines.pop() || "";
+    for (const line of lines) {
+      if (job.status !== "running") return;
+      try {
+        const event = JSON.parse(line);
+        resetIdleTimer();
+        if (event.type === "progress") {
+          job.processedFrames = Number(event.processed) || 0;
+          job.totalFrames = Number(event.total) || 0;
+          job.progressPercent = job.totalFrames
+            ? Math.floor(job.processedFrames * 100 / job.totalFrames)
+            : 0;
+          job.message = typeof event.message === "string" ? event.message : "Đang so khớp ảnh mẫu…";
+        } else if (event.type === "result") {
+          job.results = Array.isArray(event.results) ? event.results : [];
+          job.progressPercent = 100;
+          job.message = typeof event.message === "string"
+            ? event.message
+            : `Hoàn tất · tìm thấy ${job.results.length} lần xuất hiện có chữ.`;
+          completedResult = true;
+        } else if (event.type === "error") {
+          failJob(typeof event.message === "string" ? event.message : "Bộ quét ảnh mẫu gặp lỗi.");
+        }
+        job.updatedAt = Date.now();
+      } catch (error) {
+        failJob(`Không đọc được phản hồi bộ quét ảnh mẫu: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  });
+  child.stderr?.on("data", (chunk: Buffer) => {
+    stderr = `${stderr}${chunk.toString("utf8")}`.slice(-4000);
+  });
+  child.once("error", (error) => {
+    clearTimeout(idleTimer);
+    REFERENCE_SCAN_CHILDREN.delete(id);
+    failJob(error.message);
+  });
+  child.once("close", (code) => {
+    clearTimeout(idleTimer);
+    REFERENCE_SCAN_CHILDREN.delete(id);
+    if (job.status !== "running") return;
+    if (code === 0 && completedResult) {
+      job.status = "completed";
+      job.progressPercent = 100;
+      job.message = `Hoàn tất · tìm thấy ${job.results.length} lần xuất hiện.`;
+    } else {
+      job.status = "error";
+      job.error = stderr.trim() || `Bộ quét ảnh mẫu kết thúc với mã ${code}.`;
+      job.message = "Quét ảnh mẫu thất bại.";
+    }
+    job.updatedAt = Date.now();
+  });
+  child.stdin?.on("error", (error) => {
+    failJob(`Không gửi được ảnh mẫu cho bộ quét: ${error.message}`);
+  });
+  child.stdin?.end(`${JSON.stringify(options)}\n`);
+  return { ...job };
+}
+
+export function getCharacterCardReferenceScanJob(id: string) {
+  const job = REFERENCE_SCAN_JOBS.get(id);
+  return job ? { ...job, results: [...job.results] } : null;
+}
+
+export function cancelCharacterCardReferenceScanJob(id: string) {
+  const job = REFERENCE_SCAN_JOBS.get(id);
+  const child = REFERENCE_SCAN_CHILDREN.get(id);
+  if (!job || !child || job.status !== "running") return false;
+  job.status = "cancelled";
+  job.message = "Đã hủy quét ảnh mẫu.";
+  job.updatedAt = Date.now();
+  child.kill();
+  return true;
 }
 
 function cleanupOcrUpload(videoPath: string) {
@@ -299,16 +529,21 @@ export function createSubtitleOcrJob(id: string, videoPath: string, options: Ocr
     throw new Error(`Đã đạt giới hạn ${OCR_MAX_CONCURRENT_JOBS} video OCR chạy đồng thời.`);
   }
   const runtime = getSubtitleOcrRuntimePaths();
+  const useDirectMl = options.useGpu && process.platform === "win32" && runtime.gpuRuntimeReady;
+  const workerOptions = useDirectMl
+    ? { ...options, backend: "directml", gpuModelRoot: runtime.gpuModelRoot, cpuPython: runtime.python }
+    : { ...options, backend: "cpu" };
   const job: SubtitleOcrJob = {
     id, status: "queued", progressPercent: 0, processedFrames: 0, totalFrames: 0,
     startedAt: Date.now(), elapsedMs: 0,
-    message: "Đang khởi động PaddleOCR…", subtitles: [], updatedAt: Date.now(),
+    message: useDirectMl ? "Đang khởi động OCR DirectML…" : "Đang khởi động PaddleOCR…",
+    subtitles: [], updatedAt: Date.now(),
   };
   OCR_JOBS.set(id, job);
   const worker = path.resolve(MODULE_DIR, "tools", "subtitle-ocr", "worker.py");
-  const child = spawn(runtime.python, [
+  const child = spawn(useDirectMl ? GPU_PYTHON : runtime.python, [
     worker, videoPath, runtime.detectionModel, runtime.recognitionModel,
-    JSON.stringify(options),
+    JSON.stringify(workerOptions),
   ], {
     windowsHide: true, stdio: ["ignore", "pipe", "pipe"],
   });
@@ -340,13 +575,24 @@ export function createSubtitleOcrJob(id: string, videoPath: string, options: Ocr
       if (job.status !== "running") return;
       try {
         const event = JSON.parse(line);
-        if (event.type === "progress") {
+        if (event.type === "backend") {
+          resetIdleTimer();
+          Object.assign(job, {
+            backend: event.backend === "directml" ? "directml" : "cpu",
+            message: event.message || (event.backend === "directml" ? "Đang dùng DirectML GPU." : "Đang dùng PaddleOCR CPU."),
+            updatedAt: Date.now(),
+          });
+        } else if (event.type === "progress") {
           resetIdleTimer();
           Object.assign(job, {
             progressPercent: event.total ? Math.floor(event.processed * 100 / event.total) : 0,
             processedFrames: event.processed || 0, totalFrames: event.total || 0,
             message: event.message || "Đang nhận diện phụ đề…", updatedAt: Date.now(),
           });
+        } else if (event.type === "subtitles") {
+          resetIdleTimer();
+          job.subtitles = Array.isArray(event.subtitles) ? event.subtitles : [];
+          job.updatedAt = Date.now();
         } else if (event.type === "result") {
           resetIdleTimer();
           job.subtitles = Array.isArray(event.subtitles) ? event.subtitles : [];
@@ -389,6 +635,243 @@ export function createSubtitleOcrJob(id: string, videoPath: string, options: Ocr
   return { ...job };
 }
 
+function publishPersistentWorker(patch: Partial<SubtitleOcrWorkerStatus>) {
+  persistentWorkerStatus = { ...persistentWorkerStatus, ...patch, updatedAt: Date.now() };
+}
+
+function finishPersistentJob(status: "completed" | "error" | "cancelled", error?: string) {
+  if (persistentWorkerIdleTimer) clearTimeout(persistentWorkerIdleTimer);
+  persistentWorkerIdleTimer = null;
+  if (!persistentWorkerJobId) {
+    publishPersistentWorker({ activeJobId: undefined });
+    return;
+  }
+  const job = OCR_JOBS.get(persistentWorkerJobId);
+  if (job && (job.status === "running" || job.status === "queued")) {
+    job.status = status;
+    job.finishedAt = Date.now();
+    job.elapsedMs = job.finishedAt - job.startedAt;
+    job.updatedAt = Date.now();
+    if (status === "completed") {
+      job.progressPercent = 100;
+      job.message = `Hoàn tất · nhận diện ${job.subtitles.length} câu.`;
+    } else if (status === "cancelled") {
+      job.message = "Đã hủy nhận diện.";
+    } else {
+      job.error = error || "Worker OCR thường trực gặp lỗi.";
+      job.message = "Nhận diện phụ đề thất bại.";
+    }
+  }
+  persistentWorkerJobId = null;
+  publishPersistentWorker({ activeJobId: undefined });
+}
+
+function startPersistentWorker(backend: "cpu" | "directml", fallback = false) {
+  const runtime = getSubtitleOcrRuntimePaths();
+  const options = backend === "directml"
+    ? { backend, gpuModelRoot: runtime.gpuModelRoot, angleClassification: false }
+    : { backend, cpuThreads: 8, angleClassification: false };
+  const workerPath = path.resolve(MODULE_DIR, "tools", "subtitle-ocr", "worker.py");
+  const generation = ++persistentWorkerGeneration;
+  publishPersistentWorker({
+    status: "starting",
+    backend: undefined,
+    activeJobId: undefined,
+    message: backend === "directml" ? "Đang nạp model OCR DirectML…" : "Đang nạp model OCR CPU…",
+  });
+  const child = spawn(backend === "directml" ? GPU_PYTHON : runtime.python, [
+    workerPath, "--service", runtime.detectionModel, runtime.recognitionModel, JSON.stringify(options),
+  ], { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
+  persistentWorker = child;
+  let ready = false;
+  let stdoutBuffer = "";
+  const stderr: string[] = [];
+  const resetStartupTimer = () => {
+    if (persistentWorkerIdleTimer) clearTimeout(persistentWorkerIdleTimer);
+    persistentWorkerIdleTimer = setTimeout(() => {
+      if (generation !== persistentWorkerGeneration || ready) return;
+      publishPersistentWorker({
+        status: "error",
+        message: "Nạp model OCR quá 5 phút không hoàn tất; worker đã tự dừng.",
+      });
+      persistentWorker?.kill();
+    }, OCR_JOB_IDLE_TIMEOUT_MS);
+  };
+  resetStartupTimer();
+
+  child.stdout?.on("data", (chunk: Buffer) => {
+    stdoutBuffer += chunk.toString("utf8");
+    const lines = stdoutBuffer.split(/\r?\n/);
+    stdoutBuffer = lines.pop() || "";
+    for (const line of lines) {
+      try {
+        const event = JSON.parse(line);
+        if (event.type === "ready") {
+          ready = true;
+          if (persistentWorkerIdleTimer) clearTimeout(persistentWorkerIdleTimer);
+          persistentWorkerIdleTimer = null;
+          publishPersistentWorker({
+            status: "ready",
+            backend: event.backend === "directml" ? "directml" : "cpu",
+            message: event.backend === "directml"
+              ? "OCR thường trực đã sẵn sàng · DirectML GPU."
+              : "OCR thường trực đã sẵn sàng · CPU.",
+          });
+        } else if (event.type === "progress" && !event.jobId) {
+          resetStartupTimer();
+          publishPersistentWorker({ message: event.message || persistentWorkerStatus.message });
+        } else if (event.type === "backend" && !event.jobId && !ready) {
+          publishPersistentWorker({ message: event.message || persistentWorkerStatus.message });
+        } else if (event.jobId && event.jobId === persistentWorkerJobId) {
+          const job = OCR_JOBS.get(event.jobId);
+          if (!job || job.status !== "running") continue;
+          if (event.type === "backend") {
+            job.backend = event.backend === "directml" ? "directml" : "cpu";
+            job.message = event.message || "Đang nhận diện phụ đề…";
+            job.updatedAt = Date.now();
+          } else if (event.type === "progress") {
+            if (persistentWorkerIdleTimer) clearTimeout(persistentWorkerIdleTimer);
+            persistentWorkerIdleTimer = setTimeout(() => {
+              const message = "Worker OCR không cập nhật tiến trình trong 5 phút; worker thường trực đã tự dừng.";
+              finishPersistentJob("error", message);
+              publishPersistentWorker({ status: "error", message });
+              persistentWorker?.kill();
+            }, OCR_JOB_IDLE_TIMEOUT_MS);
+            Object.assign(job, {
+              progressPercent: event.total ? Math.min(99, Math.floor(event.processed * 100 / event.total)) : 0,
+              processedFrames: event.processed || 0,
+              totalFrames: event.total || 0,
+              message: event.message || "Đang nhận diện phụ đề…",
+              updatedAt: Date.now(),
+            });
+          } else if (event.type === "subtitles") {
+            job.subtitles = Array.isArray(event.subtitles) ? event.subtitles : [];
+            job.updatedAt = Date.now();
+          } else if (event.type === "result") {
+            job.subtitles = Array.isArray(event.subtitles) ? event.subtitles : [];
+            finishPersistentJob("completed");
+            publishPersistentWorker({
+              status: "ready",
+              message: "OCR thường trực đã sẵn sàng cho lần quét tiếp theo.",
+              activeJobId: undefined,
+            });
+          } else if (event.type === "error") {
+            finishPersistentJob("error", String(event.message || "Lỗi worker OCR."));
+            publishPersistentWorker({
+              status: "ready",
+              message: "Lần quét OCR thất bại; worker vẫn sẵn sàng.",
+              activeJobId: undefined,
+            });
+          }
+        } else if (event.type === "error") {
+          stderr.push(String(event.message || "Lỗi khởi động worker OCR."));
+        }
+      } catch {
+        stderr.push(line.slice(-600));
+      }
+    }
+  });
+  child.stderr?.on("data", (chunk: Buffer) => {
+    stderr.push(...chunk.toString("utf8").split(/\r?\n/).filter(Boolean).slice(-10));
+    if (stderr.length > 30) stderr.splice(0, stderr.length - 30);
+  });
+  child.stdin?.on("error", (error) => {
+    if (generation !== persistentWorkerGeneration) return;
+    finishPersistentJob("error", error.message);
+    publishPersistentWorker({ status: "error", message: `Không gửi được yêu cầu tới worker OCR: ${error.message}` });
+  });
+  child.once("error", (error) => {
+    if (generation !== persistentWorkerGeneration) return;
+    persistentWorker = null;
+    if (backend === "directml" && !fallback && !ready) {
+      startPersistentWorker("cpu", true);
+      return;
+    }
+    finishPersistentJob("error", error.message);
+    publishPersistentWorker({ status: "error", message: `Không thể khởi động worker OCR: ${error.message}` });
+  });
+  child.once("close", (code) => {
+    if (generation !== persistentWorkerGeneration) return;
+    persistentWorker = null;
+    if (!ready && backend === "directml" && !fallback) {
+      startPersistentWorker("cpu", true);
+      return;
+    }
+    const message = stderr.join("\n").slice(-2000) || `Worker OCR thường trực kết thúc với mã ${code}.`;
+    finishPersistentJob("error", message);
+    publishPersistentWorker({
+      status: "error",
+      message: ready ? "Worker OCR thường trực đã dừng ngoài dự kiến." : message,
+      activeJobId: undefined,
+    });
+  });
+}
+
+export function getSubtitleOcrWorkerStatus(): SubtitleOcrWorkerStatus {
+  return { ...persistentWorkerStatus };
+}
+
+export function startSubtitleOcrWorker() {
+  if (persistentWorkerStatus.status === "starting" || persistentWorkerStatus.status === "ready" || persistentWorkerStatus.status === "busy") {
+    return getSubtitleOcrWorkerStatus();
+  }
+  if (persistentWorker) {
+    const previousWorker = persistentWorker;
+    persistentWorker = null;
+    ++persistentWorkerGeneration;
+    previousWorker.kill();
+  }
+  const runtime = getSubtitleOcrRuntimePaths();
+  const backend = process.platform === "win32" && runtime.gpuRuntimeReady ? "directml" : "cpu";
+  startPersistentWorker(backend);
+  return getSubtitleOcrWorkerStatus();
+}
+
+export function stopSubtitleOcrWorker() {
+  const child = persistentWorker;
+  ++persistentWorkerGeneration;
+  persistentWorker = null;
+  finishPersistentJob("cancelled");
+  child?.kill();
+  publishPersistentWorker({ status: "stopped", message: "OCR thường trực đã dừng và model được giải phóng.", backend: undefined, activeJobId: undefined });
+  return getSubtitleOcrWorkerStatus();
+}
+
+export function createPersistentSubtitleOcrJob(id: string, videoPath: string, options: OcrJobOptions) {
+  if (persistentWorkerStatus.status !== "ready" || !persistentWorker) {
+    throw new Error("Worker OCR thường trực chưa sẵn sàng.");
+  }
+  if (persistentWorkerJobId) {
+    throw new Error("Worker OCR thường trực đang xử lý một lần quét khác.");
+  }
+  const job: SubtitleOcrJob = {
+    id, status: "running", startedAt: Date.now(), elapsedMs: 0,
+    progressPercent: 0, processedFrames: 0, totalFrames: 0,
+    message: "Đang nhận diện bằng worker OCR thường trực…",
+    backend: persistentWorkerStatus.backend, subtitles: [], updatedAt: Date.now(),
+  };
+  OCR_JOBS.set(id, job);
+  persistentWorkerJobId = id;
+  publishPersistentWorker({ status: "busy", activeJobId: id, message: "Đang quét bằng worker OCR thường trực…" });
+  persistentWorkerIdleTimer = setTimeout(() => {
+    const message = "Worker OCR không cập nhật tiến trình trong 5 phút; worker thường trực đã tự dừng.";
+    finishPersistentJob("error", message);
+    publishPersistentWorker({ status: "error", message, activeJobId: undefined });
+    persistentWorker?.kill();
+  }, OCR_JOB_IDLE_TIMEOUT_MS);
+  const workerOptions = persistentWorkerStatus.backend === "directml"
+    ? { ...options, backend: "directml", useGpu: true }
+    : { ...options, backend: "cpu", useGpu: false };
+  try {
+    persistentWorker.stdin?.write(`${JSON.stringify({ jobId: id, videoPath, options: workerOptions })}\n`);
+  } catch (error) {
+    finishPersistentJob("error", error instanceof Error ? error.message : String(error));
+    publishPersistentWorker({ status: "ready", activeJobId: undefined, message: "Không thể gửi yêu cầu OCR; worker vẫn sẵn sàng." });
+    throw error;
+  }
+  return { ...job };
+}
+
 export function getSubtitleOcrJob(id: string) {
   const job = OCR_JOBS.get(id);
   return job ? { ...job, elapsedMs: (job.finishedAt || Date.now()) - job.startedAt, subtitles: [...job.subtitles] } : null;
@@ -396,6 +879,10 @@ export function getSubtitleOcrJob(id: string) {
 
 export function cancelSubtitleOcrJob(id: string) {
   const job = OCR_JOBS.get(id);
+  if (persistentWorkerJobId === id && job?.status === "running") {
+    stopSubtitleOcrWorker();
+    return true;
+  }
   const child = OCR_CHILDREN.get(id);
   if (!job || !child || job.status !== "running") return false;
   job.status = "cancelled"; job.finishedAt = Date.now(); job.elapsedMs = job.finishedAt - job.startedAt; job.message = "Đã hủy nhận diện."; job.updatedAt = Date.now();

@@ -1,4 +1,4 @@
-import { ChangeEvent, DragEvent, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, ClipboardEvent as ReactClipboardEvent, DragEvent, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   AudioLines,
@@ -9,6 +9,7 @@ import {
   Download,
   FileText,
   Film,
+  Filter,
   FolderOpen,
   HardDrive,
   History,
@@ -36,6 +37,8 @@ import {
   VideoDubbingExportQuality,
   VideoDubbingSeparationAvailability,
   VideoDubbingSubtitleCue,
+  VideoDubbingEndSceneSettings,
+  VideoDubbingEndSceneAspectRatio,
   VideoDubbingTextOverlayCue,
   VideoDubbingProject,
   VideoDubbingMasterEditClip,
@@ -45,6 +48,8 @@ import { formatSecondsToSrtTime } from "../utils/srtParser";
 import { createSrtZip } from "../utils/srtFromText";
 import type { ExtractedSrtFile } from "../utils/srtFromText";
 import { analyzeSrtContent, formatVideoDubbingSrt } from "../utils/videoDubbingSrt";
+import { filterSubtitleAudioItems } from "../utils/subtitleAudioFilters";
+import { combineSubtitleCueWithPrevious } from "../utils/videoDubbingSubtitleEditing";
 import { VideoDubbingPreviewController } from "../utils/videoDubbingPreview";
 import {
   hasMatchedVideoDubbingQueueInputs,
@@ -53,7 +58,20 @@ import {
   resolveVideoDubbingTtsItems,
 } from "../utils/videoDubbingQueue";
 import { fitTextOverlaysToVideoDuration } from "../utils/videoDubbingOverlays";
-import { adjustSubtitleCueTimings } from "../utils/videoDubbingSubtitleTiming";
+import {
+  adjustSubtitleCueTimings,
+  adjustSubtitleTimelineZoom,
+} from "../utils/videoDubbingSubtitleTiming";
+import {
+  DEFAULT_CHARACTER_CARD_STYLE,
+  getTextOverlayTimelineLanes,
+  resolveCharacterCardStyle,
+  type CharacterCardStyle,
+  type CharacterCardOcrOccurrence,
+  getCharacterCardScanRanges,
+  groupCharacterCardOcrCuesByOccurrences,
+  groupCharacterCardOcrCues,
+} from "../utils/videoDubbingCharacterCards";
 import { getAvailableVideoDubbingVoices } from "../utils/videoDubbingVoices";
 import SubtitleOverlayRenderer from "./SubtitleOverlayRenderer";
 import VideoDubbingAudioTimeline from "./VideoDubbingAudioTimeline";
@@ -107,6 +125,57 @@ interface QueueItemState {
   error?: string;
 }
 
+interface SubtitleAudioRow extends VideoDubbingSubtitleCue {
+  id: string;
+  index: number;
+  status: "pending" | "generating" | "completed" | "failed";
+  generatedText?: string;
+  error?: string;
+  audioUrl?: string;
+}
+
+type TimelineCueClipboard =
+  | { kind: "subtitle"; cue: VideoDubbingSubtitleCue }
+  | { kind: "text"; cue: VideoDubbingTextOverlayCue };
+
+type CharacterCardOcrRegion = { left: number; top: number; width: number; height: number };
+type CharacterCardOcrPoint = { x: number; y: number };
+type CharacterCardOcrJob = {
+  id: string;
+  status: "queued" | "running" | "completed" | "error" | "cancelled";
+  progressPercent: number;
+  message: string;
+  subtitles: Array<{ startTime: number; endTime: number; text: string; confidence: number }>;
+  error?: string;
+};
+
+type CharacterCardOcrWorker = {
+  status: "stopped" | "starting" | "ready" | "busy" | "error";
+  message: string;
+  backend?: "cpu" | "directml";
+  activeJobId?: string;
+};
+
+type CharacterCardReferenceScanResult = {
+  id: string;
+  startTime: number;
+  endTime: number;
+  time: number;
+  confidence: number;
+  thumbnail: string | null;
+};
+
+type CharacterCardReferenceScanJob = {
+  id: string;
+  status: "running" | "completed" | "error" | "cancelled";
+  progressPercent: number;
+  processedFrames: number;
+  totalFrames: number;
+  message: string;
+  results: CharacterCardReferenceScanResult[];
+  error?: string;
+};
+
 type AllVideosActionName = "tts" | "demucs" | "mix" | "render" | "download";
 
 interface AllVideosActionProgress {
@@ -123,12 +192,15 @@ interface SubtitleTimelineDrag {
   cueIndex: number;
   track: "subtitle" | "text";
   mode: "move" | "start" | "end";
+  pointerId: number;
   startX: number;
   trackWidth: number;
   timelineDuration: number;
   originalStart: number;
   originalEnd: number;
 }
+
+const SUBTITLE_TIMELINE_DRAG_THRESHOLD_PX = 4;
 
 interface TextOverlayPreviewDrag {
   cueIndex: number;
@@ -204,6 +276,44 @@ const SUBTITLE_FONT_OPTIONS = [
 
 type TextCase = "none" | "uppercase" | "lowercase" | "capitalize";
 
+const DEFAULT_END_SCENE_DURATION_SECONDS = 5;
+const DEFAULT_END_SCENE_ASPECT_RATIO: VideoDubbingEndSceneAspectRatio = "16:9";
+const END_SCENE_ASPECT_RATIOS: VideoDubbingEndSceneAspectRatio[] = [
+  "16:9",
+  "9:16",
+  "1:1",
+  "4:3",
+  "21:9",
+];
+
+const createDefaultEndSceneText = (
+  durationSeconds = DEFAULT_END_SCENE_DURATION_SECONDS,
+): VideoDubbingTextOverlayCue => ({
+  id: crypto.randomUUID(),
+  startTime: 0,
+  endTime: durationSeconds,
+  text: "Hết Phim",
+  fontSize: 48,
+  fontFamily: "Arial",
+  color: "#ffffff",
+  bold: true,
+  italic: false,
+  underline: false,
+  textCase: "none",
+  outlineEnabled: true,
+  outlineColor: "#000000",
+  outlineWidthPx: 2,
+  characterSpacingPx: 0,
+  lineSpacingPx: 0,
+  position: "middle-center",
+  xPercent: 50,
+  yPercent: 50,
+  textAlign: "center",
+  backgroundColor: "#000000",
+  backgroundTransparent: true,
+  paddingPx: 0,
+});
+
 interface TextStyleControlValue {
   fontFamily: string;
   fontSize: number;
@@ -237,14 +347,80 @@ function TextStyleControls({
   const buttonClass = (active: boolean) =>
     `min-w-8 rounded-md px-2.5 py-1.5 text-xs font-semibold transition-colors ${active ? "bg-violet-400 text-slate-950" : "bg-slate-800 text-slate-200 hover:bg-slate-700"}`;
   const numberClass = "w-16 rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-center text-xs text-white";
+  const [fontPickerOpen, setFontPickerOpen] = useState(false);
+  const fontPickerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!fontPickerOpen) return;
+    const closeOnOutsideClick = (event: PointerEvent) => {
+      if (
+        event.target instanceof Node &&
+        !fontPickerRef.current?.contains(event.target)
+      ) {
+        setFontPickerOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", closeOnOutsideClick);
+    return () => document.removeEventListener("pointerdown", closeOnOutsideClick);
+  }, [fontPickerOpen]);
+
   return (
     <div className="space-y-3 rounded-lg border border-slate-700/80 bg-[#262626] p-3 text-xs text-slate-200">
-      <label className="grid grid-cols-[82px_minmax(0,1fr)] items-center gap-3">
+      <div className="grid grid-cols-[82px_minmax(0,1fr)] items-center gap-3">
         <span>Font</span>
-        <select value={value.fontFamily} disabled={disabled} onChange={(event) => onChange({ fontFamily: event.target.value })} className="min-w-0 rounded-md border border-slate-700 bg-slate-800 px-2 py-1.5 text-xs text-white">
-          {fontOptions.map((font) => <option key={font} value={font}>{font}</option>)}
-        </select>
-      </label>
+        <div ref={fontPickerRef} className="relative min-w-0">
+          <button
+            type="button"
+            disabled={disabled}
+            aria-haspopup="listbox"
+            aria-expanded={fontPickerOpen}
+            aria-label={`Font: ${value.fontFamily}`}
+            onClick={() => setFontPickerOpen((open) => !open)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") setFontPickerOpen(false);
+            }}
+            className="flex w-full min-w-0 items-center justify-between gap-2 rounded-md border border-slate-700 bg-slate-800 px-2 py-1.5 text-left text-xs text-white disabled:opacity-50"
+          >
+            <span className="min-w-0 truncate" style={{ fontFamily: value.fontFamily }}>
+              {value.fontFamily}
+            </span>
+            <span className="shrink-0 text-sm" style={{ fontFamily: value.fontFamily }}>
+              {value.fontFamily} - Xin Chào
+            </span>
+            <ChevronDown className={`h-3.5 w-3.5 shrink-0 transition-transform ${fontPickerOpen ? "rotate-180" : ""}`} />
+          </button>
+          {fontPickerOpen && !disabled && (
+            <div
+              role="listbox"
+              aria-label="Chọn font chữ"
+              className="absolute left-0 right-0 top-full z-40 mt-1 max-h-56 overflow-y-auto rounded-lg border border-slate-600 bg-slate-900 p-1 shadow-xl"
+            >
+              {fontOptions.map((font) => (
+                <button
+                  key={font}
+                  type="button"
+                  role="option"
+                  aria-selected={value.fontFamily === font}
+                  onClick={() => {
+                    onChange({ fontFamily: font });
+                    setFontPickerOpen(false);
+                  }}
+                  className={`flex w-full items-center justify-between gap-3 rounded-md px-2 py-2 text-left hover:bg-slate-700 ${
+                    value.fontFamily === font
+                      ? "bg-violet-500/15 text-violet-100"
+                      : "text-slate-200"
+                  }`}
+                >
+                  <span className="min-w-0 truncate">{font}</span>
+                  <span className="shrink-0 text-sm" style={{ fontFamily: font }}>
+                    {font} - Xin Chào
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
       <div className="grid grid-cols-[82px_minmax(0,1fr)_64px] items-center gap-3">
         <span>Font size</span>
         <input type="range" min={minFontSize} max={maxFontSize} value={value.fontSize} disabled={disabled} onChange={(event) => onChange({ fontSize: Number(event.target.value) })} className="w-full accent-violet-400" aria-label="Cỡ chữ" />
@@ -381,7 +557,9 @@ function getJobProcessingProgress(job: VideoDubbingJob): {
   }
   if (job.videoExport?.status === "running") {
     return {
-      label: "Đang Render",
+      label: job.videoExport.detail?.toLowerCase().includes("audio mp4")
+        ? "Đang cập nhật Audio MP4"
+        : "Đang Render",
       progressPercent: job.videoExport.progressPercent,
       colorClass: "bg-sky-400",
     };
@@ -482,7 +660,14 @@ export default function VideoDubbingTab() {
     Record<string, VideoDubbingSubtitleCue[]>
   >({});
   const [selectedSubtitleCue, setSelectedSubtitleCue] = useState<number | null>(null);
+  const timelineCueClipboardRef = useRef<TimelineCueClipboard | null>(null);
   const [textOverlays, setTextOverlays] = useState<VideoDubbingTextOverlayCue[]>([]);
+  const [characterCardCuesByVideoId, setCharacterCardCuesByVideoId] = useState<
+    Record<string, VideoDubbingTextOverlayCue[]>
+  >({});
+  const [characterCardStyle, setCharacterCardStyle] = useState<CharacterCardStyle>(
+    DEFAULT_CHARACTER_CARD_STYLE,
+  );
   const [textTracks, setTextTracks] = useState<VideoDubbingTextTrack[]>([DEFAULT_TEXT_TRACK]);
   const [activeTextTrackId, setActiveTextTrackId] = useState(DEFAULT_TEXT_TRACK_ID);
   const [selectedTextOverlay, setSelectedTextOverlay] = useState<number | null>(null);
@@ -514,6 +699,38 @@ export default function VideoDubbingTab() {
   const [subtitleTimelineCursorTime, setSubtitleTimelineCursorTime] = useState(0);
   const [videoPreviewReady, setVideoPreviewReady] = useState(false);
   const [mediaError, setMediaError] = useState<string | null>(null);
+  const [audioUpdateErrors, setAudioUpdateErrors] = useState<Record<string, string>>({});
+  const [coverEditorTarget, setCoverEditorTarget] = useState<VideoDubbingJob | null>(null);
+  const [coverEditorFile, setCoverEditorFile] = useState<File | null>(null);
+  const [coverEditorPreviewUrl, setCoverEditorPreviewUrl] = useState<string | null>(null);
+  const [coverEditorFrameCount, setCoverEditorFrameCount] = useState(5);
+  const [coverEditorBusy, setCoverEditorBusy] = useState(false);
+  const [coverEditorError, setCoverEditorError] = useState<string | null>(null);
+  const [coverEditorDragOver, setCoverEditorDragOver] = useState(false);
+  const [characterCardRegion, setCharacterCardRegion] = useState<CharacterCardOcrRegion | null>(null);
+  const [characterCardRegionDraft, setCharacterCardRegionDraft] = useState<CharacterCardOcrRegion | null>(null);
+  const [characterCardDrawStart, setCharacterCardDrawStart] = useState<CharacterCardOcrPoint | null>(null);
+  const [characterCardDrawMode, setCharacterCardDrawMode] = useState(false);
+  const [characterCardOcrStartOffset, setCharacterCardOcrStartOffset] = useState(5);
+  const [characterCardOcrDuration, setCharacterCardOcrDuration] = useState(10);
+  const [characterCardScanCollapsed, setCharacterCardScanCollapsed] = useState(false);
+  const [characterCardReferenceFile, setCharacterCardReferenceFile] = useState<File | null>(null);
+  const [characterCardReferencePreviewUrl, setCharacterCardReferencePreviewUrl] = useState<string | null>(null);
+  const [characterCardReferenceFramesToSkip, setCharacterCardReferenceFramesToSkip] = useState(30);
+  const [characterCardReferenceSimilarity, setCharacterCardReferenceSimilarity] = useState(0.72);
+  const [characterCardReferenceScanJob, setCharacterCardReferenceScanJob] =
+    useState<CharacterCardReferenceScanJob | null>(null);
+  const [characterCardReferenceSelectedIds, setCharacterCardReferenceSelectedIds] = useState<string[]>([]);
+  const [characterCardReferenceError, setCharacterCardReferenceError] = useState<string | null>(null);
+  const characterCardReferenceScanRequestRef = useRef(0);
+  const characterCardReferenceScanJobIdRef = useRef<string | null>(null);
+  const [characterCardOcrJob, setCharacterCardOcrJob] = useState<CharacterCardOcrJob | null>(null);
+  const [characterCardOcrError, setCharacterCardOcrError] = useState<string | null>(null);
+  const [characterCardOcrWorker, setCharacterCardOcrWorker] = useState<CharacterCardOcrWorker>({
+    status: "stopped",
+    message: "OCR thường trực đang tắt.",
+  });
+  const characterCardOcrRequestRef = useRef(0);
   const [logoEnabled, setLogoEnabled] = useState(false);
   const [logoWidthPercent, setLogoWidthPercent] = useState(15);
   const [logoPaddingPx, setLogoPaddingPx] = useState(24);
@@ -577,15 +794,41 @@ export default function VideoDubbingTab() {
   const projectSaveRequestRef = useRef(0);
   const [projectsExpanded, setProjectsExpanded] = useState(false);
   const [guideOpen, setGuideOpen] = useState(false);
-  const [videoWorkspaceTab, setVideoWorkspaceTab] = useState<"preview" | "merged">("preview");
-  const [timelineWorkspaceTab, setTimelineWorkspaceTab] = useState<"subtitle" | "audio">("subtitle");
+  const [videoWorkspaceTab, setVideoWorkspaceTab] = useState<"preview" | "merged" | "end-scene">("preview");
+  const [timelineWorkspaceTab, setTimelineWorkspaceTab] = useState<"subtitle" | "audio" | "subtitle-audio">("subtitle");
+  const [endSceneDurationSeconds, setEndSceneDurationSeconds] = useState(DEFAULT_END_SCENE_DURATION_SECONDS);
+  const [endSceneAspectRatio, setEndSceneAspectRatio] =
+    useState<VideoDubbingEndSceneAspectRatio>(DEFAULT_END_SCENE_ASPECT_RATIO);
+  const endScenePreviewContainerRef = useRef<HTMLDivElement | null>(null);
+  const [endScenePreviewSize, setEndScenePreviewSize] = useState({
+    width: 640,
+    height: 360,
+  });
+  const [endSceneTextOverlays, setEndSceneTextOverlays] = useState<VideoDubbingTextOverlayCue[]>(() => [
+    createDefaultEndSceneText(),
+  ]);
+  const [selectedEndSceneTextIndex, setSelectedEndSceneTextIndex] = useState<number | null>(0);
+  const endSceneStageRef = useRef<HTMLDivElement | null>(null);
+  const [endSceneDrag, setEndSceneDrag] = useState<{
+    index: number;
+    pointerX: number;
+    pointerY: number;
+    xPercent: number;
+    yPercent: number;
+    stageLeft: number;
+    stageTop: number;
+    stageWidth: number;
+    stageHeight: number;
+  } | null>(null);
   const [subtitleTimelineZoom, setSubtitleTimelineZoom] = useState(18);
+  const [subtitleTimelineViewportWidth, setSubtitleTimelineViewportWidth] = useState(720);
   const [subtitleTimingAdjustmentsMs, setSubtitleTimingAdjustmentsMs] = useState({
     start: 100,
     end: 100,
     move: 100,
   });
   const [subtitleTimelineDrag, setSubtitleTimelineDrag] = useState<SubtitleTimelineDrag | null>(null);
+  const subtitleTimelineDragMovedRef = useRef(false);
   const [textOverlayPreviewDrag, setTextOverlayPreviewDrag] = useState<TextOverlayPreviewDrag | null>(null);
   const [exportClockNow, setExportClockNow] = useState(() => Date.now());
   const [fileDetailsOpen, setFileDetailsOpen] = useState(false);
@@ -608,6 +851,24 @@ export default function VideoDubbingTab() {
   const autoPipelineEnabled = true;
   const [autoPipelineExpanded, setAutoPipelineExpanded] = useState(true);
   const [masterPanelExpanded, setMasterPanelExpanded] = useState(false);
+  const [subtitleAudioItems, setSubtitleAudioItems] = useState<SubtitleAudioRow[]>([]);
+  const [subtitleAudioError, setSubtitleAudioError] = useState<string | null>(null);
+  const [subtitleAudioSyncing, setSubtitleAudioSyncing] = useState(false);
+  const [subtitleAudioRegeneratingId, setSubtitleAudioRegeneratingId] = useState<string | null>(null);
+  const [subtitleAudioMasterBusy, setSubtitleAudioMasterBusy] = useState(false);
+  const [subtitleAudioDrafts, setSubtitleAudioDrafts] = useState<Record<string, string>>({});
+  const [subtitleAudioPlayingId, setSubtitleAudioPlayingId] = useState<string | null>(null);
+  const [subtitleAudioFilterOpen, setSubtitleAudioFilterOpen] = useState(false);
+  const [subtitleAudioTimingStepMs, setSubtitleAudioTimingStepMs] = useState(100);
+  const [subtitleAudioShortFilterEnabled, setSubtitleAudioShortFilterEnabled] = useState(false);
+  const [subtitleAudioMaxCharacterCount, setSubtitleAudioMaxCharacterCount] = useState(5);
+  const [subtitleAudioSpecialCharactersFilterEnabled, setSubtitleAudioSpecialCharactersFilterEnabled] = useState(false);
+  const [subtitleAudioSimilarFilterEnabled, setSubtitleAudioSimilarFilterEnabled] = useState(false);
+  const subtitleAudioSyncRequestRef = useRef(0);
+  const subtitleAudioKnownNonEmptyJobIdsRef = useRef(new Set<string>());
+  const subtitleAudioPlayerRef = useRef<HTMLAudioElement | null>(null);
+  const subtitleAudioPlaybackIdRef = useRef<string | null>(null);
+  const activeSubtitleSourceJobIdRef = useRef<string | null>(null);
   const [separationPanelExpanded, setSeparationPanelExpanded] = useState(false);
   const [mixerPanelExpanded, setMixerPanelExpanded] = useState(true);
   const [autoPipelineTtsMasterEnabled, setAutoPipelineTtsMasterEnabled] =
@@ -632,10 +893,15 @@ export default function VideoDubbingTab() {
   const srtInputRef = useRef<HTMLInputElement | null>(null);
   const subtitleBrowseTargetRef = useRef<string | null>(null);
   const logoInputRef = useRef<HTMLInputElement | null>(null);
+  const coverEditorInputRef = useRef<HTMLInputElement | null>(null);
   const uploadRef = useRef<XMLHttpRequest | null>(null);
   const videoGenerationRef = useRef(0);
   const srtGenerationRef = useRef(0);
   const activeJobIdRef = useRef<string | null>(null);
+  const characterCardCueVideoIdRef = useRef<string | null>(null);
+  const subtitleTimelineCursorRef = useRef(0);
+  const subtitleTimelineFitRef = useRef(false);
+  const subtitleTimelineZoomFocusRef = useRef<"playhead" | "left">("playhead");
   const mixerSettingsTimerRef = useRef<number | null>(null);
   const mixerSettingsRequestRef = useRef(0);
   const mixerSettingsVersionRef = useRef(0);
@@ -650,6 +916,63 @@ export default function VideoDubbingTab() {
   );
   const previewJobIdRef = useRef<string | null>(null);
   const previewTrackKeyRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!coverEditorFile) {
+      setCoverEditorPreviewUrl(null);
+      return;
+    }
+    const previewUrl = URL.createObjectURL(coverEditorFile);
+    setCoverEditorPreviewUrl(previewUrl);
+    return () => URL.revokeObjectURL(previewUrl);
+  }, [coverEditorFile]);
+
+  useEffect(() => {
+    if (!characterCardReferenceFile) {
+      setCharacterCardReferencePreviewUrl(null);
+      return;
+    }
+    const previewUrl = URL.createObjectURL(characterCardReferenceFile);
+    setCharacterCardReferencePreviewUrl(previewUrl);
+    return () => URL.revokeObjectURL(previewUrl);
+  }, [characterCardReferenceFile]);
+
+  useEffect(() => () => {
+    const scanId = characterCardReferenceScanJobIdRef.current;
+    if (!scanId) return;
+    characterCardReferenceScanRequestRef.current += 1;
+    void fetch(`/api/video-dubbing/character-card-reference-scans/${scanId}/cancel`, {
+      method: "POST",
+    }).catch((error: unknown) => {
+      console.error("Không thể dừng quét ảnh mẫu khi rời video:", error);
+    });
+  }, [video?.job?.id]);
+
+  useEffect(() => {
+    let active = true;
+    const refreshWorkerStatus = async () => {
+      try {
+        const response = await fetch("/api/subtitle-ocr/worker/status");
+        const result = await response.json() as { worker?: CharacterCardOcrWorker };
+        if (active && response.ok && result.worker) setCharacterCardOcrWorker(result.worker);
+      } catch (error) {
+        if (active) {
+          setCharacterCardOcrError(
+            error instanceof Error ? error.message : "Không lấy được trạng thái OCR thường trực.",
+          );
+        }
+      }
+    };
+    void refreshWorkerStatus();
+    if (characterCardOcrWorker.status !== "starting" && characterCardOcrWorker.status !== "busy") {
+      return () => { active = false; };
+    }
+    const timer = window.setInterval(() => void refreshWorkerStatus(), 800);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [characterCardOcrWorker.status]);
 
   const releasePreviewGraph = (updateUi = true) => {
     previewControllerRef.current?.dispose();
@@ -697,8 +1020,79 @@ export default function VideoDubbingTab() {
   };
 
   const seekSubtitleTimeline = (time: number) => {
-    const maximum = job?.metadata?.durationSeconds ?? subtitleTimelineDuration;
-    seekMixerPreview(Math.max(0, Math.min(time, maximum)));
+    const sourceDuration = job?.metadata?.durationSeconds ?? subtitleTimelineDuration;
+    const endSceneEnabled = Boolean(job?.overlaySettings?.endScene?.enabled);
+    const maximum = sourceDuration +
+      (endSceneEnabled ? endSceneDurationSeconds : 0);
+    const seekTo = Math.max(0, Math.min(time, maximum));
+    if (endSceneEnabled && seekTo > sourceDuration) {
+      previewControllerRef.current?.pause();
+      if (previewVideoRef.current && videoPreviewReady) {
+        previewVideoRef.current.currentTime = sourceDuration;
+      }
+      setPreviewStatus("paused");
+      setPreviewCurrentTime(sourceDuration);
+      setSubtitleTimelineCursorTime(seekTo);
+      setVideoWorkspaceTab("preview");
+      return;
+    }
+    if (videoWorkspaceTab === "end-scene") setVideoWorkspaceTab("preview");
+    seekMixerPreview(seekTo);
+  };
+  const getCharacterCardPoint = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const bounds = previewStageRef.current?.getBoundingClientRect();
+    if (!bounds || bounds.width <= 0 || bounds.height <= 0) return null;
+    return {
+      x: Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width)),
+      y: Math.max(0, Math.min(1, (event.clientY - bounds.top) / bounds.height)),
+    };
+  };
+  const startCharacterCardRegion = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!characterCardDrawMode) return;
+    const point = getCharacterCardPoint(event);
+    if (!point) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setCharacterCardDrawStart(point);
+    setCharacterCardRegionDraft({ left: point.x, top: point.y, width: 0, height: 0 });
+    setCharacterCardOcrError(null);
+  };
+  const moveCharacterCardRegion = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!characterCardDrawStart) return;
+    const point = getCharacterCardPoint(event);
+    if (!point) return;
+    setCharacterCardRegionDraft({
+      left: Math.min(characterCardDrawStart.x, point.x),
+      top: Math.min(characterCardDrawStart.y, point.y),
+      width: Math.abs(point.x - characterCardDrawStart.x),
+      height: Math.abs(point.y - characterCardDrawStart.y),
+    });
+  };
+  const finishCharacterCardRegion = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!characterCardDrawStart) return;
+    const point = getCharacterCardPoint(event);
+    if (point) {
+      const region = {
+        left: Math.min(characterCardDrawStart.x, point.x),
+        top: Math.min(characterCardDrawStart.y, point.y),
+        width: Math.abs(point.x - characterCardDrawStart.x),
+        height: Math.abs(point.y - characterCardDrawStart.y),
+      };
+      if (region.width >= 0.01 && region.height >= 0.01) {
+        setCharacterCardRegion(region);
+      } else {
+        setCharacterCardOcrError("Vùng chọn quá nhỏ. Hãy kéo để khoanh vùng chữ trên video.");
+      }
+    }
+    setCharacterCardDrawStart(null);
+    setCharacterCardRegionDraft(null);
+    setCharacterCardDrawMode(false);
+  };
+  const cancelCharacterCardRegionDraw = () => {
+    setCharacterCardDrawStart(null);
+    setCharacterCardRegionDraft(null);
+    setCharacterCardDrawMode(false);
   };
 
   const restartMixerPreview = async () => {
@@ -908,7 +1302,21 @@ export default function VideoDubbingTab() {
     subtitleCueOverrides: video?.job?.id
       ? subtitleCueOverridesByVideoId[video.job.id] ?? null
       : null,
-    subtitleCueOverridesByVideoId, textOverlays, textTracks, subtitleTimelineZoom,
+    subtitleCueOverridesByVideoId,
+    textOverlays: textOverlays.filter((cue) => cue.kind !== "character-card"),
+    characterCardStyle,
+    characterCardCuesByVideoId: video?.job?.id
+      ? {
+          ...characterCardCuesByVideoId,
+          [video.job.id]: textOverlays.filter((cue) => cue.kind === "character-card"),
+        }
+      : characterCardCuesByVideoId,
+    textTracks, subtitleTimelineZoom,
+    endSceneTemplate: {
+      durationSeconds: endSceneDurationSeconds,
+      aspectRatio: endSceneAspectRatio,
+      textOverlays: endSceneTextOverlays,
+    },
   });
 
   const createProject = async () => {
@@ -953,11 +1361,38 @@ export default function VideoDubbingTab() {
     setProjectReady(false);
     setProjectError(null);
     setProjectBusy(true);
+    subtitleTimelineFitRef.current = false;
+    subtitleTimelineZoomFocusRef.current = "playhead";
     try {
       const response = await fetch(`/api/video-dubbing/projects/${project.id}`);
       const result = await response.json();
       if (!response.ok || !result.project) throw new Error(result.error || "Không thể mở project.");
       const loaded = result.project as VideoDubbingProject;
+      const w = loaded.workspace || {};
+      const savedCharacterCardCues = w.characterCardCuesByVideoId;
+      const loadedCharacterCardCuesByVideoId: Record<
+        string,
+        VideoDubbingTextOverlayCue[]
+      > = {};
+      if (
+        savedCharacterCardCues &&
+        typeof savedCharacterCardCues === "object" &&
+        !Array.isArray(savedCharacterCardCues)
+      ) {
+        for (const [videoId, cues] of Object.entries(savedCharacterCardCues)) {
+          if (!loaded.jobIds.includes(videoId) || !Array.isArray(cues)) continue;
+          loadedCharacterCardCuesByVideoId[videoId] = (
+            cues as VideoDubbingTextOverlayCue[]
+          ).filter((cue) => cue?.kind === "character-card");
+        }
+      }
+      const savedCardStyle = Object.values(loadedCharacterCardCuesByVideoId)
+        .flat()
+        .find((cue) => cue?.kind === "character-card");
+      setCharacterCardStyle(resolveCharacterCardStyle(
+        w.characterCardStyle ?? savedCardStyle,
+      ));
+      setCharacterCardCuesByVideoId(loadedCharacterCardCuesByVideoId);
       // Mark ownership before switching the active job so the legacy job overlay
       // hydration effect cannot overwrite the newer project workspace snapshot.
       setActiveProject(loaded);
@@ -993,7 +1428,6 @@ export default function VideoDubbingTab() {
         return { id: item.id, fileName: item.fileName, sizeBytes: new Blob([item.content]).size, content: item.content, analysis, videoId: item.videoId, matchByName: item.matchByName };
       }));
       setSelectedSubtitleCue(null);
-      const w = loaded.workspace || {};
       if (typeof w.subtitleMarginPx === "number") setSubtitleMarginPx(w.subtitleMarginPx);
       if (w.mixerSettings) setMixerSettings(w.mixerSettings as VideoDubbingMixerSettings);
       if (typeof w.selectedVoiceId === "string") setSelectedVoiceId(w.selectedVoiceId);
@@ -1044,18 +1478,78 @@ export default function VideoDubbingTab() {
         ? w.textTracks.filter((track): track is VideoDubbingTextTrack =>
             Boolean(track && typeof track.id === "string" && typeof track.name === "string"),
           )
-        : [];
-      setTextTracks(loadedTextTracks.length ? loadedTextTracks : [DEFAULT_TEXT_TRACK]);
+        : [DEFAULT_TEXT_TRACK];
+      setTextTracks(loadedTextTracks);
       setActiveTextTrackId(loadedTextTracks[0]?.id || DEFAULT_TEXT_TRACK_ID);
-      if (Array.isArray(w.textOverlays)) {
-        setTextOverlays((w.textOverlays as VideoDubbingTextOverlayCue[]).map((cue) => ({
+      const projectTextOverlays = Array.isArray(w.textOverlays)
+        ? (w.textOverlays as VideoDubbingTextOverlayCue[])
+            .filter((cue) => cue?.kind !== "character-card")
+            .map((cue) => ({
+              ...cue,
+              trackId: cue.trackId || DEFAULT_TEXT_TRACK_ID,
+            }))
+        : [];
+      const activeCharacterCards = activeId
+        ? loadedCharacterCardCuesByVideoId[activeId] ??
+          (item?.job.overlaySettings?.textOverlays ?? []).filter(
+            (cue) => cue.kind === "character-card",
+          )
+        : [];
+      characterCardCueVideoIdRef.current = activeId || null;
+      setTextOverlays([
+        ...projectTextOverlays,
+        ...activeCharacterCards.map((cue) => ({
           ...cue,
           trackId: cue.trackId || DEFAULT_TEXT_TRACK_ID,
-        })));
+        })),
+      ]);
+      const savedEndSceneTemplate = w.endSceneTemplate;
+      if (
+        savedEndSceneTemplate &&
+        typeof savedEndSceneTemplate === "object" &&
+        !Array.isArray(savedEndSceneTemplate)
+      ) {
+        const template = savedEndSceneTemplate as {
+          durationSeconds?: unknown;
+          aspectRatio?: unknown;
+          textOverlays?: unknown;
+        };
+        const durationSeconds =
+          typeof template.durationSeconds === "number" &&
+          Number.isFinite(template.durationSeconds)
+            ? Math.max(1, Math.min(120, template.durationSeconds))
+            : DEFAULT_END_SCENE_DURATION_SECONDS;
+        const textOverlays = Array.isArray(template.textOverlays)
+          ? (template.textOverlays as VideoDubbingTextOverlayCue[]).filter(
+              (cue) =>
+                cue &&
+                typeof cue.text === "string" &&
+                typeof cue.fontFamily === "string" &&
+                Number.isFinite(cue.fontSize),
+            )
+          : [];
+        setEndSceneDurationSeconds(durationSeconds);
+        setEndSceneAspectRatio(
+          END_SCENE_ASPECT_RATIOS.includes(
+            template.aspectRatio as VideoDubbingEndSceneAspectRatio,
+          )
+            ? (template.aspectRatio as VideoDubbingEndSceneAspectRatio)
+            : DEFAULT_END_SCENE_ASPECT_RATIO,
+        );
+        setEndSceneTextOverlays(textOverlays);
+        setSelectedEndSceneTextIndex(textOverlays.length ? 0 : null);
       } else {
-        setTextOverlays([]);
+        setEndSceneDurationSeconds(DEFAULT_END_SCENE_DURATION_SECONDS);
+        setEndSceneAspectRatio(DEFAULT_END_SCENE_ASPECT_RATIO);
+        setEndSceneTextOverlays([
+          createDefaultEndSceneText(DEFAULT_END_SCENE_DURATION_SECONDS),
+        ]);
+        setSelectedEndSceneTextIndex(0);
       }
-      if (typeof w.subtitleTimelineZoom === "number") setSubtitleTimelineZoom(w.subtitleTimelineZoom);
+      if (typeof w.subtitleTimelineZoom === "number") {
+        subtitleTimelineFitRef.current = false;
+        setSubtitleTimelineZoom(w.subtitleTimelineZoom);
+      }
       setActiveProject(loaded);
       setProjects((items) => [loaded, ...items.filter((item) => item.id !== loaded.id)]);
       setProjectReady(true);
@@ -1078,6 +1572,12 @@ export default function VideoDubbingTab() {
         importProjectRef.current = null;
         setVideoFiles([]); setSubtitleFiles([]); setQueueStates({});
         setActiveProject(null); setProjectReady(false); setVideo(null); setSrt(null); setSrtContent("");
+        setEndSceneDurationSeconds(DEFAULT_END_SCENE_DURATION_SECONDS);
+        setEndSceneAspectRatio(DEFAULT_END_SCENE_ASPECT_RATIO);
+        setEndSceneTextOverlays([
+          createDefaultEndSceneText(DEFAULT_END_SCENE_DURATION_SECONDS),
+        ]);
+        setSelectedEndSceneTextIndex(0);
       }
       if (defaultProjectId === project.id) {
         window.localStorage.removeItem("video-dubbing-default-project");
@@ -1154,6 +1654,28 @@ export default function VideoDubbingTab() {
   const openHistoryJob = (item: VideoDubbingJobHistoryItem | VideoDubbingJob) => {
     flushSubtitleMarginSave();
     const selectedJob = "job" in item ? item.job : item;
+    const project = importProjectRef.current || activeProject;
+    const projectCharacterCardCuesByVideoId =
+      project?.workspace?.characterCardCuesByVideoId as
+        | Record<string, VideoDubbingTextOverlayCue[]>
+        | undefined;
+    const savedCharacterCards = Object.prototype.hasOwnProperty.call(
+      characterCardCuesByVideoId,
+      selectedJob.id,
+    )
+      ? characterCardCuesByVideoId[selectedJob.id]
+      : projectCharacterCardCuesByVideoId?.[selectedJob.id] ??
+        (selectedJob.overlaySettings?.textOverlays ?? []).filter(
+          (cue) => cue.kind === "character-card",
+        );
+    characterCardCueVideoIdRef.current = selectedJob.id;
+    setTextOverlays((current) => [
+      ...current.filter((cue) => cue.kind !== "character-card"),
+      ...savedCharacterCards.map((cue) => ({
+        ...cue,
+        trackId: cue.trackId || DEFAULT_TEXT_TRACK_ID,
+      })),
+    ]);
     videoGenerationRef.current++;
     uploadRef.current?.abort();
     uploadRef.current = null;
@@ -1165,6 +1687,7 @@ export default function VideoDubbingTab() {
       job: selectedJob,
       warning: "job" in item ? item.warning : undefined,
     });
+    setSelectedTextOverlay(null);
     if (!activeProject?.jobIds.includes(selectedJob.id)) {
       setSrt(null);
       setSrtContent("");
@@ -1175,8 +1698,22 @@ export default function VideoDubbingTab() {
     if (srtInputRef.current) srtInputRef.current.value = "";
   };
 
-  const previewSourceVideo = async (selectedJob: VideoDubbingJob) => {
-    if (selectedJob.status !== "completed" || queueRunning || settingsSyncRunning) return;
+  const forgetCharacterCardCues = (videoId: string) => {
+    if (characterCardCueVideoIdRef.current === videoId) {
+      characterCardCueVideoIdRef.current = null;
+    }
+    setCharacterCardCuesByVideoId((current) => {
+      if (!Object.prototype.hasOwnProperty.call(current, videoId)) return current;
+      const next = { ...current };
+      delete next[videoId];
+      return next;
+    });
+  };
+
+  const previewSourceVideo = async (
+    selectedJob: VideoDubbingJob,
+  ): Promise<VideoDubbingJob | null> => {
+    if (selectedJob.status !== "completed" || queueRunning || settingsSyncRunning) return null;
     let currentJob = selectedJob;
     try {
       const response = await fetch(`/api/video-dubbing/jobs/${selectedJob.id}`);
@@ -1204,7 +1741,7 @@ export default function VideoDubbingTab() {
           ? error.message
           : "Không thể tải trạng thái video mới nhất.",
       );
-      return;
+      return null;
     }
 
     let project = importProjectRef.current || activeProject;
@@ -1213,7 +1750,7 @@ export default function VideoDubbingTab() {
         project = await attachJobToProject(project, currentJob.id);
       } catch (error) {
         setProjectError(error instanceof Error ? error.message : "Không thể mở preview của video trong project.");
-        return;
+        return null;
       }
     }
 
@@ -1264,6 +1801,7 @@ export default function VideoDubbingTab() {
         setProjectError(error instanceof Error ? error.message : "Không thể lưu video preview hiện tại.");
       }
     }
+    return currentJob;
   };
 
   const deleteHistoryJob = async (item: VideoDubbingJobHistoryItem) => {
@@ -1282,6 +1820,7 @@ export default function VideoDubbingTab() {
       if (!response.ok) {
         throw new Error(result.error || "Không thể xóa job Video Dubbing.");
       }
+      forgetCharacterCardCues(item.job.id);
       setJobHistory((current) =>
         current.filter((entry) => entry.job.id !== item.job.id),
       );
@@ -1325,6 +1864,18 @@ export default function VideoDubbingTab() {
   };
 
   const projectWorkspaceSnapshot = JSON.stringify(makeProjectWorkspace());
+  useEffect(() => {
+    const videoId = characterCardCueVideoIdRef.current;
+    if (!videoId) return;
+    const cues = textOverlays.filter((cue) => cue.kind === "character-card");
+    setCharacterCardCuesByVideoId((current) => {
+      if (JSON.stringify(current[videoId] ?? []) === JSON.stringify(cues)) {
+        return current;
+      }
+      return { ...current, [videoId]: cues };
+    });
+  }, [textOverlays]);
+
   useEffect(() => {
     if (!activeProject || !projectReady) return;
     const projectId = activeProject.id;
@@ -1530,6 +2081,7 @@ export default function VideoDubbingTab() {
       return;
     }
     const settings = video?.job?.overlaySettings;
+    characterCardCueVideoIdRef.current = video?.job?.id ?? null;
     setTextTracks([DEFAULT_TEXT_TRACK]);
     setActiveTextTrackId(DEFAULT_TEXT_TRACK_ID);
     setTextOverlays((settings?.textOverlays ?? []).map((cue) => ({
@@ -1862,6 +2414,7 @@ export default function VideoDubbingTab() {
   const clearVideo = () => {
     videoGenerationRef.current++;
     activeJobIdRef.current = null;
+    characterCardCueVideoIdRef.current = null;
     if (uploadRef.current) {
       uploadRef.current.abort();
       uploadRef.current = null;
@@ -1895,6 +2448,28 @@ export default function VideoDubbingTab() {
         await removeServerJob(job.id);
         return;
       }
+      const currentProject = importProjectRef.current || activeProject;
+      const projectCharacterCardCuesByVideoId =
+        currentProject?.workspace?.characterCardCuesByVideoId as
+          | Record<string, VideoDubbingTextOverlayCue[]>
+          | undefined;
+      const savedCharacterCards = Object.prototype.hasOwnProperty.call(
+        characterCardCuesByVideoId,
+        job.id,
+      )
+        ? characterCardCuesByVideoId[job.id]
+        : projectCharacterCardCuesByVideoId?.[job.id] ??
+          (job.overlaySettings?.textOverlays ?? []).filter(
+            (cue) => cue.kind === "character-card",
+          );
+      characterCardCueVideoIdRef.current = job.id;
+      setTextOverlays((current) => [
+        ...current.filter((cue) => cue.kind !== "character-card"),
+        ...savedCharacterCards.map((cue) => ({
+          ...cue,
+          trackId: cue.trackId || DEFAULT_TEXT_TRACK_ID,
+        })),
+      ]);
       activeJobIdRef.current = job.id;
       setVideo((current) =>
         current?.fileName === file.name ? { ...current, job } : current,
@@ -1993,6 +2568,10 @@ export default function VideoDubbingTab() {
 
   const handleVideoFile = (file: File) => {
     if (!file) return;
+    if (characterCardReferenceScanJob?.status === "running") {
+      setCharacterCardReferenceError("Hãy hủy lần quét hiện tại trước khi thay ảnh mẫu.");
+      return;
+    }
     const generation = ++videoGenerationRef.current;
     const previousJobId = activeJobIdRef.current;
     const previousJobStatus = video?.job?.status;
@@ -2123,6 +2702,21 @@ export default function VideoDubbingTab() {
         if (rowIndex >= 0) setQueueStates((current) => ({ ...current, [rowIndex]: { status: "queued", jobId: savedJob.id, phase: "Đã lưu nguồn trong project" } }));
         // Ensure the project remains current if another import completed while this upload was in flight.
         savedProject = { ...savedProject, jobIds: [...new Set([...savedProject.jobIds, savedJob.id])] };
+        if (!activeJobIdRef.current && !video?.job) {
+          const savedCharacterCards = characterCardCuesByVideoId[savedJob.id] ??
+            (savedJob.overlaySettings?.textOverlays ?? []).filter(
+              (cue) => cue.kind === "character-card",
+            );
+          activeJobIdRef.current = savedJob.id;
+          characterCardCueVideoIdRef.current = savedJob.id;
+          setTextOverlays((current) => [
+            ...current.filter((cue) => cue.kind !== "character-card"),
+            ...savedCharacterCards.map((cue) => ({
+              ...cue,
+              trackId: cue.trackId || DEFAULT_TEXT_TRACK_ID,
+            })),
+          ]);
+        }
         setVideo((current) => current || { fileName: savedJob.fileName, sizeBytes: savedJob.sizeBytes, progress: 100, job: savedJob });
         void loadJobHistory();
       } catch (error) {
@@ -2373,6 +2967,7 @@ export default function VideoDubbingTab() {
         const response = await fetch(`/api/video-dubbing/jobs/${videoSource.job.id}`, { method: "DELETE" });
         const result = await response.json();
         if (!response.ok) throw new Error(result.error || "Không thể xóa video nguồn đã lưu.");
+        forgetCharacterCardCues(videoSource.job.id);
         const jobIds = currentProject.jobIds.filter((id) => id !== videoSource.job!.id);
         const activeJobId = isRemovingActivePreview
           ? replacementPreview?.job?.id || null
@@ -2556,6 +3151,9 @@ export default function VideoDubbingTab() {
     subtitleCueOverridesByVideoId,
     srt?.analysis?.items ?? [],
   );
+  const selectedSubtitleCueTtsItem = selectedSubtitleCue === null
+    ? undefined
+    : currentTtsSubtitleItems[selectedSubtitleCue];
   const canGenerateMaster = Boolean(
     job?.status === "completed" &&
     currentTtsSubtitleItems.length &&
@@ -2908,7 +3506,19 @@ export default function VideoDubbingTab() {
               }),
             ),
     );
-    const textOverlayClips = fitTextOverlaysToVideoDuration(textOverlays, duration);
+    const targetCharacterCards = targetJob.id === sourceJob?.id
+      ? textOverlays.filter((cue) => cue.kind === "character-card")
+      : characterCardCuesByVideoId[targetJob.id] ??
+        (targetJob.overlaySettings?.textOverlays ?? []).filter(
+          (cue) => cue.kind === "character-card",
+        );
+    const textOverlayClips = fitTextOverlaysToVideoDuration(
+      [
+        ...textOverlays.filter((cue) => cue.kind !== "character-card"),
+        ...targetCharacterCards,
+      ],
+      duration,
+    );
     const settings = {
       exportQuality,
       logoEnabled: logoEnabled && Boolean(sourceLogoName),
@@ -3399,6 +4009,79 @@ export default function VideoDubbingTab() {
       );
     }
   };
+  const regenerateSubtitleAudio = async (item: SubtitleItem) => {
+    if (!job || !selectedVoice || subtitleAudioRegeneratingId) return;
+    setSubtitleAudioRegeneratingId(item.id);
+    setSubtitleAudioError(null);
+    try {
+      const syncResponse = await fetch(`/api/video-dubbing/jobs/${job.id}/subtitle-audio`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          items: subtitleAudioInput.map((entry) =>
+            entry.id === item.id ? { ...entry, text: item.text } : entry,
+          ),
+        }),
+      });
+      const synced = await syncResponse.json();
+      if (!syncResponse.ok || !Array.isArray(synced.items)) {
+        throw new Error(synced.error || "Không thể đồng bộ danh sách audio phụ đề.");
+      }
+      setSubtitleAudioItems(synced.items);
+      const response = await fetch(
+        `/api/video-dubbing/jobs/${job.id}/subtitle-audio/${encodeURIComponent(item.id)}/regenerate`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            items: [item],
+            model: selectedVoice.modelId,
+            speakerId: selectedVoice.speakerId,
+            options: { minSpeed, maxSpeed, speedPriority },
+          }),
+        },
+      );
+      const result = await response.json();
+      if (!response.ok || !Array.isArray(result.items)) {
+        throw new Error(result.error || `Không thể tạo lại audio câu #${item.index}.`);
+      }
+      setSubtitleAudioItems(result.items);
+      const updated = result.items.find((entry: SubtitleAudioRow) => entry.id === item.id);
+      if (updated?.status === "failed") {
+        setSubtitleAudioError(`Câu #${item.index} (ID ${item.id}): ${updated.error || "Tạo audio thất bại."}`);
+      }
+    } catch (error) {
+      setSubtitleAudioError(error instanceof Error ? error.message : "Không thể tạo lại audio phụ đề.");
+    } finally {
+      setSubtitleAudioRegeneratingId(null);
+    }
+  };
+  const rebuildMasterFromSubtitleAudio = async () => {
+    if (!job || !subtitleAudioInput.length || subtitleAudioMasterBusy) return;
+    setSubtitleAudioMasterBusy(true);
+    setSubtitleAudioError(null);
+    try {
+      const response = await fetch(
+        `/api/video-dubbing/jobs/${job.id}/subtitle-audio/master`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ items: subtitleAudioInput }),
+        },
+      );
+      const result = await response.json();
+      if (!response.ok || !result.job) {
+        throw new Error(result.error || "Không thể tạo lại Master từ các audio câu.");
+      }
+      setVideo((current) => current?.job?.id === job.id
+        ? { ...current, job: result.job }
+        : current);
+    } catch (error) {
+      setSubtitleAudioError(error instanceof Error ? error.message : "Không thể tạo lại Master.");
+    } finally {
+      setSubtitleAudioMasterBusy(false);
+    }
+  };
   const saveAutoPipelineConfig = async (config = autoPipelineConfig) => {
     if (!job || !config) return;
     setAutoPipelineError(null);
@@ -3643,6 +4326,106 @@ export default function VideoDubbingTab() {
       setMixerError(null);
     }
   };
+  const chooseCoverFile = (file: File | undefined) => {
+    if (!file) return;
+    const extension = file.name.slice(file.name.lastIndexOf(".")).toLowerCase();
+    if (![".png", ".jpg", ".jpeg", ".webp"].includes(extension)) {
+      setCoverEditorError("Ảnh cover chỉ hỗ trợ PNG, JPG hoặc WebP.");
+      return;
+    }
+    if (file.size > 20 * 1024 * 1024) {
+      setCoverEditorError("Ảnh cover không được vượt quá 20 MB.");
+      return;
+    }
+    setCoverEditorError(null);
+    setCoverEditorFile(file);
+  };
+
+  const confirmCoverEditor = async () => {
+    const targetJob = coverEditorTarget;
+    if (!targetJob) return;
+    if (!coverEditorFile && !targetJob.overlaySettings?.coverFileName) {
+      setCoverEditorError("Hãy chọn ảnh cover trước khi xác nhận.");
+      return;
+    }
+
+    setCoverEditorBusy(true);
+    setCoverEditorError(null);
+    try {
+      if (coverEditorFile) {
+        const extension = coverEditorFile.name
+          .slice(coverEditorFile.name.lastIndexOf("."))
+          .toLowerCase();
+        const uploadResponse = await fetch(
+          `/api/video-dubbing/jobs/${targetJob.id}/cover?extension=${encodeURIComponent(extension)}`,
+          {
+            method: "PUT",
+            headers: { "Content-Type": "application/octet-stream" },
+            body: coverEditorFile,
+          },
+        );
+        const uploadResult = await uploadResponse.json();
+        if (!uploadResponse.ok || !uploadResult.job) {
+          throw new Error(uploadResult.error || "Không thể tải ảnh cover lên.");
+        }
+      }
+
+      const settingsResponse = await fetch(
+        `/api/video-dubbing/jobs/${targetJob.id}/overlay-settings`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            coverEnabled: true,
+            coverFrameCount: coverEditorFrameCount,
+          }),
+        },
+      );
+      const settingsResult = await settingsResponse.json();
+      if (!settingsResponse.ok || !settingsResult.job) {
+        throw new Error(settingsResult.error || "Không thể lưu cài đặt cover.");
+      }
+      updateListedJob(settingsResult.job as VideoDubbingJob);
+      setCoverEditorTarget(null);
+      setCoverEditorFile(null);
+    } catch (error) {
+      setCoverEditorError(
+        error instanceof Error ? error.message : "Không thể lưu ảnh cover.",
+      );
+    } finally {
+      setCoverEditorBusy(false);
+    }
+  };
+
+  const removeCoverFromEditor = async () => {
+    if (!coverEditorTarget) return;
+    setCoverEditorBusy(true);
+    setCoverEditorError(null);
+    try {
+      const response = await fetch(
+        `/api/video-dubbing/jobs/${coverEditorTarget.id}/cover`,
+        {
+          method: "DELETE",
+        },
+      );
+      const result = await response.json();
+      if (!response.ok || !result.job) {
+        throw new Error(result.error || "Không thể xóa ảnh cover.");
+      }
+      const updatedJob = result.job as VideoDubbingJob;
+      updateListedJob(updatedJob);
+      setCoverEditorTarget(updatedJob);
+      setCoverEditorFile(null);
+      setCoverEditorFrameCount(5);
+    } catch (error) {
+      setCoverEditorError(
+        error instanceof Error ? error.message : "Không thể xóa ảnh cover.",
+      );
+    } finally {
+      setCoverEditorBusy(false);
+    }
+  };
+
   const uploadOverlayLogo = async (file: File) => {
     if (!job) return;
     setMediaError(null);
@@ -3704,6 +4487,11 @@ export default function VideoDubbingTab() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           exportQuality,
+          coverEnabled: Boolean(
+            job.overlaySettings?.coverEnabled &&
+              job.overlaySettings.coverFileName,
+          ),
+          coverFrameCount: job.overlaySettings?.coverFrameCount ?? 5,
           logoEnabled:
             logoEnabled && Boolean(job.overlaySettings?.logoFileName),
           logoWidthPercent,
@@ -3722,6 +4510,12 @@ export default function VideoDubbingTab() {
             textOverlays,
             job.metadata?.durationSeconds ?? Number.POSITIVE_INFINITY,
           ),
+          endScene: {
+            enabled: Boolean(job.overlaySettings?.endScene?.enabled),
+            durationSeconds: endSceneDurationSeconds,
+            aspectRatio: endSceneAspectRatio,
+            textOverlays: endSceneTextOverlays,
+          } satisfies VideoDubbingEndSceneSettings,
           subtitleFontSize,
           subtitleFontFamily,
           subtitleColor,
@@ -3782,6 +4576,124 @@ export default function VideoDubbingTab() {
         item.job.id === updatedJob.id ? { ...item, job: updatedJob } : item,
       ),
     );
+  };
+
+  const saveEndSceneForCurrentVideo = async (enabled: boolean) => {
+    if (!job) return;
+    setMediaError(null);
+    try {
+      const response = await fetch(
+        `/api/video-dubbing/jobs/${job.id}/overlay-settings`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            endScene: {
+              enabled,
+              durationSeconds: endSceneDurationSeconds,
+              aspectRatio: endSceneAspectRatio,
+              textOverlays: endSceneTextOverlays,
+            } satisfies VideoDubbingEndSceneSettings,
+          }),
+        },
+      );
+      const result = await response.json();
+      if (!response.ok || !result.job) {
+        throw new Error(result.error || "Không thể cập nhật End Scene cho video.");
+      }
+      updateListedJob(result.job as VideoDubbingJob);
+    } catch (error) {
+      setMediaError(
+        error instanceof Error
+          ? error.message
+          : "Không thể cập nhật End Scene cho video.",
+      );
+    }
+  };
+
+  const updateEndSceneText = (
+    index: number,
+    patch: Partial<VideoDubbingTextOverlayCue>,
+  ) => {
+    setEndSceneTextOverlays((current) =>
+      current.map((cue, cueIndex) =>
+        cueIndex === index ? { ...cue, ...patch } : cue,
+      ),
+    );
+  };
+
+  const addEndSceneText = () => {
+    const cue = createDefaultEndSceneText(endSceneDurationSeconds);
+    cue.text = "Văn bản mới";
+    cue.yPercent = Math.min(90, 50 + endSceneTextOverlays.length * 8);
+    setEndSceneTextOverlays((current) => [...current, cue]);
+    setSelectedEndSceneTextIndex(endSceneTextOverlays.length);
+  };
+
+  const removeSelectedEndSceneText = () => {
+    if (selectedEndSceneTextIndex === null) return;
+    const next = endSceneTextOverlays.filter(
+      (_, index) => index !== selectedEndSceneTextIndex,
+    );
+    setEndSceneTextOverlays(next);
+    setSelectedEndSceneTextIndex(next.length ? Math.min(selectedEndSceneTextIndex, next.length - 1) : null);
+  };
+
+  const updateRenderedAudio = async (targetJob: VideoDubbingJob) => {
+    if (
+      !targetJob.exportedVideoFileName ||
+      !targetJob.videoExport?.sizeBytes ||
+      targetJob.videoExport.status === "running"
+    ) {
+      return;
+    }
+    setAudioUpdateErrors((current) => {
+      const next = { ...current };
+      delete next[targetJob.id];
+      return next;
+    });
+    try {
+      const response = await fetch(
+        `/api/video-dubbing/jobs/${targetJob.id}/update-rendered-audio`,
+        { method: "POST" },
+      );
+      const result = await response.json();
+      if (!response.ok || !result.job) {
+        if (result.job) updateListedJob(result.job as VideoDubbingJob);
+        throw new Error(result.error || "Không thể cập nhật audio MP4.");
+      }
+      updateListedJob(result.job as VideoDubbingJob);
+
+      const deadline = Date.now() + 2 * 60 * 60 * 1000;
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => window.setTimeout(resolve, 750));
+        const statusResponse = await fetch(
+          `/api/video-dubbing/jobs/${targetJob.id}`,
+        );
+        const statusResult = await statusResponse.json();
+        if (!statusResponse.ok || !statusResult.job) {
+          throw new Error(statusResult.error || "Không thể kiểm tra cập nhật audio MP4.");
+        }
+        const latestJob = statusResult.job as VideoDubbingJob;
+        updateListedJob(latestJob);
+        if (latestJob.videoExport?.status !== "running") {
+          if (latestJob.videoExport?.status !== "completed") {
+            throw new Error(
+              latestJob.videoExport?.error ||
+                `Cập nhật audio kết thúc với trạng thái ${latestJob.videoExport?.status || "không xác định"}.`,
+            );
+          }
+          return;
+        }
+      }
+      throw new Error("Cập nhật audio MP4 quá thời gian chờ.");
+    } catch (error) {
+      setAudioUpdateErrors((current) => ({
+        ...current,
+        [targetJob.id]:
+          error instanceof Error ? error.message : "Không thể cập nhật audio MP4.",
+      }));
+    }
   };
 
   const requestMasterEdit = async (
@@ -4291,35 +5203,65 @@ export default function VideoDubbingTab() {
       </div>
     );
   };
+  const openCoverEditor = async (
+    event: ReactMouseEvent<HTMLButtonElement>,
+    targetJob: VideoDubbingJob,
+  ) => {
+    event.stopPropagation();
+    const activeJob = job?.id === targetJob.id
+      ? targetJob
+      : await previewSourceVideo(targetJob);
+    if (!activeJob) return;
+    setCoverEditorTarget(activeJob);
+    setCoverEditorFile(null);
+    setCoverEditorFrameCount(activeJob.overlaySettings?.coverFrameCount ?? 5);
+    setCoverEditorError(null);
+  };
+  const renderCoverEditorButton = (targetJob: VideoDubbingJob) => {
+    const coverFileName = targetJob.overlaySettings?.coverFileName;
+    return (
+      <button
+        type="button"
+        onClick={(event) => openCoverEditor(event, targetJob)}
+        disabled={targetJob.status !== "completed" || coverEditorBusy || queueRunning || settingsSyncRunning}
+        title={coverFileName ? `Chỉnh cover · ${targetJob.fileName}` : `Thêm cover · ${targetJob.fileName}`}
+        aria-label={coverFileName ? `Chỉnh ảnh cover ${targetJob.fileName}` : `Thêm ảnh cover ${targetJob.fileName}`}
+        className="inline-flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-violet-500/35 bg-violet-950/30 text-violet-200 hover:bg-violet-900/40 disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        {coverFileName ? (
+          <img
+            src={`/api/video-dubbing/jobs/${targetJob.id}/cover?v=${targetJob.updatedAt}`}
+            alt=""
+            className="h-full w-full object-cover"
+          />
+        ) : (
+          <Upload className="h-4 w-4" />
+        )}
+      </button>
+    );
+  };
   const renderVideoActions = (targetJob: VideoDubbingJob) => {
     const isCurrentJob = job?.id === targetJob.id;
     const autoPipelineRunning = isCurrentJob && isAutoPipelineRunning;
     const finalMixRunning = isCurrentJob && finalMix?.status === "running";
     const exportRunning = isCurrentJob && videoExport?.status === "running";
     const hasSrtToDownload = Boolean(resolveSrtDownload(targetJob));
+    const hasVideoToDownload = Boolean(
+      targetJob.exportedVideoFileName && targetJob.videoExport?.sizeBytes,
+    );
+    const audioUpdateRunning =
+      targetJob.videoExport?.status === "running" &&
+      targetJob.videoExport.detail?.toLowerCase().includes("audio");
     return (
-      <div className="flex max-w-full shrink-0 flex-wrap items-center justify-end gap-1.5">
-        <button
-          type="button"
-          onClick={(event) => {
-            event.stopPropagation();
-            downloadSrtForJob(targetJob);
-          }}
-          disabled={!hasSrtToDownload}
-          title={hasSrtToDownload ? "Tải phụ đề SRT đã chỉnh sửa" : "Video này chưa có phụ đề"}
-          aria-label={`Tải SRT ${targetJob.fileName}`}
-          className="inline-flex items-center gap-1 rounded-lg border border-emerald-500/35 px-2.5 py-1.5 text-xs font-semibold text-emerald-100 hover:bg-emerald-950/40 disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          <Download className="h-3.5 w-3.5" />
-          Tải SRT
-        </button>
+      <div className="flex w-[216px] shrink-0 flex-col gap-1.5">
+        <div className="grid grid-cols-3 gap-1.5">
         <button
           type="button"
           onClick={() => void (autoPipelineRunning ? cancelAutoPipeline() : startAutoPipeline())}
           disabled={allVideosRunning || !isCurrentJob || (!autoPipelineRunning && !canStartAutoPipeline)}
           title={autoPipelineRunning ? "Hủy Auto Pipeline" : "Tạo TTS Master cho video này"}
           aria-label={autoPipelineRunning ? "Hủy Auto Pipeline" : `TTS ${targetJob.fileName}`}
-          className="rounded-lg border border-indigo-400/35 px-2.5 py-1.5 text-xs font-semibold text-indigo-100 hover:bg-indigo-950/40 disabled:cursor-not-allowed disabled:opacity-40"
+          className="rounded-lg border border-indigo-400/35 px-1.5 py-1.5 text-[11px] font-semibold text-indigo-100 hover:bg-indigo-950/40 disabled:cursor-not-allowed disabled:opacity-40"
         >
           {autoPipelineRunning ? "Hủy TTS" : "TTS"}
         </button>
@@ -4343,7 +5285,7 @@ export default function VideoDubbingTab() {
                   : separationAvailability?.message || "Demucs chưa sẵn sàng"
             }
             aria-label={`Demucs ${targetJob.fileName}`}
-            className="rounded-lg border border-violet-400/35 px-2.5 py-1.5 text-xs font-semibold text-violet-100 hover:bg-violet-950/40 disabled:cursor-not-allowed disabled:opacity-40"
+            className="rounded-lg border border-violet-400/35 px-1.5 py-1.5 text-[11px] font-semibold text-violet-100 hover:bg-violet-950/40 disabled:cursor-not-allowed disabled:opacity-40"
           >
             {targetJob.separation?.status === "processing" ? "Đang tách" : "Demucs"}
           </button>
@@ -4353,7 +5295,7 @@ export default function VideoDubbingTab() {
           disabled={allVideosRunning || !isCurrentJob || (!finalMixRunning && !canRenderFinalMix)}
           title={finalMixRunning ? "Hủy render final mix" : "Render final mix"}
           aria-label={finalMixRunning ? "Hủy render final mix" : `Mix Audio ${targetJob.fileName}`}
-          className="rounded-lg border border-cyan-400/35 px-2.5 py-1.5 text-xs font-semibold text-cyan-100 hover:bg-cyan-950/40 disabled:cursor-not-allowed disabled:opacity-40"
+          className="rounded-lg border border-cyan-400/35 px-1.5 py-1.5 text-[11px] font-semibold text-cyan-100 hover:bg-cyan-950/40 disabled:cursor-not-allowed disabled:opacity-40"
         >
           {finalMixRunning ? "Hủy Mix" : "Mix Audio"}
         </button>
@@ -4363,10 +5305,80 @@ export default function VideoDubbingTab() {
           disabled={allVideosRunning || !isCurrentJob || (!exportRunning && (!canExportVideo || logoUploading))}
           title={exportRunning ? "Hủy export" : "Export video"}
           aria-label={exportRunning ? "Hủy export" : `Render ${targetJob.fileName}`}
-          className="rounded-lg border border-sky-400/35 px-2.5 py-1.5 text-xs font-semibold text-sky-100 hover:bg-sky-950/40 disabled:cursor-not-allowed disabled:opacity-40"
+          className="rounded-lg border border-sky-400/35 px-1.5 py-1.5 text-[11px] font-semibold text-sky-100 hover:bg-sky-950/40 disabled:cursor-not-allowed disabled:opacity-40"
         >
           {exportRunning ? "Hủy" : "Render"}
         </button>
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            downloadSrtForJob(targetJob);
+          }}
+          disabled={!hasSrtToDownload}
+          title={hasSrtToDownload ? "Tải phụ đề SRT đã chỉnh sửa" : "Video này chưa có phụ đề"}
+          aria-label={`Tải SRT ${targetJob.fileName}`}
+          className="rounded-lg border border-emerald-500/35 px-1.5 py-1.5 text-[11px] font-semibold text-emerald-100 hover:bg-emerald-950/40 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Tải SRT
+        </button>
+        {hasVideoToDownload ? (
+          <a
+            href={`/api/video-dubbing/jobs/${targetJob.id}/download`}
+            download={targetJob.exportedVideoFileName || `${targetJob.fileName.replace(/\.[^.]+$/, "")}_merged.mp4`}
+            onClick={(event) => event.stopPropagation()}
+            title={
+              targetJob.videoExport?.status === "stale"
+                ? "Tải MP4 đã render trước đó (cài đặt hiện tại đã thay đổi)"
+                : "Tải video đã render"
+            }
+            aria-label={`Tải Video ${targetJob.fileName}`}
+            className="inline-flex items-center justify-center rounded-lg border border-emerald-500/35 p-1.5 text-emerald-100 hover:bg-emerald-950/40"
+          >
+            <Download className="h-4 w-4" />
+          </a>
+        ) : (
+          <button
+            type="button"
+            disabled
+            title="Render video trước khi tải"
+            aria-label={`Tải Video ${targetJob.fileName} (chưa sẵn sàng)`}
+            className="inline-flex items-center justify-center rounded-lg border border-emerald-500/35 p-1.5 text-emerald-100 opacity-40"
+          >
+            <Download className="h-4 w-4" />
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            void updateRenderedAudio(targetJob);
+          }}
+          disabled={
+            !hasVideoToDownload ||
+            targetJob.videoExport?.status === "running" ||
+            targetJob.finalMix?.status === "running" ||
+            allVideosRunning
+          }
+          title={
+            !hasVideoToDownload
+              ? "Hãy render video trước"
+              : "Thay audio MP4 bằng Final Mix mới, không mã hóa lại hình ảnh"
+          }
+          aria-label={`Cập nhật Audio MP4 ${targetJob.fileName}`}
+          className="col-span-3 inline-flex items-center justify-center gap-2 rounded-lg border border-fuchsia-400/35 px-2 py-1.5 text-[11px] font-semibold text-fuchsia-100 hover:bg-fuchsia-950/40 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {audioUpdateRunning && (
+            <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+          )}
+          {audioUpdateRunning ? "Đang cập nhật Audio MP4…" : "Cập nhật Audio MP4"}
+        </button>
+        </div>
+        {audioUpdateErrors[targetJob.id] && (
+          <p className="text-[10px] leading-snug text-rose-300" role="alert">
+            {audioUpdateErrors[targetJob.id]}
+          </p>
+        )}
       </div>
     );
   };
@@ -4377,6 +5389,171 @@ export default function VideoDubbingTab() {
     : null;
   const previewSubtitleCues = subtitleCueOverrides ||
     srt?.analysis?.items || job?.overlaySettings?.subtitles || [];
+  useEffect(() => {
+    if (!job?.id || !previewSubtitleCues.length) return;
+    const seen = new Set<string>();
+    const needsIds = previewSubtitleCues.some((cue) => {
+      const id = cue.id;
+      if (!id || !/^[A-Za-z0-9_-]{1,100}$/.test(id) || seen.has(id)) return true;
+      seen.add(id);
+      return false;
+    });
+    if (!needsIds) return;
+    setSubtitleCueOverridesByVideoId((current) => {
+      const cues = current[job.id] ?? previewSubtitleCues;
+      const ids = new Set<string>();
+      return {
+        ...current,
+        [job.id]: cues.map((cue) => {
+          let id = cue.id;
+          if (!id || !/^[A-Za-z0-9_-]{1,100}$/.test(id) || ids.has(id)) {
+            id = crypto.randomUUID();
+          }
+          ids.add(id);
+          return { ...cue, id };
+        }),
+      };
+    });
+  }, [job?.id, previewSubtitleCues]);
+
+  const subtitleAudioInput = currentTtsSubtitleItems.map((item, index) => ({
+    id: item.id,
+    index: index + 1,
+    startTime: item.startTime,
+    endTime: item.endTime,
+    text: item.text,
+  }));
+  const subtitleAudioInputKey = JSON.stringify(subtitleAudioInput);
+  const activeSubtitleAudioFilterCount = Number(subtitleAudioShortFilterEnabled) +
+    Number(subtitleAudioSpecialCharactersFilterEnabled) +
+    Number(subtitleAudioSimilarFilterEnabled);
+  const filteredSubtitleAudioInput = filterSubtitleAudioItems(subtitleAudioInput, {
+    ...(subtitleAudioShortFilterEnabled
+      ? { maxCharacterCount: subtitleAudioMaxCharacterCount }
+      : {}),
+    specialCharactersOnly: subtitleAudioSpecialCharactersFilterEnabled,
+    similarAdjacent: subtitleAudioSimilarFilterEnabled,
+    similarityThreshold: 0.8,
+  });
+  useEffect(() => {
+    setSubtitleAudioItems([]);
+    setSubtitleAudioError(null);
+    setSubtitleAudioDrafts({});
+    subtitleAudioPlaybackIdRef.current = null;
+    setSubtitleAudioPlayingId(null);
+    const player = subtitleAudioPlayerRef.current;
+    if (player) {
+      player.pause();
+      player.removeAttribute("src");
+      player.load();
+    }
+  }, [job?.id]);
+
+  useEffect(() => () => {
+    const player = subtitleAudioPlayerRef.current;
+    if (!player) return;
+    subtitleAudioPlaybackIdRef.current = null;
+    player.pause();
+    player.removeAttribute("src");
+  }, []);
+
+  useEffect(() => {
+    const activeJob = video?.job;
+    if (!activeJob) return;
+
+    const previousJobId = activeSubtitleSourceJobIdRef.current;
+    const jobChanged = previousJobId !== activeJob.id;
+    activeSubtitleSourceJobIdRef.current = activeJob.id;
+
+    const queuedSubtitle = pairVideoDubbingQueueRows(
+      [{
+        id: activeJob.id,
+        name: video.fileName,
+        job: activeJob,
+      }],
+      subtitleFiles,
+    )[0]?.subtitle;
+    const projectSubtitle = activeProject?.sourceSrts?.find((source) =>
+      source.videoId === activeJob.id ||
+      (!source.videoId &&
+        source.matchByName !== false &&
+        fileStem(source.fileName) === fileStem(video.fileName)),
+    );
+    const legacyProjectSubtitle =
+      activeProject?.activeJobId === activeJob.id ? activeProject.srt : undefined;
+    const source = queuedSubtitle?.content !== undefined
+      ? queuedSubtitle
+      : projectSubtitle
+        ? {
+            fileName: projectSubtitle.fileName,
+            content: projectSubtitle.content,
+            sizeBytes: new Blob([projectSubtitle.content]).size,
+          }
+        : legacyProjectSubtitle
+          ? {
+              fileName: legacyProjectSubtitle.fileName,
+              content: legacyProjectSubtitle.content,
+              sizeBytes: new Blob([legacyProjectSubtitle.content]).size,
+            }
+          : null;
+
+    if (source?.content !== undefined) {
+      const analysis = "analysis" in source && source.analysis
+        ? source.analysis
+        : analyzeSrtContent(source.content);
+      setSrt({
+        fileName: source.fileName,
+        sizeBytes: source.sizeBytes,
+        content: source.content,
+        analysis,
+        error: "error" in source ? source.error : undefined,
+      });
+      setSrtContent(source.content);
+      setSubtitlesEnabled(true);
+    } else if (jobChanged && previousJobId !== null) {
+      setSrt(null);
+      setSrtContent("");
+      setSelectedSubtitleCue(null);
+    }
+  }, [video?.job?.id, video?.fileName, subtitleFiles, activeProject]);
+
+  useEffect(() => {
+    if (videoWorkspaceTab !== "preview" || timelineWorkspaceTab !== "subtitle-audio" || !job?.id) return;
+    if (subtitleAudioInput.length) {
+      subtitleAudioKnownNonEmptyJobIdsRef.current.add(job.id);
+    } else if (!subtitleAudioKnownNonEmptyJobIdsRef.current.has(job.id)) {
+      return;
+    }
+    const requestId = ++subtitleAudioSyncRequestRef.current;
+    const timer = window.setTimeout(() => {
+      setSubtitleAudioSyncing(true);
+      setSubtitleAudioError(null);
+      void fetch(`/api/video-dubbing/jobs/${job.id}/subtitle-audio`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items: JSON.parse(subtitleAudioInputKey) }),
+      }).then(async (response) => {
+        const result = await response.json();
+        if (!response.ok || !Array.isArray(result.items)) {
+          throw new Error(result.error || "Không thể đồng bộ audio từng câu.");
+        }
+        if (requestId === subtitleAudioSyncRequestRef.current) {
+          setSubtitleAudioItems(result.items);
+        }
+      }).catch((error) => {
+        if (requestId === subtitleAudioSyncRequestRef.current) {
+          setSubtitleAudioError(error instanceof Error ? error.message : "Không thể đồng bộ audio từng câu.");
+        }
+      }).finally(() => {
+        if (requestId === subtitleAudioSyncRequestRef.current) setSubtitleAudioSyncing(false);
+      });
+    }, 250);
+    return () => {
+      window.clearTimeout(timer);
+      subtitleAudioSyncRequestRef.current += 1;
+    };
+  }, [videoWorkspaceTab, timelineWorkspaceTab, job?.id, subtitleAudioInputKey]);
+
   const updatePreviewSubtitleCues = (
     update: (cues: VideoDubbingSubtitleCue[]) => VideoDubbingSubtitleCue[],
   ) => {
@@ -4385,10 +5562,11 @@ export default function VideoDubbingTab() {
       const currentCues = current[job.id] ?? previewSubtitleCues;
       return {
         ...current,
-        [job.id]: update(currentCues).map(({ startTime, endTime, text }) => ({
-          startTime,
-          endTime,
-          text,
+        [job.id]: update(currentCues).map((cue) => ({
+          id: cue.id || crypto.randomUUID(),
+          startTime: cue.startTime,
+          endTime: cue.endTime,
+          text: cue.text,
         })),
       };
     });
@@ -4400,6 +5578,161 @@ export default function VideoDubbingTab() {
         index === selectedSubtitleCue ? { ...cue, ...patch } : cue,
       ),
     );
+  };
+  const saveSubtitleAudioCueChanges = (cues: VideoDubbingSubtitleCue[]) => {
+    updatePreviewSubtitleCues(() => cues);
+    const content = formatVideoDubbingSrt(cues);
+    const analysis = content ? analyzeSrtContent(content) : undefined;
+    setSrtContent(content);
+    setSrt((current) => ({
+      fileName: current?.fileName || "subtitles.srt",
+      sizeBytes: new TextEncoder().encode(content).length,
+      content,
+      analysis,
+    }));
+  };
+  const adjustSubtitleAudioCueTiming = (
+    cueId: string,
+    field: "start" | "end",
+    direction: -1 | 1,
+  ) => {
+    const draft = subtitleAudioDrafts[cueId];
+    if (draft !== undefined && !draft.trim()) {
+      commitSubtitleAudioCueText(cueId);
+      return;
+    }
+    const cues = previewSubtitleCues.map((cue) =>
+      cue.id === cueId && draft !== undefined
+        ? { ...cue, text: draft.trim() }
+        : cue,
+    );
+    const delta = (subtitleAudioTimingStepMs / 1000) * direction;
+    const adjustedCues = adjustSubtitleCueTimings(
+      cues,
+      field,
+      delta,
+      job?.metadata?.durationSeconds,
+    );
+    const adjustedCue = adjustedCues.find((cue) => cue.id === cueId);
+    if (!adjustedCue) return;
+    saveSubtitleAudioCueChanges(cues.map((cue) =>
+      cue.id === cueId ? adjustedCue : cue,
+    ));
+    setSubtitleAudioDrafts((current) => {
+      const next = { ...current };
+      delete next[cueId];
+      return next;
+    });
+  };
+  const commitSubtitleAudioCueText = (cueId: string) => {
+    const draft = subtitleAudioDrafts[cueId];
+    if (draft === undefined) return;
+    if (!draft.trim()) {
+      setSubtitleAudioError("Nội dung phụ đề không được để trống; hãy dùng nút xóa câu nếu muốn bỏ câu.");
+      setSubtitleAudioDrafts((current) => {
+        const next = { ...current };
+        delete next[cueId];
+        return next;
+      });
+      return;
+    }
+    const cues = previewSubtitleCues.map((cue) => cue.id === cueId
+      ? { ...cue, text: draft.trim() }
+      : cue);
+    saveSubtitleAudioCueChanges(cues);
+    setSubtitleAudioDrafts((current) => {
+      const next = { ...current };
+      delete next[cueId];
+      return next;
+    });
+    setSubtitleAudioError(null);
+  };
+  const regenerateSubtitleAudioWithDraft = (item: SubtitleItem) => {
+    const draft = subtitleAudioDrafts[item.id];
+    if (draft !== undefined && !draft.trim()) {
+      commitSubtitleAudioCueText(item.id);
+      return;
+    }
+    if (draft !== undefined) commitSubtitleAudioCueText(item.id);
+    void regenerateSubtitleAudio({
+      ...item,
+      text: draft?.trim() || item.text,
+    });
+  };
+  const deleteSubtitleAudioCue = (cueId: string) => {
+    const cues = previewSubtitleCues.filter((cue) => cue.id !== cueId);
+    if (cues.length === previewSubtitleCues.length) return;
+    saveSubtitleAudioCueChanges(cues);
+    setSubtitleAudioError(null);
+  };
+  const playSubtitleAudio = async (item: SubtitleAudioRow) => {
+    if (!item.audioUrl) return;
+    let player = subtitleAudioPlayerRef.current;
+    if (!player) {
+      player = new Audio();
+      player.preload = "none";
+      player.onended = () => {
+        subtitleAudioPlaybackIdRef.current = null;
+        setSubtitleAudioPlayingId(null);
+      };
+      player.onerror = () => {
+        const playbackId = subtitleAudioPlaybackIdRef.current;
+        if (!playbackId) return;
+        subtitleAudioPlaybackIdRef.current = null;
+        setSubtitleAudioPlayingId(null);
+        setSubtitleAudioError("Không thể phát audio câu phụ đề.");
+      };
+      subtitleAudioPlayerRef.current = player;
+    }
+
+    if (subtitleAudioPlaybackIdRef.current === item.id && !player.paused) {
+      player.pause();
+      subtitleAudioPlaybackIdRef.current = null;
+      setSubtitleAudioPlayingId(null);
+      return;
+    }
+
+    player.pause();
+    const playbackId = item.id;
+    subtitleAudioPlaybackIdRef.current = playbackId;
+    player.src = `${item.audioUrl}?v=${encodeURIComponent(item.generatedText || "")}`;
+    setSubtitleAudioError(null);
+    try {
+      await player.play();
+      if (subtitleAudioPlaybackIdRef.current === playbackId) {
+        setSubtitleAudioPlayingId(playbackId);
+      }
+    } catch (error) {
+      if (subtitleAudioPlaybackIdRef.current !== playbackId) return;
+      subtitleAudioPlaybackIdRef.current = null;
+      setSubtitleAudioPlayingId(null);
+      setSubtitleAudioError(
+        error instanceof Error ? `Không thể phát audio: ${error.message}` : "Không thể phát audio.",
+      );
+    }
+  };
+  const combineSubtitleAudioCueAbove = (
+    cueId: string,
+    mode: "merge" | "join",
+  ) => {
+    const currentIndex = previewSubtitleCues.findIndex((cue) => cue.id === cueId);
+    if (currentIndex <= 0) return;
+    const aboveId = previewSubtitleCues[currentIndex - 1].id;
+    const cues = combineSubtitleCueWithPrevious(
+      previewSubtitleCues,
+      cueId,
+      mode,
+      subtitleAudioDrafts,
+    );
+    if (!cues) return;
+    saveSubtitleAudioCueChanges(cues);
+    setSubtitleAudioDrafts((current) => {
+      const next = { ...current };
+      delete next[cueId];
+      if (aboveId) delete next[aboveId];
+      return next;
+    });
+    setSubtitleAudioError(null);
   };
   const adjustAllSubtitleCues = (
     field: "start" | "end" | "move",
@@ -4465,15 +5798,162 @@ export default function VideoDubbingTab() {
   const subtitleTimelineDuration = Math.max(
     1,
     job?.metadata?.durationSeconds || 0,
+    job?.overlaySettings?.endScene?.enabled
+      ? (job.metadata?.durationSeconds || 0) + endSceneDurationSeconds
+      : 0,
     ...previewSubtitleCues.map((cue) => cue.endTime),
     ...textOverlays.filter((cue) => !cue.isTitle).map((cue) => cue.endTime),
   );
   const subtitleTimelineCursor = previewStatus === "playing"
     ? previewCurrentTime
     : subtitleTimelineCursorTime;
+  const previewingEndScene =
+    videoWorkspaceTab === "preview" &&
+    Boolean(job?.overlaySettings?.endScene?.enabled) &&
+    Boolean(job?.metadata) &&
+    subtitleTimelineCursor >= (job?.metadata?.durationSeconds ?? Number.POSITIVE_INFINITY);
+  subtitleTimelineCursorRef.current = subtitleTimelineCursor;
+  const fitSubtitleTimelineToPanel = () => {
+    const container = subtitleTimelineScrollRef.current;
+    if (!container) return;
+    const viewportWidth = container.clientWidth;
+    if (viewportWidth <= 0) return;
+    setSubtitleTimelineViewportWidth(viewportWidth);
+    subtitleTimelineFitRef.current = true;
+    subtitleTimelineZoomFocusRef.current = "left";
+    setSubtitleTimelineZoom(
+      Math.max(0.001, Math.min(180, viewportWidth / subtitleTimelineDuration)),
+    );
+    container.scrollLeft = 0;
+  };
+  const changeSubtitleTimelineZoom = (zoom: number) => {
+    subtitleTimelineFitRef.current = false;
+    subtitleTimelineZoomFocusRef.current = "playhead";
+    setSubtitleTimelineZoom(zoom);
+  };
+  const deleteActiveTextTrack = () => {
+    if (!textTracks.some((track) => track.id === activeTextTrackId)) return;
+    setTextTracks((tracks) => tracks.filter((track) => track.id !== activeTextTrackId));
+    setTextOverlays((cues) =>
+      cues.filter((cue) =>
+        cue.isTitle || (cue.trackId || DEFAULT_TEXT_TRACK_ID) !== activeTextTrackId,
+      ),
+    );
+    setActiveTextTrackId(
+      textTracks.find((track) => track.id !== activeTextTrackId)?.id || DEFAULT_TEXT_TRACK_ID,
+    );
+    setSelectedTextOverlay(null);
+    setSelectedSubtitleCue(null);
+  };
+  useEffect(() => {
+    characterCardOcrRequestRef.current += 1;
+    setCharacterCardRegion(null);
+    setCharacterCardRegionDraft(null);
+    setCharacterCardDrawStart(null);
+    setCharacterCardDrawMode(false);
+    setCharacterCardOcrJob(null);
+    setCharacterCardOcrError(null);
+  }, [job?.id]);
+  useEffect(() => {
+    if (timelineWorkspaceTab !== "subtitle") return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement) || !target.closest("[data-video-dubbing-timeline]")) return;
+      if (target.closest("input, textarea, select, [contenteditable='true'], [role='textbox']")) return;
+
+      const hasModifier = event.ctrlKey || event.metaKey;
+      const key = event.key.toLowerCase();
+      if (event.shiftKey && !hasModifier && key === "z") {
+        event.preventDefault();
+        fitSubtitleTimelineToPanel();
+        return;
+      }
+      if (hasModifier && (key === "c" || key === "v")) {
+        if (key === "c") {
+          if (selectedTextOverlay !== null) {
+            const cue = textOverlays[selectedTextOverlay];
+            if (!cue || cue.isTitle) return;
+            timelineCueClipboardRef.current = { kind: "text", cue: { ...cue } };
+          } else if (selectedSubtitleCue !== null) {
+            const cue = previewSubtitleCues[selectedSubtitleCue];
+            if (!cue) return;
+            timelineCueClipboardRef.current = { kind: "subtitle", cue: { ...cue } };
+          } else {
+            return;
+          }
+          event.preventDefault();
+          return;
+        }
+
+        const clipboard = timelineCueClipboardRef.current;
+        if (!clipboard || !job) return;
+        event.preventDefault();
+        const duration = Math.max(0.1, job.metadata?.durationSeconds || subtitleTimelineDuration);
+        const startTime = Math.min(subtitleTimelineCursor, Math.max(0, duration - 0.1));
+        if (clipboard.kind === "subtitle") {
+          const cueDuration = Math.max(0.1, clipboard.cue.endTime - clipboard.cue.startTime);
+          const cue = {
+            ...clipboard.cue,
+            id: crypto.randomUUID(),
+            startTime,
+            endTime: Math.min(duration, startTime + cueDuration),
+          };
+          setSelectedTextOverlay(null);
+          setSelectedSubtitleCue(previewSubtitleCues.length);
+          setSubtitlesEnabled(true);
+          updatePreviewSubtitleCues((cues) => [...cues, cue]);
+        } else {
+          const cueDuration = Math.max(0.1, clipboard.cue.endTime - clipboard.cue.startTime);
+          const cue = {
+            ...clipboard.cue,
+            id: crypto.randomUUID(),
+            startTime,
+            endTime: Math.min(duration, startTime + cueDuration),
+            isTitle: false,
+            extendToVideoEnd: false,
+          };
+          setSelectedSubtitleCue(null);
+          setSelectedTextOverlay(textOverlays.length);
+          setActiveTextTrackId(cue.trackId || DEFAULT_TEXT_TRACK_ID);
+          setTextOverlays([...textOverlays, cue]);
+        }
+        return;
+      }
+
+      if (event.key !== "Delete" || hasModifier) return;
+      if (selectedTextOverlay !== null) {
+        const cue = textOverlays[selectedTextOverlay];
+        if (!cue || cue.isTitle) return;
+        event.preventDefault();
+        setTextOverlays(textOverlays.filter((_, index) => index !== selectedTextOverlay));
+        setSelectedTextOverlay(null);
+      } else if (selectedSubtitleCue !== null && previewSubtitleCues[selectedSubtitleCue]) {
+        event.preventDefault();
+        updatePreviewSubtitleCues((cues) => cues.filter((_, index) => index !== selectedSubtitleCue));
+        setSelectedSubtitleCue(null);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [
+    timelineWorkspaceTab,
+    selectedTextOverlay,
+    selectedSubtitleCue,
+    textOverlays,
+    previewSubtitleCues,
+    job,
+    subtitleTimelineDuration,
+    subtitleTimelineCursor,
+    updatePreviewSubtitleCues,
+    fitSubtitleTimelineToPanel,
+  ]);
   const subtitleTimelineWidth = Math.max(
-    720,
+    subtitleTimelineViewportWidth,
     subtitleTimelineDuration * subtitleTimelineZoom,
+  );
+  const subtitleTimelineMinZoom = Math.min(
+    8,
+    Math.max(0.001, subtitleTimelineViewportWidth / subtitleTimelineDuration),
   );
   const subtitleTimelineStep = Math.max(
     5,
@@ -4492,8 +5972,14 @@ export default function VideoDubbingTab() {
       event.stopPropagation();
       if (event.ctrlKey) {
         const direction = event.deltaY < 0 ? 1 : -1;
+        subtitleTimelineFitRef.current = false;
+        subtitleTimelineZoomFocusRef.current = "playhead";
         setSubtitleTimelineZoom((current) =>
-          Math.max(8, Math.min(180, Math.round(current * (direction > 0 ? 1.15 : 1 / 1.15)))),
+          adjustSubtitleTimelineZoom(
+            current,
+            direction > 0 ? "in" : "out",
+            subtitleTimelineMinZoom,
+          ),
         );
         return;
       }
@@ -4501,16 +5987,68 @@ export default function VideoDubbingTab() {
     };
     container.addEventListener("wheel", onWheel, { passive: false });
     return () => container.removeEventListener("wheel", onWheel);
-  }, [job?.id, previewSubtitleCues.length]);
+  }, [job?.id, previewSubtitleCues.length, subtitleTimelineDuration, subtitleTimelineMinZoom]);
   useEffect(() => {
+    const container = subtitleTimelineScrollRef.current;
+    if (!container) return;
+    const updateViewportWidth = () => {
+      const viewportWidth = container.clientWidth;
+      if (viewportWidth <= 0) return;
+      setSubtitleTimelineViewportWidth(viewportWidth);
+      if (subtitleTimelineFitRef.current) {
+        subtitleTimelineZoomFocusRef.current = "left";
+        setSubtitleTimelineZoom(
+          Math.max(0.001, Math.min(180, viewportWidth / subtitleTimelineDuration)),
+        );
+      }
+    };
+    updateViewportWidth();
+    const observer = new ResizeObserver(updateViewportWidth);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [job?.id, timelineWorkspaceTab, subtitleTimelineDuration]);
+  useEffect(() => {
+    if (timelineWorkspaceTab !== "subtitle") return;
     const frame = window.requestAnimationFrame(() => {
       const container = subtitleTimelineScrollRef.current;
       if (!container) return;
+      if (subtitleTimelineZoomFocusRef.current === "left") {
+        subtitleTimelineZoomFocusRef.current = "playhead";
+        container.scrollLeft = 0;
+        return;
+      }
       const markerX = (subtitleTimelineCursor / subtitleTimelineDuration) * subtitleTimelineWidth;
       container.scrollLeft = Math.max(0, markerX - container.clientWidth / 2);
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [subtitleTimelineZoom]);
+  }, [
+    subtitleTimelineZoom,
+    subtitleTimelineWidth,
+    subtitleTimelineDuration,
+    timelineWorkspaceTab,
+  ]);
+  useEffect(() => {
+    if (previewStatus !== "playing" || subtitleTimelineFitRef.current) return;
+    let frame = 0;
+    const keepPlayheadCentered = () => {
+      const container = subtitleTimelineScrollRef.current;
+      if (container && !subtitleTimelineFitRef.current) {
+        const markerX =
+          (subtitleTimelineCursorRef.current / subtitleTimelineDuration) *
+          subtitleTimelineWidth;
+        const nextScrollLeft = Math.max(
+          0,
+          markerX - container.clientWidth / 2,
+        );
+        if (Math.abs(container.scrollLeft - nextScrollLeft) > 1) {
+          container.scrollLeft = nextScrollLeft;
+        }
+      }
+      frame = window.requestAnimationFrame(keepPlayheadCentered);
+    };
+    frame = window.requestAnimationFrame(keepPlayheadCentered);
+    return () => window.cancelAnimationFrame(frame);
+  }, [previewStatus, subtitleTimelineDuration, subtitleTimelineWidth]);
   const subtitleTimelineItems: Array<{
     cue: (typeof previewSubtitleCues)[number];
     index: number;
@@ -4526,12 +6064,48 @@ export default function VideoDubbingTab() {
       subtitleTimelineLaneEnds[lane] = cue.endTime;
       subtitleTimelineItems.push({ cue, index, lane });
     });
+  const textTimelineLanes = getTextOverlayTimelineLanes(
+    textOverlays,
+    DEFAULT_TEXT_TRACK_ID,
+  );
   const activePreviewSubtitle = subtitlesEnabled
     ? previewSubtitleCues.find(
         (cue) =>
           cue.startTime <= previewCurrentTime &&
           cue.endTime >= previewCurrentTime,
       )
+    : undefined;
+  const orderedSubtitleAudioInput = [...subtitleAudioInput].sort(
+    (first, second) => first.startTime - second.startTime || first.index - second.index,
+  );
+  const activeSubtitleAudioIndex = orderedSubtitleAudioInput.findIndex(
+    (item) =>
+      item.startTime <= previewCurrentTime &&
+      item.endTime >= previewCurrentTime,
+  );
+  const activeSubtitleAudioItem = activeSubtitleAudioIndex >= 0
+    ? orderedSubtitleAudioInput[activeSubtitleAudioIndex]
+    : undefined;
+  const previousSubtitleAudioItem = activeSubtitleAudioIndex >= 0
+    ? orderedSubtitleAudioInput[activeSubtitleAudioIndex - 1]
+    : [...orderedSubtitleAudioInput]
+        .reverse()
+        .find((item) => item.startTime < previewCurrentTime);
+  const nextSubtitleAudioItem = activeSubtitleAudioIndex >= 0
+    ? orderedSubtitleAudioInput[activeSubtitleAudioIndex + 1]
+    : orderedSubtitleAudioInput.find((item) => item.startTime > previewCurrentTime);
+  const activeSubtitleAudioRow = activeSubtitleAudioItem
+    ? subtitleAudioItems.find((entry) => entry.id === activeSubtitleAudioItem.id)
+    : undefined;
+  const activeSubtitleAudio: SubtitleItem | undefined = activeSubtitleAudioItem
+    ? {
+        ...activeSubtitleAudioItem,
+        targetDuration: Math.max(
+          0.1,
+          activeSubtitleAudioItem.endTime - activeSubtitleAudioItem.startTime,
+        ),
+        status: "pending",
+      }
     : undefined;
   const previewTextOverlays = textOverlays.map((cue) =>
       cue.isTitle
@@ -4555,6 +6129,11 @@ export default function VideoDubbingTab() {
     patch: Partial<VideoDubbingTextOverlayCue>,
   ) => {
     if (selectedTextOverlay === null) return;
+    if (textOverlays[selectedTextOverlay]?.kind === "character-card") {
+      setCharacterCardStyle((current) =>
+        resolveCharacterCardStyle({ ...current, ...patch }, current),
+      );
+    }
     setTextOverlays((items) => items.map((item, index) =>
       index === selectedTextOverlay ? { ...item, ...patch } : item,
     ));
@@ -4585,26 +6164,44 @@ export default function VideoDubbingTab() {
       backgroundTransparent: cue.backgroundTransparent,
       paddingPx: cue.paddingPx,
     };
+    if (cue.kind === "character-card") {
+      setCharacterCardStyle((current) =>
+        resolveCharacterCardStyle({ ...cue, ...styleAndPosition }, current),
+      );
+    }
     setTextOverlays((items) => items.map((item) =>
       !item.isTitle && (item.trackId || DEFAULT_TEXT_TRACK_ID) === trackId
-        ? { ...item, ...styleAndPosition }
+        ? {
+            ...item,
+            ...styleAndPosition,
+            ...(cue.kind === "character-card" && item.kind === "character-card"
+              ? { characterRoleFontSize: cue.characterRoleFontSize }
+              : {}),
+          }
         : item,
     ));
   };
-  const addTextOverlayToTrack = () => {
+  const addTextOverlayToTrack = (kind: "text" | "character-card" = "text") => {
     if (!job) return;
     const trackId = textTracks.some((track) => track.id === activeTextTrackId)
       ? activeTextTrackId
       : textTracks[0]?.id || DEFAULT_TEXT_TRACK_ID;
     const duration = Math.max(0.1, job.metadata?.durationSeconds || subtitleTimelineDuration);
     const startTime = Math.min(subtitleTimelineCursor, Math.max(0, duration - 0.1));
-    const trackStyle = textOverlays.find((item) =>
-      !item.isTitle && (item.trackId || DEFAULT_TEXT_TRACK_ID) === trackId,
-    );
+    const trackStyle = kind === "character-card"
+      ? characterCardStyle
+      : textOverlays.find((item) =>
+        !item.isTitle && (item.trackId || DEFAULT_TEXT_TRACK_ID) === trackId,
+      );
     const cue: VideoDubbingTextOverlayCue = {
+      kind,
       startTime,
       endTime: Math.min(duration, startTime + 3),
-      text: "Text mới",
+      text: kind === "character-card" ? "Tên nhân vật" : "Text mới",
+      characterRole: kind === "character-card" ? "Chức vụ" : undefined,
+      characterRoleFontSize: kind === "character-card"
+        ? trackStyle?.characterRoleFontSize ?? Math.max(8, Math.round((trackStyle?.fontSize ?? 32) * 0.7))
+        : undefined,
       trackId,
       fontSize: trackStyle?.fontSize ?? 28,
       fontFamily: trackStyle?.fontFamily ?? "Arial",
@@ -4628,6 +6225,319 @@ export default function VideoDubbingTab() {
     };
     setTextOverlays((items) => [...items, cue]);
     setSelectedTextOverlay(textOverlays.length);
+  };
+  const startCharacterCardOcrWorker = async () => {
+    setCharacterCardOcrError(null);
+    try {
+      const response = await fetch("/api/subtitle-ocr/worker/start", { method: "POST" });
+      const result = await response.json() as { worker?: CharacterCardOcrWorker; error?: string };
+      if (!response.ok || !result.worker) {
+        throw new Error(result.error || "Không thể bật OCR thường trực.");
+      }
+      setCharacterCardOcrWorker(result.worker);
+    } catch (error) {
+      setCharacterCardOcrError(error instanceof Error ? error.message : "Không thể bật OCR thường trực.");
+    }
+  };
+  const stopCharacterCardOcrWorker = async () => {
+    setCharacterCardOcrError(null);
+    try {
+      const response = await fetch("/api/subtitle-ocr/worker/stop", { method: "POST" });
+      const result = await response.json() as { worker?: CharacterCardOcrWorker; error?: string };
+      if (!response.ok || !result.worker) {
+        throw new Error(result.error || "Không thể dừng OCR thường trực.");
+      }
+      setCharacterCardOcrWorker(result.worker);
+      if (characterCardOcrJob?.status === "running" || characterCardOcrJob?.status === "queued") {
+        characterCardOcrRequestRef.current += 1;
+        setCharacterCardOcrJob({
+          ...characterCardOcrJob,
+          status: "cancelled",
+          message: "Đã dừng worker OCR thường trực.",
+        });
+      }
+    } catch (error) {
+      setCharacterCardOcrError(error instanceof Error ? error.message : "Không thể dừng OCR thường trực.");
+    }
+  };
+  const acceptCharacterCardReferenceFile = (file: File | null) => {
+    if (!file) return;
+    if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
+      setCharacterCardReferenceError("Ảnh mẫu cần có định dạng PNG, JPEG hoặc WebP.");
+      return;
+    }
+    if (file.size > 8 * 1024 * 1024) {
+      setCharacterCardReferenceError("Ảnh mẫu không được vượt quá 8 MB.");
+      return;
+    }
+    setCharacterCardReferenceFile(file);
+    setCharacterCardReferenceError(null);
+    setCharacterCardReferenceScanJob(null);
+    setCharacterCardReferenceSelectedIds([]);
+  };
+  const pasteCharacterCardReference = (event: ReactClipboardEvent<HTMLDivElement>) => {
+    const imageItem = Array.from(event.clipboardData.items).find((item) =>
+      item.type.startsWith("image/"),
+    );
+    const file = imageItem?.getAsFile();
+    if (!file) return;
+    event.preventDefault();
+    acceptCharacterCardReferenceFile(file);
+  };
+  const startCharacterCardReferenceScan = async () => {
+    if (!job || !characterCardRegion || !characterCardReferenceFile) return;
+    const requestId = ++characterCardReferenceScanRequestRef.current;
+    setCharacterCardReferenceError(null);
+    setCharacterCardReferenceSelectedIds([]);
+    setCharacterCardReferenceScanJob(null);
+    try {
+      const referenceImage = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onerror = () => reject(new Error("Không thể đọc ảnh mẫu."));
+        reader.onload = () => {
+          if (typeof reader.result !== "string") {
+            reject(new Error("Không thể đọc ảnh mẫu."));
+            return;
+          }
+          resolve(reader.result);
+        };
+        reader.readAsDataURL(characterCardReferenceFile);
+      });
+      if (requestId !== characterCardReferenceScanRequestRef.current) return;
+      const response = await fetch(
+        `/api/video-dubbing/jobs/${job.id}/character-card-reference-scan`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            referenceImage,
+            region: characterCardRegion,
+            framesToSkip: characterCardReferenceFramesToSkip,
+            similarityThreshold: characterCardReferenceSimilarity,
+          }),
+        },
+      );
+      const result = await response.json() as {
+        job?: CharacterCardReferenceScanJob;
+        error?: string;
+      };
+      if (!response.ok || !result.job) {
+        throw new Error(result.error || "Không thể bắt đầu quét ảnh mẫu.");
+      }
+
+      let scanJob = result.job;
+      characterCardReferenceScanJobIdRef.current = scanJob.id;
+      setCharacterCardReferenceScanJob(scanJob);
+      while (scanJob.status === "running") {
+        await new Promise((resolve) => window.setTimeout(resolve, 700));
+        if (requestId !== characterCardReferenceScanRequestRef.current) return;
+        const statusResponse = await fetch(
+          `/api/video-dubbing/character-card-reference-scans/${scanJob.id}`,
+        );
+        const statusResult = await statusResponse.json() as {
+          job?: CharacterCardReferenceScanJob;
+          error?: string;
+        };
+        if (!statusResponse.ok || !statusResult.job) {
+          throw new Error(statusResult.error || "Không lấy được trạng thái quét ảnh mẫu.");
+        }
+        scanJob = statusResult.job;
+        setCharacterCardReferenceScanJob(scanJob);
+      }
+      if (characterCardReferenceScanJobIdRef.current === scanJob.id) {
+        characterCardReferenceScanJobIdRef.current = null;
+      }
+      if (requestId !== characterCardReferenceScanRequestRef.current) return;
+      if (scanJob.status !== "completed") {
+        throw new Error(scanJob.error || scanJob.message || "Quét ảnh mẫu đã dừng trước khi hoàn tất.");
+      }
+      setCharacterCardReferenceSelectedIds(scanJob.results.map((item) => item.id));
+    } catch (error) {
+      if (requestId === characterCardReferenceScanRequestRef.current) {
+        setCharacterCardReferenceError(
+          error instanceof Error ? error.message : "Không thể quét ảnh mẫu.",
+        );
+      }
+    }
+  };
+  const cancelCharacterCardReferenceScan = async () => {
+    if (!characterCardReferenceScanJob || characterCardReferenceScanJob.status !== "running") return;
+    try {
+      const response = await fetch(
+        `/api/video-dubbing/character-card-reference-scans/${characterCardReferenceScanJob.id}/cancel`,
+        { method: "POST" },
+      );
+      const result = await response.json() as {
+        job?: CharacterCardReferenceScanJob;
+        error?: string;
+      };
+      if (!response.ok || !result.job) {
+        throw new Error(result.error || "Không thể hủy quét ảnh mẫu.");
+      }
+      characterCardReferenceScanRequestRef.current += 1;
+      characterCardReferenceScanJobIdRef.current = null;
+      setCharacterCardReferenceScanJob(result.job);
+    } catch (error) {
+      setCharacterCardReferenceError(
+        error instanceof Error ? error.message : "Không thể hủy quét ảnh mẫu.",
+      );
+    }
+  };
+  const createCharacterCardsAutomatically = async (
+    selectedOccurrences?: CharacterCardOcrOccurrence[],
+  ) => {
+    if (!job || !characterCardRegion) return;
+    const scanRanges = getCharacterCardScanRanges(
+      selectedOccurrences?.length
+        ? selectedOccurrences.map((occurrence) => occurrence.time)
+        : [subtitleTimelineCursor],
+      characterCardOcrStartOffset,
+      characterCardOcrDuration,
+      job.metadata?.durationSeconds ?? 0,
+    );
+    if (!scanRanges.length) {
+      setCharacterCardOcrError("Không còn khoảng thời gian trong video để quét.");
+      return;
+    }
+
+    const requestId = ++characterCardOcrRequestRef.current;
+    setCharacterCardOcrError(null);
+    setCharacterCardOcrJob(null);
+    const subtitles: CharacterCardOcrJob["subtitles"] = [];
+    try {
+      for (let index = 0; index < scanRanges.length; index += 1) {
+        const scanRange = scanRanges[index];
+        const startResponse = await fetch(
+          `/api/video-dubbing/jobs/${job.id}/character-card-ocr`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              timeStart: scanRange.startTime,
+              durationSeconds: scanRange.durationSeconds,
+              region: characterCardRegion,
+            }),
+          },
+        );
+        const startResult = await startResponse.json() as {
+          job?: CharacterCardOcrJob;
+          error?: string;
+        };
+        if (!startResponse.ok || !startResult.job) {
+          throw new Error(startResult.error || "Không thể bắt đầu OCR vùng card.");
+        }
+
+        let ocrJob = startResult.job;
+        setCharacterCardOcrJob(ocrJob);
+        while (ocrJob.status === "queued" || ocrJob.status === "running") {
+          await new Promise((resolve) => window.setTimeout(resolve, 700));
+          if (requestId !== characterCardOcrRequestRef.current) return;
+          const statusResponse = await fetch(`/api/subtitle-ocr/jobs/${ocrJob.id}`);
+          const statusResult = await statusResponse.json() as {
+            job?: CharacterCardOcrJob;
+            error?: string;
+          };
+          if (!statusResponse.ok || !statusResult.job) {
+            throw new Error(statusResult.error || "Không lấy được trạng thái OCR.");
+          }
+          ocrJob = statusResult.job;
+          setCharacterCardOcrJob(ocrJob);
+        }
+        if (requestId !== characterCardOcrRequestRef.current) return;
+        if (ocrJob.status !== "completed") {
+          throw new Error(ocrJob.error || ocrJob.message || "OCR đã dừng trước khi hoàn tất.");
+        }
+        subtitles.push(...ocrJob.subtitles);
+      }
+      if (requestId !== characterCardOcrRequestRef.current) return;
+
+      const groups = selectedOccurrences?.length
+        ? groupCharacterCardOcrCuesByOccurrences(subtitles, selectedOccurrences)
+        : groupCharacterCardOcrCues(subtitles);
+      if (!groups.length) {
+        setCharacterCardOcrError("Không phát hiện chữ trong vùng đã chọn; chưa tạo card nào.");
+        return;
+      }
+      const trackId = textTracks.some((track) => track.id === activeTextTrackId)
+        ? activeTextTrackId
+        : textTracks[0]?.id || DEFAULT_TEXT_TRACK_ID;
+      const trackStyle = characterCardStyle;
+      const cards: VideoDubbingTextOverlayCue[] = groups.flatMap((group) => {
+        const lines = group.lines.flatMap((line) => line.split(/\r?\n/).map((part) => part.trim()).filter(Boolean));
+        const scanRange = scanRanges.find((range) =>
+          group.startTime < range.endTime && group.endTime > range.startTime,
+        );
+        if (!scanRange) return [];
+        const startTime = Math.max(scanRange.startTime, group.startTime);
+        const endTime = Math.min(scanRange.endTime, group.endTime);
+        if (endTime <= startTime || !lines.length) return [];
+        return [{
+          id: crypto.randomUUID(),
+          kind: "character-card",
+          startTime,
+          endTime,
+          text: lines[0] || "Tên nhân vật",
+          characterRole: lines.slice(1).join(" "),
+          trackId,
+          fontSize: trackStyle?.fontSize ?? 28,
+          characterRoleFontSize: trackStyle?.characterRoleFontSize ??
+            Math.max(8, Math.round((trackStyle?.fontSize ?? 28) * 0.7)),
+          fontFamily: trackStyle?.fontFamily ?? "Arial",
+          color: trackStyle?.color ?? "#ffffff",
+          bold: trackStyle?.bold ?? false,
+          italic: trackStyle?.italic ?? false,
+          underline: trackStyle?.underline ?? false,
+          textCase: trackStyle?.textCase ?? "none",
+          outlineEnabled: trackStyle?.outlineEnabled ?? false,
+          outlineColor: trackStyle?.outlineColor ?? "#000000",
+          outlineWidthPx: trackStyle?.outlineWidthPx ?? 2,
+          characterSpacingPx: trackStyle?.characterSpacingPx ?? 0,
+          lineSpacingPx: trackStyle?.lineSpacingPx ?? 0,
+          textAlign: trackStyle?.textAlign ??
+            (trackStyle ? getSubtitleTextAlignment(trackStyle.position) : "center"),
+          position: trackStyle?.position ?? "middle-center",
+          xPercent: trackStyle?.xPercent,
+          yPercent: trackStyle?.yPercent,
+          backgroundColor: trackStyle?.backgroundColor ?? "#000000",
+          backgroundTransparent: trackStyle?.backgroundTransparent ?? true,
+          paddingPx: trackStyle?.paddingPx ?? 0,
+        }];
+      });
+      if (!cards.length) {
+        setCharacterCardOcrError("Không phát hiện chữ trong vùng đã chọn; chưa tạo card nào.");
+        return;
+      }
+      setTextOverlays((current) => [...current, ...cards]);
+      setActiveTextTrackId(trackId);
+      setSelectedTextOverlay(null);
+      setSelectedSubtitleCue(null);
+      if (selectedOccurrences?.length) {
+        setCharacterCardReferenceScanJob(null);
+        setCharacterCardReferenceSelectedIds([]);
+      }
+    } catch (error) {
+      if (requestId === characterCardOcrRequestRef.current) {
+        setCharacterCardOcrError(
+          error instanceof Error ? error.message : "Không thể tạo card từ OCR.",
+        );
+      }
+    }
+  };
+  const cancelCharacterCardOcr = async () => {
+    if (!characterCardOcrJob) return;
+    try {
+      const response = await fetch(`/api/subtitle-ocr/jobs/${characterCardOcrJob.id}/cancel`, {
+        method: "POST",
+      });
+      const result = await response.json() as { job?: CharacterCardOcrJob; error?: string };
+      if (!response.ok || !result.job) {
+        throw new Error(result.error || "Không thể hủy OCR.");
+      }
+      characterCardOcrRequestRef.current += 1;
+      setCharacterCardOcrJob(result.job);
+    } catch (error) {
+      setCharacterCardOcrError(error instanceof Error ? error.message : "Không thể hủy OCR.");
+    }
   };
   const createTitleOverlay = () => {
     if (titleOverlayIndex >= 0) {
@@ -4660,6 +6570,7 @@ export default function VideoDubbingTab() {
 
     const duration = Math.max(0.1, job?.metadata?.durationSeconds ?? 1);
     const title: VideoDubbingTextOverlayCue = {
+      kind: "text",
       startTime: 0,
       endTime: duration,
       text: "Tiêu đề phim",
@@ -4749,6 +6660,30 @@ export default function VideoDubbingTab() {
       overlayHeight: overlayBounds.height,
     });
   };
+  const startEndSceneTextDrag = (
+    event: ReactPointerEvent<HTMLElement>,
+    cueIndex: number,
+  ) => {
+    const stage = endSceneStageRef.current;
+    const cue = endSceneTextOverlays[cueIndex];
+    if (!stage || !cue) return;
+    const bounds = stage.getBoundingClientRect();
+    if (bounds.width <= 0 || bounds.height <= 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setSelectedEndSceneTextIndex(cueIndex);
+    setEndSceneDrag({
+      index: cueIndex,
+      pointerX: event.clientX,
+      pointerY: event.clientY,
+      xPercent: cue.xPercent ?? 50,
+      yPercent: cue.yPercent ?? 50,
+      stageLeft: bounds.left,
+      stageTop: bounds.top,
+      stageWidth: bounds.width,
+      stageHeight: bounds.height,
+    });
+  };
   const startSubtitleTimelineDrag = (
     event: ReactPointerEvent<HTMLElement>,
     cueIndex: number,
@@ -4762,10 +6697,12 @@ export default function VideoDubbingTab() {
     event.stopPropagation();
     const trackBounds = subtitleTimelineTrackRef.current?.getBoundingClientRect();
     if (!trackBounds || trackBounds.width <= 0) return;
+    subtitleTimelineDragMovedRef.current = false;
     setSubtitleTimelineDrag({
       cueIndex,
       track,
       mode,
+      pointerId: event.pointerId,
       startX: event.clientX,
       trackWidth: trackBounds.width,
       timelineDuration: subtitleTimelineDuration,
@@ -4777,6 +6714,11 @@ export default function VideoDubbingTab() {
     const drag = subtitleTimelineDrag;
     if (!drag) return;
     const onPointerMove = (event: PointerEvent) => {
+      if (event.pointerId !== drag.pointerId) return;
+      if (!subtitleTimelineDragMovedRef.current) {
+        if (Math.abs(event.clientX - drag.startX) < SUBTITLE_TIMELINE_DRAG_THRESHOLD_PX) return;
+        subtitleTimelineDragMovedRef.current = true;
+      }
       const delta = ((event.clientX - drag.startX) / drag.trackWidth) * drag.timelineDuration;
       const snap = (time: number) => Math.round(time * 20) / 20;
       let startTime = drag.originalStart;
@@ -4808,10 +6750,15 @@ export default function VideoDubbingTab() {
         setTextOverlays((current) => update(current, true) as VideoDubbingTextOverlayCue[]);
       }
     };
-    const onPointerUp = () => setSubtitleTimelineDrag(null);
+    const onPointerUp = (event: PointerEvent) => {
+      if (event.pointerId === drag.pointerId) {
+        subtitleTimelineDragMovedRef.current = false;
+        setSubtitleTimelineDrag(null);
+      }
+    };
     window.addEventListener("pointermove", onPointerMove);
-    window.addEventListener("pointerup", onPointerUp, { once: true });
-    window.addEventListener("pointercancel", onPointerUp, { once: true });
+    window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerUp);
     return () => {
       window.removeEventListener("pointermove", onPointerMove);
       window.removeEventListener("pointerup", onPointerUp);
@@ -4842,6 +6789,11 @@ export default function VideoDubbingTab() {
         ((drag.anchorX + event.clientX - drag.pointerX) / drag.stageWidth) * 100));
       const yPercent = Math.max(minimumY, Math.min(100 - minimumY,
         ((drag.centerY + event.clientY - drag.pointerY) / drag.stageHeight) * 100));
+      if (cue?.kind === "character-card") {
+        setCharacterCardStyle((current) =>
+          resolveCharacterCardStyle({ ...current, xPercent, yPercent }, current),
+        );
+      }
       setTextOverlays((items) => items.map((item, index) => index === drag.cueIndex
         ? { ...item, xPercent, yPercent }
         : item));
@@ -4856,10 +6808,113 @@ export default function VideoDubbingTab() {
       window.removeEventListener("pointercancel", onPointerUp);
     };
   }, [textOverlayPreviewDrag, textOverlays]);
-  const previewOverlayScale =
+  useEffect(() => {
+    const drag = endSceneDrag;
+    if (!drag) return;
+    const onPointerMove = (event: PointerEvent) => {
+      const xPercent = Math.max(
+        0,
+        Math.min(
+          100,
+          ((drag.xPercent / 100 * drag.stageWidth +
+            event.clientX -
+            drag.pointerX) /
+            drag.stageWidth) *
+            100,
+        ),
+      );
+      const yPercent = Math.max(
+        0,
+        Math.min(
+          100,
+          ((drag.yPercent / 100 * drag.stageHeight +
+            event.clientY -
+            drag.pointerY) /
+            drag.stageHeight) *
+            100,
+        ),
+      );
+      setEndSceneTextOverlays((items) =>
+        items.map((item, index) =>
+          index === drag.index ? { ...item, xPercent, yPercent } : item,
+        ),
+      );
+    };
+    const onPointerUp = () => setEndSceneDrag(null);
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp, { once: true });
+    window.addEventListener("pointercancel", onPointerUp, { once: true });
+    return () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerUp);
+    };
+  }, [endSceneDrag]);
+  useEffect(() => {
+    if (videoWorkspaceTab !== "end-scene") return;
+    const container = endScenePreviewContainerRef.current;
+    if (!container) return;
+    const updateSize = () => {
+      const availableWidth = container.clientWidth;
+      if (availableWidth <= 0) return;
+      const [ratioWidth, ratioHeight] = endSceneAspectRatio
+        .split(":")
+        .map(Number);
+      const ratio = ratioWidth / ratioHeight;
+      const height = Math.min(window.innerHeight * 0.6, 640, availableWidth / ratio);
+      const width = height * ratio;
+      setEndScenePreviewSize((current) =>
+        Math.abs(current.width - width) < 1 &&
+        Math.abs(current.height - height) < 1
+          ? current
+          : { width, height },
+      );
+    };
+    const observer = new ResizeObserver(updateSize);
+    observer.observe(container);
+    updateSize();
+    return () => observer.disconnect();
+  }, [videoWorkspaceTab, endSceneAspectRatio]);
+  const measuredPreviewScale =
     videoPreviewReady && job?.metadata && previewVideoRef.current
       ? previewVideoRef.current.clientWidth / job.metadata.width
-      : 1;
+      : 0;
+  const previewOverlayScale =
+    measuredPreviewScale > 0
+      ? measuredPreviewScale
+      : job?.metadata?.width
+        ? Math.min(1, 960 / job.metadata.width)
+        : 1;
+  const endSceneOverlayScale =
+    job?.metadata?.width && endScenePreviewSize.width > 0
+      ? endScenePreviewSize.width / job.metadata.width
+      : previewOverlayScale;
+  const selectedEndSceneCue =
+    selectedEndSceneTextIndex === null
+      ? null
+      : endSceneTextOverlays[selectedEndSceneTextIndex] ?? null;
+  const endSceneTextStyleValue: TextStyleControlValue = {
+    fontFamily: selectedEndSceneCue?.fontFamily ?? "Arial",
+    fontSize: selectedEndSceneCue?.fontSize ?? 48,
+    bold: selectedEndSceneCue?.bold ?? false,
+    underline: selectedEndSceneCue?.underline ?? false,
+    italic: selectedEndSceneCue?.italic ?? false,
+    textCase: selectedEndSceneCue?.textCase ?? "none",
+    color: selectedEndSceneCue?.color ?? "#ffffff",
+    outlineEnabled: selectedEndSceneCue?.outlineEnabled ?? false,
+    outlineColor: selectedEndSceneCue?.outlineColor ?? "#000000",
+    outlineWidthPx: selectedEndSceneCue?.outlineWidthPx ?? 2,
+    characterSpacingPx: selectedEndSceneCue?.characterSpacingPx ?? 0,
+    lineSpacingPx: selectedEndSceneCue?.lineSpacingPx ?? 0,
+  };
+  const updateSelectedEndSceneStyle = (
+    patch: Partial<TextStyleControlValue>,
+  ) => {
+    if (selectedEndSceneTextIndex !== null) {
+      updateEndSceneText(selectedEndSceneTextIndex, patch);
+    }
+  };
+  const endSceneEnabled = Boolean(job?.overlaySettings?.endScene?.enabled);
   const subtitleBackgroundSliceUrl = (background: string, slice: "left" | "center" | "right") =>
     `/assets/subtitle/${encodeURIComponent(`${background}-${slice}.png`)}`;
 
@@ -5098,6 +7153,184 @@ export default function VideoDubbingTab() {
               <li><b className="text-white">Mở Project Folder:</b> mở thư mục chứa dữ liệu của project đang mở.</li>
               <li><b className="text-white">Lịch sử job:</b> xem lại và mở các job đã lưu.</li>
             </ul>
+          </section>
+        </div>
+      )}
+
+      {coverEditorTarget && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/75 p-3 sm:p-6"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !coverEditorBusy) {
+              setCoverEditorTarget(null);
+              setCoverEditorFile(null);
+              setCoverEditorError(null);
+            }
+          }}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="cover-editor-title"
+            className="w-full max-w-lg space-y-4 rounded-2xl border border-slate-800 bg-slate-900 p-4 shadow-2xl sm:p-5"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h3 id="cover-editor-title" className="font-semibold text-white">
+                  Cover cho video
+                </h3>
+                <p className="mt-1 truncate text-xs text-slate-400">
+                  {coverEditorTarget.fileName}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setCoverEditorTarget(null);
+                  setCoverEditorFile(null);
+                  setCoverEditorError(null);
+                }}
+                disabled={coverEditorBusy}
+                className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:text-white disabled:opacity-40"
+              >
+                Đóng
+              </button>
+            </div>
+            {coverEditorError && (
+              <p className="rounded-lg border border-rose-500/30 bg-rose-950/30 p-2.5 text-xs text-rose-200" role="alert">
+                {coverEditorError}
+              </p>
+            )}
+            <input
+              ref={coverEditorInputRef}
+              type="file"
+              accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp"
+              className="hidden"
+              onChange={(event) => {
+                chooseCoverFile(event.target.files?.[0]);
+                event.target.value = "";
+              }}
+            />
+            <div
+              onDragEnter={(event: DragEvent<HTMLDivElement>) => {
+                event.preventDefault();
+                setCoverEditorDragOver(true);
+              }}
+              onDragOver={(event: DragEvent<HTMLDivElement>) => {
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "copy";
+              }}
+              onDragLeave={(event: DragEvent<HTMLDivElement>) => {
+                if (event.currentTarget === event.target) {
+                  setCoverEditorDragOver(false);
+                }
+              }}
+              onDrop={(event: DragEvent<HTMLDivElement>) => {
+                event.preventDefault();
+                event.stopPropagation();
+                setCoverEditorDragOver(false);
+                chooseCoverFile(event.dataTransfer.files[0]);
+              }}
+              className={`rounded-xl border border-dashed p-4 text-center transition-colors ${
+                coverEditorDragOver
+                  ? "border-violet-300 bg-violet-500/10"
+                  : "border-slate-700 bg-slate-950/50"
+              }`}
+            >
+              {coverEditorPreviewUrl || coverEditorTarget.overlaySettings?.coverFileName ? (
+                <img
+                  src={
+                    coverEditorPreviewUrl ||
+                    `/api/video-dubbing/jobs/${coverEditorTarget.id}/cover?v=${coverEditorTarget.updatedAt}`
+                  }
+                  alt="Preview ảnh cover"
+                  className="mx-auto max-h-56 max-w-full rounded-lg object-contain"
+                />
+              ) : (
+                <div className="flex h-40 flex-col items-center justify-center gap-2 text-slate-500">
+                  <Upload className="h-8 w-8" />
+                  <span className="text-xs">Kéo thả ảnh cover vào đây</span>
+                </div>
+              )}
+              <p className="mt-3 truncate text-xs text-slate-300">
+                {coverEditorFile?.name ||
+                  coverEditorTarget.overlaySettings?.coverFileName ||
+                  "PNG, JPG hoặc WebP · tối đa 20 MB"}
+              </p>
+              <button
+                type="button"
+                onClick={() => coverEditorInputRef.current?.click()}
+                disabled={coverEditorBusy}
+                className="mt-3 rounded-lg border border-violet-500/35 px-3 py-1.5 text-xs font-semibold text-violet-100 hover:bg-violet-950/40 disabled:opacity-40"
+              >
+                Chọn ảnh
+              </button>
+            </div>
+            <label className="block space-y-2 text-xs text-slate-300">
+              <span className="flex justify-between">
+                <span>Số frame đầu hiển thị cover</span>
+                <span>{coverEditorFrameCount} frame</span>
+              </span>
+              <input
+                type="range"
+                min="5"
+                max="10"
+                step="1"
+                value={coverEditorFrameCount}
+                onChange={(event) =>
+                  setCoverEditorFrameCount(Number(event.target.value))
+                }
+                disabled={coverEditorBusy}
+                className="w-full accent-violet-400"
+              />
+            </label>
+            <p className="text-[11px] leading-relaxed text-slate-500">
+              Ảnh được căn giữa và crop phần thừa để vừa khung hình, không bị kéo giãn. Cài đặt này chỉ áp dụng cho video đang chọn.
+            </p>
+            <div className="flex flex-wrap justify-between gap-2 border-t border-slate-800 pt-3">
+              {coverEditorTarget.overlaySettings?.coverFileName ? (
+                <button
+                  type="button"
+                  onClick={() => void removeCoverFromEditor()}
+                  disabled={coverEditorBusy}
+                  className="rounded-lg border border-rose-500/30 px-3 py-2 text-xs text-rose-200 hover:bg-rose-950/30 disabled:opacity-40"
+                >
+                  Xóa cover
+                </button>
+              ) : (
+                <span />
+              )}
+              <div className="ml-auto flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCoverEditorTarget(null);
+                    setCoverEditorFile(null);
+                    setCoverEditorError(null);
+                  }}
+                  disabled={coverEditorBusy}
+                  className="rounded-lg border border-slate-700 px-3 py-2 text-xs text-slate-300 hover:text-white disabled:opacity-40"
+                >
+                  Hủy
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void confirmCoverEditor()}
+                  disabled={
+                    coverEditorBusy ||
+                    (!coverEditorFile &&
+                      !coverEditorTarget.overlaySettings?.coverFileName)
+                  }
+                  className="inline-flex items-center gap-2 rounded-lg bg-violet-400 px-3 py-2 text-xs font-bold text-slate-950 hover:bg-violet-300 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {coverEditorBusy && (
+                    <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+                  )}
+                  Xác nhận
+                </button>
+              </div>
+            </div>
           </section>
         </div>
       )}
@@ -6520,7 +8753,7 @@ export default function VideoDubbingTab() {
                 }
                 className="rounded-lg border border-violet-400/35 px-3 py-2 text-xs font-semibold text-violet-100 hover:bg-violet-950/40 disabled:cursor-not-allowed disabled:opacity-40"
               >
-                Demucs All
+                Demucs
               </button>
               <button
                 type="button"
@@ -6547,7 +8780,7 @@ export default function VideoDubbingTab() {
                 title="Tải phụ đề đã chỉnh sửa của tất cả video trong project"
                 className="rounded-lg border border-emerald-500/35 px-3 py-2 text-xs font-semibold text-emerald-100 hover:bg-emerald-950/40 disabled:cursor-not-allowed disabled:opacity-40"
               >
-                Tải SRT cho all
+                Tải SRT
               </button>
               <button
                 type="button"
@@ -6572,7 +8805,7 @@ export default function VideoDubbingTab() {
                 className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg border border-cyan-400/30 bg-cyan-950/30 px-3 py-2 text-xs font-semibold text-cyan-100 hover:bg-cyan-900/40 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <RefreshCw className={`h-3.5 w-3.5 ${settingsSyncRunning ? "animate-spin" : ""}`} />
-                {settingsSyncRunning ? "Đang đồng bộ…" : "Đồng bộ"}
+                {settingsSyncRunning ? "Đang đồng bộ…" : "Đồng Bộ"}
               </button>
                 </div>
             </div>
@@ -6621,16 +8854,19 @@ export default function VideoDubbingTab() {
                 return (
                   <tr key={`saved-${item.job.id}`} onClick={(event) => previewVideoRow(event, item.job)} aria-current={job?.id === item.job.id ? "true" : undefined} className={`cursor-pointer ${job?.id === item.job.id ? "bg-sky-900/30 ring-1 ring-inset ring-sky-400/35" : "bg-slate-950/20"}`}>
                     <td className="min-w-0 p-2">
+                      <div className="flex min-w-0 items-center gap-1">
+                        {renderCoverEditorButton(item.job)}
                       <button
                         type="button"
                         onClick={() => void previewSourceVideo(item.job)}
                         disabled={item.job.status !== "completed" || queueRunning || settingsSyncRunning}
-                        className="flex w-full min-w-0 items-center gap-2 rounded-lg px-1 py-2 text-left hover:bg-slate-800/70 disabled:cursor-not-allowed disabled:opacity-50"
+                        className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1 py-2 text-left hover:bg-slate-800/70 disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         <Film className="h-4 w-4 shrink-0 text-sky-300" />
                         <span className="min-w-0 flex-1 truncate text-sm text-slate-100">{item.job.fileName}</span>
                         {job?.id === item.job.id && <span className="shrink-0 rounded-full bg-sky-400/15 px-2 py-0.5 text-[10px] font-semibold text-sky-200">Đang preview</span>}
                       </button>
+                      </div>
                       {renderJobProcessingBar(item.job)}
                     </td>
                     <td className="whitespace-nowrap p-2 text-center"><span title={srtName || (cues.length ? "Phụ đề đã lưu trong job" : "Chưa có SRT lưu cho job này")}><FileText className={`mx-auto h-4 w-4 ${srtName || cues.length ? "text-cyan-300" : "text-slate-600"}`} /></span>{cues.length > 0 && <div className="mt-1 text-[10px] text-slate-500">{cues.length} câu</div>}</td>
@@ -6670,6 +8906,7 @@ export default function VideoDubbingTab() {
                           onDrop={(event) => handleQueueDrop(event, file?.job?.id)}
                           className={`flex min-h-14 rounded-lg border border-dashed border-slate-700 bg-slate-950/50 hover:border-amber-500/50 ${file?.job ? "cursor-pointer" : ""}`}
                         >
+                          {file?.job && renderCoverEditorButton(file.job)}
                           <button
                             type="button"
                             disabled={queueRunning || Boolean(file?.uploading)}
@@ -6678,7 +8915,7 @@ export default function VideoDubbingTab() {
                               videoInputRef.current?.click();
                             }}
                             aria-label={file ? `Chọn video khác thay cho ${file.name}` : "Chọn video nguồn"}
-                            className={`flex min-h-14 min-w-0 items-center gap-2 rounded-lg px-3 py-2 text-left disabled:cursor-wait disabled:opacity-60 ${file?.job ? "max-w-[85%]" : "w-full"}`}
+                            className="flex min-h-14 min-w-0 flex-1 items-center gap-2 rounded-lg px-3 py-2 text-left disabled:cursor-wait disabled:opacity-60"
                           >
                             <Film className="h-4 w-4 shrink-0 text-amber-400" />
                             <span className="min-w-0 flex-1 truncate text-sm text-slate-200">
@@ -6868,15 +9105,30 @@ export default function VideoDubbingTab() {
           </button>
 
           {mixerPanelExpanded && (
-            <div id="video-dubbing-mixer-panel" className="grid min-w-0 items-start gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(300px,360px)]">
+            <div
+              id="video-dubbing-mixer-panel"
+              className={`grid min-w-0 items-start gap-4 ${
+                videoWorkspaceTab === "preview"
+                  ? "lg:grid-cols-[minmax(0,1fr)_minmax(300px,360px)]"
+                  : "grid-cols-1"
+              }`}
+            >
               <div className="space-y-4">
               <div role="tablist" aria-label="Video preview" className="flex gap-1 rounded-xl border border-slate-800 bg-slate-950/70 p-1">
                 <button type="button" role="tab" aria-selected={videoWorkspaceTab === "preview"} onClick={() => setVideoWorkspaceTab("preview")} className={`flex-1 rounded-lg px-3 py-2 text-xs font-semibold ${videoWorkspaceTab === "preview" ? "bg-cyan-400 text-slate-950" : "text-slate-300 hover:bg-slate-800"}`}>Video Mixer Preview</button>
                 <button type="button" role="tab" aria-selected={videoWorkspaceTab === "merged"} onClick={() => setVideoWorkspaceTab("merged")} className={`flex-1 rounded-lg px-3 py-2 text-xs font-semibold ${videoWorkspaceTab === "merged" ? "bg-emerald-400 text-slate-950" : "text-slate-300 hover:bg-slate-800"}`}>Merged Video</button>
+                <button type="button" role="tab" aria-selected={videoWorkspaceTab === "end-scene"} onClick={() => setVideoWorkspaceTab("end-scene")} className={`flex-1 rounded-lg px-3 py-2 text-xs font-semibold ${videoWorkspaceTab === "end-scene" ? "bg-orange-400 text-slate-950" : "text-slate-300 hover:bg-slate-800"}`}>End Scene</button>
               </div>
               <div className="space-y-3 rounded-xl border border-slate-800 bg-black/40 p-3">
                 <div className={`flex justify-center ${videoWorkspaceTab === "preview" ? "" : "hidden"}`}>
-                  <div ref={previewStageRef} className="relative inline-block max-w-full overflow-hidden rounded-lg bg-black">
+                  <div
+                    ref={previewStageRef}
+                    onPointerDownCapture={startCharacterCardRegion}
+                    onPointerMove={moveCharacterCardRegion}
+                    onPointerUp={finishCharacterCardRegion}
+                    onPointerCancel={cancelCharacterCardRegionDraw}
+                    className={`relative inline-block max-w-full overflow-hidden rounded-lg bg-black ${characterCardDrawMode ? "cursor-crosshair" : ""}`}
+                  >
                     <video
                       key={job.id}
                       ref={previewVideoRef}
@@ -6891,12 +9143,34 @@ export default function VideoDubbingTab() {
                           "Trình duyệt không thể giải mã định dạng video này. Hãy dùng MP4 hoặc WebM tương thích để xem trước.",
                         );
                       }}
-                      className="block h-auto max-h-[min(60vh,640px)] max-w-full rounded-lg bg-black object-contain"
+                      className={`block h-auto max-h-[min(60vh,640px)] max-w-full rounded-lg bg-black object-contain ${
+                        previewingEndScene ? "opacity-0" : ""
+                      }`}
                       aria-label="Video nguồn"
                     />
+                    {previewingEndScene && (
+                      <div
+                        aria-hidden="true"
+                        className="pointer-events-none absolute inset-0 z-0 bg-black"
+                      />
+                    )}
+                    {job.overlaySettings?.coverEnabled &&
+                      !previewingEndScene &&
+                      job.overlaySettings?.coverFileName &&
+                      previewCurrentTime <
+                        (job.overlaySettings.coverFrameCount ?? 5) /
+                          (job.metadata?.frameRate || 25) && (
+                        <img
+                          src={`/api/video-dubbing/jobs/${job.id}/cover?v=${job.updatedAt}`}
+                          alt="Ảnh cover đầu video"
+                          className="pointer-events-none absolute inset-0 h-full w-full object-cover"
+                        />
+                      )}
                     {logoEnabled && job.overlaySettings?.logoFileName && (
                       <div
-                        className="pointer-events-none absolute inset-0 flex"
+                        className={`pointer-events-none absolute inset-0 flex ${
+                          previewingEndScene ? "z-10" : ""
+                        }`}
                         style={{
                           justifyContent: overlayAlignment.horizontal,
                           alignItems: overlayAlignment.vertical,
@@ -6911,7 +9185,7 @@ export default function VideoDubbingTab() {
                         />
                       </div>
                     )}
-                    {activePreviewSubtitle && (
+                    {activePreviewSubtitle && !previewingEndScene && (
                       <div
                         className="pointer-events-none absolute inset-0 flex"
                         style={{
@@ -6944,7 +9218,9 @@ export default function VideoDubbingTab() {
                         />
                       </div>
                     )}
-                    {activePreviewTextItems.map(({ cue, index }) => {
+                    {activePreviewTextItems
+                      .filter(({ cue }) => !previewingEndScene || cue.isTitle)
+                      .map(({ cue, index }) => {
                       const customPosition = Number.isFinite(cue.xPercent) && Number.isFinite(cue.yPercent);
                       const selected = selectedTextOverlay === index;
                       const textAlign = cue.isTitle ? undefined : cue.textAlign ?? getSubtitleTextAlignment(cue.position);
@@ -6960,6 +9236,8 @@ export default function VideoDubbingTab() {
                         >
                           <SubtitleOverlayRenderer
                             text={cue.text}
+                            secondaryText={cue.kind === "character-card" ? cue.characterRole ?? "" : undefined}
+                            secondaryFontSize={cue.characterRoleFontSize}
                             scale={previewOverlayScale}
                             fontSize={cue.fontSize}
                             fontFamily={cue.fontFamily}
@@ -7016,8 +9294,324 @@ export default function VideoDubbingTab() {
                         </div>
                       );
                     })}
+                    {previewingEndScene && endSceneTextOverlays.map((cue, index) => {
+                      const textAlign = cue.textAlign ?? "center";
+                      const horizontalTransform =
+                        textAlign === "left"
+                          ? "0%"
+                          : textAlign === "right"
+                            ? "-100%"
+                            : "-50%";
+                      const verticalTransform = cue.position.startsWith("top-")
+                        ? "0%"
+                        : cue.position.startsWith("bottom-")
+                          ? "-100%"
+                          : "-50%";
+                      return (
+                        <div
+                          key={`mixer-end-scene-${cue.id ?? index}`}
+                          className="pointer-events-none absolute z-30"
+                          style={{
+                            left: `${cue.xPercent ?? 50}%`,
+                            top: `${cue.yPercent ?? 50}%`,
+                            transform: `translate(${horizontalTransform}, ${verticalTransform})`,
+                          }}
+                        >
+                          <SubtitleOverlayRenderer
+                            text={cue.text}
+                            scale={previewOverlayScale}
+                            fontSize={cue.fontSize}
+                            fontFamily={cue.fontFamily}
+                            fontWeight={cue.bold}
+                            fontStyle={cue.italic}
+                            underline={cue.underline ?? false}
+                            textCase={cue.textCase ?? "none"}
+                            outlineEnabled={cue.outlineEnabled ?? false}
+                            outlineColor={cue.outlineColor ?? "#000000"}
+                            outlineWidthPx={cue.outlineWidthPx ?? 2}
+                            characterSpacingPx={cue.characterSpacingPx ?? 0}
+                            lineSpacingPx={cue.lineSpacingPx ?? 0}
+                            color={cue.color}
+                            backgroundMode={cue.backgroundTransparent ? "none" : "color"}
+                            backgroundColor={cue.backgroundColor}
+                            paddingPx={cue.paddingPx}
+                            position={cue.position}
+                            textAlign={textAlign}
+                            wrap={false}
+                          />
+                        </div>
+                      );
+                    })}
+                    {(characterCardRegionDraft || characterCardRegion) && (
+                      <div
+                        aria-hidden="true"
+                        className="pointer-events-none absolute z-30 border-2 border-amber-300 bg-amber-300/10"
+                        style={{
+                          left: `${(characterCardRegionDraft || characterCardRegion)!.left * 100}%`,
+                          top: `${(characterCardRegionDraft || characterCardRegion)!.top * 100}%`,
+                          width: `${(characterCardRegionDraft || characterCardRegion)!.width * 100}%`,
+                          height: `${(characterCardRegionDraft || characterCardRegion)!.height * 100}%`,
+                        }}
+                      />
+                    )}
                   </div>
                 </div>
+                {videoWorkspaceTab === "end-scene" && (
+                  <div className="space-y-4">
+                    <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1.4fr)_minmax(280px,0.8fr)]">
+                      <div
+                        ref={endScenePreviewContainerRef}
+                        className="flex min-w-0 justify-center"
+                      >
+                        <div
+                          ref={endSceneStageRef}
+                          className="relative shrink-0 overflow-hidden rounded-lg border border-slate-700 bg-black"
+                          style={{
+                            width: `${endScenePreviewSize.width}px`,
+                            height: `${endScenePreviewSize.height}px`,
+                            maxWidth: "100%",
+                          }}
+                        >
+                          {endSceneTextOverlays.map((cue, index) => {
+                            const textAlign = cue.textAlign ?? "center";
+                            const horizontalTransform =
+                              textAlign === "left"
+                                ? "0%"
+                                : textAlign === "right"
+                                  ? "-100%"
+                                  : "-50%";
+                            const verticalTransform = cue.position.startsWith("top-")
+                              ? "0%"
+                              : cue.position.startsWith("bottom-")
+                                ? "-100%"
+                                : "-50%";
+                            return (
+                              <div
+                                key={cue.id ?? `end-scene-text-${index}`}
+                                className={`absolute z-30 touch-none ${
+                                  selectedEndSceneTextIndex === index
+                                    ? "outline outline-1 outline-dashed outline-orange-300"
+                                    : ""
+                                }`}
+                                style={{
+                                  left: `${cue.xPercent ?? 50}%`,
+                                  top: `${cue.yPercent ?? 50}%`,
+                                  transform: `translate(${horizontalTransform}, ${verticalTransform})`,
+                                }}
+                                onPointerDown={(event) => startEndSceneTextDrag(event, index)}
+                              >
+                                <SubtitleOverlayRenderer
+                                  text={cue.text}
+                                  scale={endSceneOverlayScale}
+                                  fontSize={cue.fontSize}
+                                  fontFamily={cue.fontFamily}
+                                  fontWeight={cue.bold}
+                                  fontStyle={cue.italic}
+                                  underline={cue.underline ?? false}
+                                  textCase={cue.textCase ?? "none"}
+                                  outlineEnabled={cue.outlineEnabled ?? false}
+                                  outlineColor={cue.outlineColor ?? "#000000"}
+                                  outlineWidthPx={cue.outlineWidthPx ?? 2}
+                                  characterSpacingPx={cue.characterSpacingPx ?? 0}
+                                  lineSpacingPx={cue.lineSpacingPx ?? 0}
+                                  color={cue.color}
+                                  backgroundMode={cue.backgroundTransparent ? "none" : "color"}
+                                  backgroundColor={cue.backgroundColor}
+                                  paddingPx={cue.paddingPx}
+                                  position={cue.position}
+                                  textAlign={textAlign}
+                                  wrap={false}
+                                />
+                              </div>
+                            );
+                          })}
+                          {endSceneTextOverlays.length === 0 && (
+                            <p className="absolute inset-0 flex items-center justify-center text-xs text-slate-600">
+                              Màn hình đen · Chưa có text
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                      <div className="min-w-0 space-y-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div>
+                            <h4 className="text-sm font-semibold text-white">End Scene</h4>
+                            <p className="mt-1 text-[10px] text-slate-400">
+                              Style được lưu trong project; việc thêm vào timeline áp dụng riêng cho video này.
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            disabled={!job || !job.metadata || isMediaProcessing}
+                            onClick={() => void saveEndSceneForCurrentVideo(!endSceneEnabled)}
+                            className={`rounded-md border px-2.5 py-1.5 text-xs font-semibold disabled:opacity-40 ${
+                              endSceneEnabled
+                                ? "border-orange-400/50 bg-orange-500/15 text-orange-200"
+                                : "border-slate-700 text-slate-300 hover:border-orange-400/50"
+                            }`}
+                          >
+                            {endSceneEnabled ? "Bỏ End Scene khỏi video" : "Add End Scene vào video"}
+                          </button>
+                        </div>
+                        <label className="flex items-center justify-between gap-3 rounded-lg border border-slate-800 bg-slate-950/60 p-2.5 text-xs text-slate-300">
+                          Thời lượng End Scene (giây)
+                          <input
+                            type="number"
+                            min={1}
+                            max={120}
+                            step={0.5}
+                            value={endSceneDurationSeconds}
+                            onChange={(event) => {
+                              const value = Number(event.target.value);
+                              if (!Number.isFinite(value) || value < 1 || value > 120) return;
+                              setEndSceneDurationSeconds(value);
+                              setEndSceneTextOverlays((items) =>
+                                items.map((cue) => ({
+                                  ...cue,
+                                  startTime: Math.min(cue.startTime, value - 0.1),
+                                  endTime: value,
+                                })),
+                              );
+                            }}
+                            className="w-24 rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-right text-xs text-white"
+                          />
+                        </label>
+                        <label className="flex items-center justify-between gap-3 rounded-lg border border-slate-800 bg-slate-950/60 p-2.5 text-xs text-slate-300">
+                          Tỉ lệ khung hình preview
+                          <select
+                            value={endSceneAspectRatio}
+                            onChange={(event) =>
+                              setEndSceneAspectRatio(
+                                event.target.value as VideoDubbingEndSceneAspectRatio,
+                              )
+                            }
+                            className="rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-white"
+                          >
+                            {END_SCENE_ASPECT_RATIOS.map((ratio) => (
+                              <option key={ratio} value={ratio}>{ratio}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={addEndSceneText}
+                            className="inline-flex items-center gap-1 rounded-md border border-orange-500/30 px-2.5 py-1.5 text-xs text-orange-200 hover:bg-orange-950/30"
+                          >
+                            <Plus className="h-3 w-3" />Thêm text
+                          </button>
+                          <button
+                            type="button"
+                            disabled={!selectedEndSceneCue}
+                            onClick={removeSelectedEndSceneText}
+                            className="inline-flex items-center gap-1 rounded-md border border-rose-500/30 px-2.5 py-1.5 text-xs text-rose-200 hover:bg-rose-950/30 disabled:opacity-40"
+                          >
+                            <Trash2 className="h-3 w-3" />Xóa text
+                          </button>
+                        </div>
+                        <div className="max-h-28 space-y-1 overflow-y-auto rounded-lg border border-slate-800 bg-slate-950/50 p-1.5">
+                          {endSceneTextOverlays.map((cue, index) => (
+                            <button
+                              key={cue.id ?? index}
+                              type="button"
+                              aria-pressed={selectedEndSceneTextIndex === index}
+                              onClick={() => setSelectedEndSceneTextIndex(index)}
+                              className={`w-full truncate rounded-md px-2 py-1.5 text-left text-xs ${
+                                selectedEndSceneTextIndex === index
+                                  ? "bg-orange-500/20 text-orange-100"
+                                  : "text-slate-300 hover:bg-slate-800"
+                              }`}
+                            >
+                              {cue.text || `Text ${index + 1}`}
+                            </button>
+                          ))}
+                          {!endSceneTextOverlays.length && (
+                            <p className="px-2 py-2 text-[10px] text-slate-500">Chưa có text trong End Scene.</p>
+                          )}
+                        </div>
+                        {selectedEndSceneCue && selectedEndSceneTextIndex !== null && (
+                          <div className="space-y-3 rounded-lg border border-slate-800 bg-slate-950/50 p-2.5">
+                            <label className="block space-y-1 text-[10px] text-slate-400">
+                              Nội dung
+                              <textarea
+                                rows={2}
+                                value={selectedEndSceneCue.text}
+                                onChange={(event) =>
+                                  updateEndSceneText(selectedEndSceneTextIndex, { text: event.target.value })
+                                }
+                                className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-white"
+                              />
+                            </label>
+                            <TextStyleControls
+                              value={endSceneTextStyleValue}
+                              onChange={updateSelectedEndSceneStyle}
+                              fontOptions={subtitleFontOptions}
+                              disabled={!selectedEndSceneCue}
+                              maxFontSize={160}
+                            />
+                            <div className="grid grid-cols-2 gap-2 text-[10px] text-slate-400">
+                              <label className="flex items-center justify-between gap-2">
+                                Căn chữ
+                                <select
+                                  value={selectedEndSceneCue.textAlign ?? "center"}
+                                  onChange={(event) => updateEndSceneText(selectedEndSceneTextIndex, {
+                                    textAlign: event.target.value as "left" | "center" | "right",
+                                  })}
+                                  className="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-white"
+                                >
+                                  <option value="left">Trái</option>
+                                  <option value="center">Giữa</option>
+                                  <option value="right">Phải</option>
+                                </select>
+                              </label>
+                              <label className="flex items-center justify-between gap-2">
+                                Vị trí dọc
+                                <select
+                                  value={selectedEndSceneCue.position.startsWith("top-") ? "top" : selectedEndSceneCue.position.startsWith("bottom-") ? "bottom" : "middle"}
+                                  onChange={(event) => {
+                                    const vertical = event.target.value;
+                                    const horizontal = selectedEndSceneCue.position.endsWith("-left")
+                                      ? "left"
+                                      : selectedEndSceneCue.position.endsWith("-right")
+                                        ? "right"
+                                        : "center";
+                                    updateEndSceneText(selectedEndSceneTextIndex, {
+                                      position: `${vertical}-${horizontal}` as VideoDubbingOverlayPosition,
+                                    });
+                                  }}
+                                  className="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-white"
+                                >
+                                  <option value="top">Trên</option>
+                                  <option value="middle">Giữa</option>
+                                  <option value="bottom">Dưới</option>
+                                </select>
+                              </label>
+                              <label className="flex items-center justify-between gap-2">
+                                Màu nền
+                                <input
+                                  type="color"
+                                  value={selectedEndSceneCue.backgroundColor}
+                                  disabled={selectedEndSceneCue.backgroundTransparent}
+                                  onChange={(event) => updateEndSceneText(selectedEndSceneTextIndex, { backgroundColor: event.target.value })}
+                                  className="h-7 w-10 rounded border border-slate-700 bg-slate-950 disabled:opacity-40"
+                                />
+                              </label>
+                              <label className="flex items-center gap-2">
+                                <input
+                                  type="checkbox"
+                                  checked={selectedEndSceneCue.backgroundTransparent}
+                                  onChange={(event) => updateEndSceneText(selectedEndSceneTextIndex, { backgroundTransparent: event.target.checked })}
+                                  className="accent-orange-400"
+                                />
+                                Nền trong suốt
+                              </label>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
                 {videoWorkspaceTab === "merged" && (hasExportedVideo && job ? (
                   <div className="space-y-3 rounded-xl border border-emerald-500/25 bg-emerald-950/20 p-3.5">
                     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -7094,6 +9688,424 @@ export default function VideoDubbingTab() {
                     aria-label="Tua video và các track mixer"
                   />
                 )}
+                {videoWorkspaceTab === "preview" && timelineWorkspaceTab === "subtitle" && (
+                  <section className="space-y-2 rounded-lg border border-amber-500/20 bg-amber-950/10 p-3">
+                    <button
+                      type="button"
+                      aria-expanded={!characterCardScanCollapsed}
+                      aria-controls="character-card-scan-panel"
+                      onClick={() => setCharacterCardScanCollapsed((collapsed) => !collapsed)}
+                      className="flex w-full items-center justify-between gap-2 text-left text-xs font-semibold text-amber-100"
+                    >
+                      <span>Quét và tạo card nhân vật</span>
+                      <span className="flex items-center gap-2">
+                        {(characterCardOcrJob?.status === "running" ||
+                          characterCardReferenceScanJob?.status === "running") && (
+                          <span className="text-[10px] font-normal text-amber-200">Đang quét…</span>
+                        )}
+                        <ChevronDown className={`h-4 w-4 transition-transform ${characterCardScanCollapsed ? "-rotate-90" : ""}`} />
+                      </span>
+                    </button>
+                    <div
+                      id="character-card-scan-panel"
+                      className={characterCardScanCollapsed ? "hidden" : "space-y-2"}
+                    >
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        disabled={characterCardOcrWorker.status === "starting" || characterCardOcrWorker.status === "ready" || characterCardOcrWorker.status === "busy"}
+                        onClick={() => void startCharacterCardOcrWorker()}
+                        className="rounded-md border border-cyan-500/30 px-2.5 py-1.5 text-xs text-cyan-100 hover:bg-cyan-950/40 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        {characterCardOcrWorker.status === "starting" ? "Đang nạp OCR…" : "Giữ OCR chạy"}
+                      </button>
+                      {(characterCardOcrWorker.status === "starting" || characterCardOcrWorker.status === "ready" || characterCardOcrWorker.status === "busy") && (
+                        <button
+                          type="button"
+                          onClick={() => void stopCharacterCardOcrWorker()}
+                          className="rounded-md border border-rose-500/30 px-2.5 py-1.5 text-xs text-rose-200 hover:bg-rose-950/40"
+                        >
+                          Dừng OCR
+                        </button>
+                      )}
+                      <span className="text-[10px] text-slate-400" role="status">
+                        {characterCardOcrWorker.message}
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-slate-500">
+                      Bật một lần để nạp model và tái sử dụng cho các lần quét tiếp theo; nhấn Dừng OCR để giải phóng RAM/VRAM.
+                    </p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        disabled={!videoPreviewReady || characterCardOcrJob?.status === "running" || characterCardOcrJob?.status === "queued"}
+                        onClick={() => {
+                          setCharacterCardOcrError(null);
+                          setCharacterCardDrawMode((drawing) => !drawing);
+                          setCharacterCardDrawStart(null);
+                          setCharacterCardRegionDraft(null);
+                        }}
+                        className={`rounded-md border px-2.5 py-1.5 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-40 ${characterCardDrawMode ? "border-amber-300 bg-amber-300 text-slate-950" : "border-amber-500/40 text-amber-100 hover:bg-amber-950/40"}`}
+                      >
+                        {characterCardDrawMode ? "Đang vẽ vùng…" : characterCardRegion ? "Vẽ lại vùng card nhân vật" : "Vẽ vùng card nhân vật"}
+                      </button>
+                      {characterCardRegion && !characterCardDrawMode && (
+                        <button
+                          type="button"
+                          disabled={characterCardOcrJob?.status === "running" || characterCardOcrJob?.status === "queued"}
+                          onClick={() => setCharacterCardRegion(null)}
+                          className="rounded-md border border-slate-700 px-2 py-1.5 text-xs text-slate-300 hover:bg-slate-800 disabled:opacity-40"
+                        >
+                          Xóa vùng
+                        </button>
+                      )}
+                      <label className="flex items-center gap-2 text-xs text-slate-300">
+                        Bắt đầu trước playhead (giây)
+                        <input
+                          type="number"
+                          min={0}
+                          max={60}
+                          step={1}
+                          value={characterCardOcrStartOffset}
+                          onChange={(event) => {
+                            const value = Number(event.target.value);
+                            if (Number.isFinite(value)) {
+                              setCharacterCardOcrStartOffset(Math.max(0, Math.min(60, value)));
+                            }
+                          }}
+                          className="w-16 rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-center text-xs text-white"
+                        />
+                      </label>
+                      <label className="flex items-center gap-2 text-xs text-slate-300">
+                        Độ dài quét (giây)
+                        <input
+                          type="number"
+                          min={1}
+                          max={60}
+                          step={1}
+                          value={characterCardOcrDuration}
+                          onChange={(event) => {
+                            const value = Number(event.target.value);
+                            if (Number.isFinite(value)) {
+                              setCharacterCardOcrDuration(Math.max(1, Math.min(60, value)));
+                            }
+                          }}
+                          className="w-16 rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-center text-xs text-white"
+                        />
+                      </label>
+                      {characterCardOcrJob?.status === "running" || characterCardOcrJob?.status === "queued" ? (
+                        <button
+                          type="button"
+                          onClick={() => void cancelCharacterCardOcr()}
+                          className="rounded-md border border-rose-500/30 px-2.5 py-1.5 text-xs text-rose-200 hover:bg-rose-950/40"
+                        >
+                          {characterCardOcrWorker.status === "busy" ? "Hủy OCR · dừng worker" : "Hủy OCR"}
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          disabled={!job || !characterCardRegion || characterCardDrawMode || characterCardOcrWorker.status === "starting" || characterCardOcrWorker.status === "busy"}
+                          onClick={() => void createCharacterCardsAutomatically()}
+                          className="rounded-md bg-amber-300 px-2.5 py-1.5 text-xs font-bold text-slate-950 hover:bg-amber-200 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          Tạo card tự động
+                        </button>
+                      )}
+                    </div>
+                    <p className="text-[10px] text-slate-400">
+                      Khoanh vùng chứa card trên preview và dùng ảnh mẫu đã crop sát card. OCR bắt đầu từ N giây trước thời điểm khớp, quét M giây và tự giới hạn trong video.
+                    </p>
+                    {characterCardDrawMode && (
+                      <p className="text-[10px] text-amber-200">Nhấn giữ và kéo trên video để chọn vùng.</p>
+                    )}
+                    {characterCardOcrJob && (
+                      <p className="text-[10px] text-slate-300" role="status">
+                        {characterCardOcrJob.message} {characterCardOcrJob.status === "running" && `${characterCardOcrJob.progressPercent}%`}
+                      </p>
+                    )}
+                    {characterCardOcrError && (
+                      <p className="text-[10px] text-rose-300" role="alert">{characterCardOcrError}</p>
+                    )}
+                    <div
+                      onPaste={pasteCharacterCardReference}
+                      tabIndex={0}
+                      className="space-y-3 rounded-lg border border-violet-500/25 bg-violet-950/10 p-3 outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+                      aria-label="Ảnh mẫu card nhân vật"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <h4 className="text-xs font-semibold text-violet-100">Tìm card theo ảnh mẫu</h4>
+                          <p className="mt-1 text-[10px] text-slate-400">
+                            Dò ảnh bằng OpenCV rồi dùng OCR hiện có để lọc kết quả không có chữ trước khi hiển thị.
+                          </p>
+                        </div>
+                        <label className={`rounded-md border border-violet-400/40 px-2.5 py-1.5 text-xs font-semibold text-violet-100 ${characterCardReferenceScanJob?.status === "running" ? "cursor-not-allowed opacity-40" : "cursor-pointer hover:bg-violet-950/50"}`}>
+                          Chọn ảnh mẫu
+                          <input
+                            type="file"
+                            accept="image/png,image/jpeg,image/webp"
+                            className="sr-only"
+                            disabled={characterCardReferenceScanJob?.status === "running"}
+                            onChange={(event) => {
+                              acceptCharacterCardReferenceFile(event.target.files?.[0] ?? null);
+                              event.target.value = "";
+                            }}
+                          />
+                        </label>
+                      </div>
+                      {characterCardReferencePreviewUrl ? (
+                        <div className="flex items-center gap-3">
+                          <img
+                            src={characterCardReferencePreviewUrl}
+                            alt="Ảnh mẫu card nhân vật"
+                            className="max-h-24 max-w-48 rounded border border-slate-700 object-contain"
+                          />
+                          <div className="min-w-0 flex-1 text-[10px] text-slate-400">
+                            <p className="truncate">{characterCardReferenceFile?.name || "Ảnh dán từ clipboard"}</p>
+                            <button
+                              type="button"
+                              disabled={characterCardReferenceScanJob?.status === "running"}
+                              onClick={() => {
+                                setCharacterCardReferenceFile(null);
+                                setCharacterCardReferenceScanJob(null);
+                                setCharacterCardReferenceError(null);
+                              }}
+                              className="mt-1 text-rose-200 hover:text-rose-100 disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              Xóa ảnh mẫu
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <p className="rounded-md border border-dashed border-slate-700 px-3 py-4 text-center text-[10px] text-slate-500">
+                          Dán ảnh bằng Ctrl+V tại đây hoặc chọn ảnh PNG/JPEG/WebP.
+                        </p>
+                      )}
+                      <div className="flex flex-wrap items-center gap-3">
+                        <label className="flex items-center gap-2 text-[10px] text-slate-300">
+                          Bỏ qua frame
+                          <input
+                            type="number"
+                            min={0}
+                            max={10000}
+                            step={1}
+                            value={characterCardReferenceFramesToSkip}
+                            onChange={(event) => {
+                              const value = Number(event.target.value);
+                              if (Number.isFinite(value)) {
+                                setCharacterCardReferenceFramesToSkip(Math.max(0, Math.min(10000, Math.round(value))));
+                              }
+                            }}
+                            className="w-20 rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-center text-xs text-white"
+                          />
+                          <span className="text-slate-500">
+                            ({((characterCardReferenceFramesToSkip + 1) / (job?.metadata?.frameRate || 30)).toFixed(2)} giây/mẫu)
+                          </span>
+                        </label>
+                        <label className="flex items-center gap-2 text-[10px] text-slate-300">
+                          Ngưỡng giống
+                          <input
+                            type="range"
+                            min={0.3}
+                            max={0.99}
+                            step={0.01}
+                            value={characterCardReferenceSimilarity}
+                            onChange={(event) => setCharacterCardReferenceSimilarity(Number(event.target.value))}
+                            className="w-24 accent-violet-400"
+                          />
+                          <span className="w-9 text-right tabular-nums">
+                            {Math.round(characterCardReferenceSimilarity * 100)}%
+                          </span>
+                        </label>
+                        {characterCardReferenceScanJob?.status === "running" ? (
+                          <button
+                            type="button"
+                            onClick={() => void cancelCharacterCardReferenceScan()}
+                            className="rounded-md border border-rose-500/30 px-2.5 py-1.5 text-xs text-rose-200 hover:bg-rose-950/40"
+                          >
+                            Hủy quét
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={!job || !characterCardRegion || !characterCardReferenceFile || characterCardDrawMode}
+                            onClick={() => void startCharacterCardReferenceScan()}
+                            className="rounded-md bg-violet-300 px-2.5 py-1.5 text-xs font-bold text-slate-950 hover:bg-violet-200 disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            Quét toàn video
+                          </button>
+                        )}
+                      </div>
+                      {characterCardReferenceScanJob?.status === "running" && (
+                        <div className="space-y-1" role="status">
+                          <div className="flex justify-between gap-2 text-[10px] text-slate-300">
+                            <span>{characterCardReferenceScanJob.message}</span>
+                            <span>{characterCardReferenceScanJob.progressPercent}%</span>
+                          </div>
+                          <div className="h-1 overflow-hidden rounded bg-slate-800">
+                            <div
+                              className="h-full bg-violet-300 transition-[width]"
+                              style={{ width: `${characterCardReferenceScanJob.progressPercent}%` }}
+                            />
+                          </div>
+                        </div>
+                      )}
+                      {characterCardReferenceScanJob?.status === "completed" && (
+                        <p className="text-[10px] text-emerald-200" role="status">
+                          {characterCardReferenceScanJob.message}
+                        </p>
+                      )}
+                      {characterCardReferenceScanJob?.status === "error" && (
+                        <p className="text-[10px] text-rose-300" role="alert">
+                          {characterCardReferenceScanJob.error || characterCardReferenceScanJob.message}
+                        </p>
+                      )}
+                      {characterCardReferenceError && (
+                        <p className="text-[10px] text-rose-300" role="alert">{characterCardReferenceError}</p>
+                      )}
+                    </div>
+                    </div>
+                  </section>
+                )}
+                {characterCardReferenceScanJob?.status === "completed" && (
+                  <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/80 p-3 backdrop-blur-sm sm:p-6">
+                    <section
+                      role="dialog"
+                      aria-modal="true"
+                      aria-labelledby="character-card-reference-results-title"
+                      className="flex max-h-[90vh] w-full max-w-4xl flex-col rounded-2xl border border-violet-500/30 bg-slate-900 shadow-2xl"
+                    >
+                      <header className="flex items-start gap-3 border-b border-slate-800 p-4">
+                        <div className="min-w-0 flex-1">
+                          <h3 id="character-card-reference-results-title" className="text-sm font-bold text-white">
+                            Kết quả tìm card theo ảnh mẫu
+                          </h3>
+                          <p className="mt-1 text-[10px] text-slate-400">
+                            Chọn các lần xuất hiện cần tạo card. OCR sẽ quét từ {characterCardOcrStartOffset} giây trước thời điểm khớp trong {characterCardOcrDuration} giây. Bật “Giữ OCR chạy” để tránh nạp lại model khi chọn nhiều khoảng.
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCharacterCardReferenceScanJob(null);
+                            setCharacterCardReferenceSelectedIds([]);
+                          }}
+                          className="rounded-md p-1 text-slate-400 hover:bg-slate-800 hover:text-white"
+                          aria-label="Đóng kết quả quét ảnh mẫu"
+                        >
+                          <X className="h-4 w-4" />
+                        </button>
+                      </header>
+                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 px-4 py-2">
+                        <label className="flex items-center gap-2 text-xs text-slate-300">
+                          <input
+                            type="checkbox"
+                            checked={
+                              characterCardReferenceScanJob.results.length > 0 &&
+                              characterCardReferenceSelectedIds.length === characterCardReferenceScanJob.results.length
+                            }
+                            onChange={(event) => setCharacterCardReferenceSelectedIds(
+                              event.target.checked
+                                ? characterCardReferenceScanJob.results.map((item) => item.id)
+                                : [],
+                            )}
+                            className="accent-violet-400"
+                          />
+                          Chọn tất cả ({characterCardReferenceScanJob.results.length})
+                        </label>
+                        <span className="text-[10px] text-slate-500">
+                          Độ giống tối thiểu {Math.round(characterCardReferenceSimilarity * 100)}%
+                        </span>
+                      </div>
+                      <div className="min-h-0 flex-1 overflow-y-auto p-4">
+                        {characterCardReferenceScanJob.results.length ? (
+                          <div className="grid gap-2 sm:grid-cols-2">
+                            {characterCardReferenceScanJob.results.map((item) => {
+                              const checked = characterCardReferenceSelectedIds.includes(item.id);
+                              return (
+                                <label
+                                  key={item.id}
+                                  className={`flex cursor-pointer gap-3 rounded-lg border p-2.5 ${checked ? "border-violet-400/60 bg-violet-950/30" : "border-slate-800 bg-slate-950/50"}`}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onChange={(event) => setCharacterCardReferenceSelectedIds((current) =>
+                                      event.target.checked
+                                        ? [...current, item.id]
+                                        : current.filter((id) => id !== item.id),
+                                    )}
+                                    className="mt-1 accent-violet-400"
+                                    aria-label={`Chọn card tại ${formatDuration(item.time)}`}
+                                  />
+                                  {item.thumbnail && (
+                                    <img
+                                      src={item.thumbnail}
+                                      alt=""
+                                      className="h-20 w-32 shrink-0 rounded bg-black object-contain"
+                                    />
+                                  )}
+                                  <span className="min-w-0 text-[10px] text-slate-300">
+                                    <span className="block font-semibold text-white">
+                                      {formatDuration(item.startTime)} – {formatDuration(item.endTime)}
+                                    </span>
+                                    <span className="mt-1 block text-slate-400">
+                                      Khớp tốt nhất: {formatDuration(item.time)}
+                                    </span>
+                                    <span className="mt-1 block text-violet-200">
+                                      Độ giống {Math.round(item.confidence * 100)}%
+                                    </span>
+                                  </span>
+                                </label>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <p className="py-12 text-center text-sm text-slate-400">
+                            Không tìm thấy kết quả phù hợp có chữ. Hãy thử giảm ngưỡng giống hoặc chọn ảnh mẫu rõ hơn.
+                          </p>
+                        )}
+                        {characterCardOcrJob?.status === "running" && (
+                          <p className="mt-3 text-xs text-amber-200" role="status">
+                            {characterCardOcrJob.message} {characterCardOcrJob.progressPercent}%
+                          </p>
+                        )}
+                        {characterCardOcrError && (
+                          <p className="mt-3 text-xs text-rose-300" role="alert">{characterCardOcrError}</p>
+                        )}
+                      </div>
+                      <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-800 p-4">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCharacterCardReferenceScanJob(null);
+                            setCharacterCardReferenceSelectedIds([]);
+                          }}
+                          className="rounded-md border border-slate-700 px-3 py-2 text-xs text-slate-300 hover:bg-slate-800"
+                        >
+                          Đóng
+                        </button>
+                        <button
+                          type="button"
+                          disabled={
+                            !characterCardReferenceSelectedIds.length ||
+                            characterCardOcrJob?.status === "running" ||
+                            characterCardOcrJob?.status === "queued"
+                          }
+                          onClick={() => {
+                            const selectedOccurrences = characterCardReferenceScanJob.results
+                              .filter((item) => characterCardReferenceSelectedIds.includes(item.id))
+                              .map(({ startTime, endTime, time }) => ({ startTime, endTime, time }));
+                            void createCharacterCardsAutomatically(selectedOccurrences);
+                          }}
+                          className="rounded-md bg-violet-300 px-3 py-2 text-xs font-bold text-slate-950 hover:bg-violet-200 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          Tạo card từ {characterCardReferenceSelectedIds.length} kết quả đã chọn
+                        </button>
+                      </footer>
+                    </section>
+                  </div>
+                )}
                 <p className={`text-[10px] leading-relaxed text-slate-500 ${videoWorkspaceTab === "preview" ? "" : "hidden"}`}>
                   Video là mốc thời gian chính; nguồn video được làm im lặng
                   trong preview. Các track chưa có hoặc chưa xác minh sẽ không
@@ -7125,13 +10137,461 @@ export default function VideoDubbingTab() {
                     >
                       Timeline âm thanh
                     </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={timelineWorkspaceTab === "subtitle-audio"}
+                      onClick={() => setTimelineWorkspaceTab("subtitle-audio")}
+                      className={`flex-1 rounded-lg px-3 py-2 text-xs font-semibold ${timelineWorkspaceTab === "subtitle-audio" ? "bg-violet-400 text-slate-950" : "text-slate-300 hover:bg-slate-800"}`}
+                    >
+                      Subtitle-Audio
+                    </button>
                   </div>
+                  {timelineWorkspaceTab === "subtitle-audio" && (
+                    <section className="space-y-3 rounded-xl border border-violet-500/25 bg-slate-950/70 p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <h4 className="text-xs font-semibold text-white">Subtitle-Audio</h4>
+                          <p className="mt-1 text-[10px] text-slate-400">
+                            Sửa chữ không tự tạo lại audio; tạo lại Master sẽ dùng audio hiện có.
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] text-slate-400">
+                            {activeSubtitleAudioFilterCount
+                              ? `${filteredSubtitleAudioInput.length}/${subtitleAudioInput.length} câu`
+                              : `${subtitleAudioInput.length} câu`}
+                          </span>
+                          <div className="relative">
+                            <button
+                              type="button"
+                              aria-expanded={subtitleAudioFilterOpen}
+                              aria-haspopup="dialog"
+                              onClick={() => setSubtitleAudioFilterOpen((open) => !open)}
+                              className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-2 text-xs font-semibold ${activeSubtitleAudioFilterCount ? "border-cyan-400/50 bg-cyan-950/30 text-cyan-100" : "border-slate-700 text-slate-300 hover:bg-slate-800"}`}
+                            >
+                              <Filter className="h-3.5 w-3.5" />
+                              Lọc
+                              {activeSubtitleAudioFilterCount > 0 && (
+                                <span className="rounded-full bg-cyan-300 px-1.5 text-[10px] font-bold text-slate-950">
+                                  {activeSubtitleAudioFilterCount}
+                                </span>
+                              )}
+                            </button>
+                            {subtitleAudioFilterOpen && (
+                              <div
+                                role="dialog"
+                                aria-label="Lọc danh sách phụ đề"
+                                className="absolute right-0 top-full z-30 mt-2 w-[min(22rem,calc(100vw-2rem))] space-y-3 rounded-xl border border-slate-700 bg-slate-900 p-3 shadow-2xl"
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <h5 className="text-xs font-semibold text-white">Lọc câu phụ đề</h5>
+                                  <button
+                                    type="button"
+                                    onClick={() => setSubtitleAudioFilterOpen(false)}
+                                    className="rounded p-1 text-slate-400 hover:bg-slate-800 hover:text-white"
+                                    aria-label="Đóng bộ lọc"
+                                  >
+                                    <X className="h-3.5 w-3.5" />
+                                  </button>
+                                </div>
+                                <p className="text-[10px] text-slate-400">
+                                  Hiện các câu khớp với bất kỳ tiêu chí nào đang bật.
+                                </p>
+                                <label className="flex items-center gap-2 text-xs text-slate-200">
+                                  <input
+                                    type="checkbox"
+                                    checked={subtitleAudioShortFilterEnabled}
+                                    onChange={(event) => setSubtitleAudioShortFilterEnabled(event.target.checked)}
+                                    className="accent-cyan-400"
+                                  />
+                                  Câu ngắn, tối đa {subtitleAudioMaxCharacterCount} ký tự
+                                </label>
+                                <div className={`flex items-center gap-3 pl-6 ${subtitleAudioShortFilterEnabled ? "" : "opacity-50"}`}>
+                                  <span className="text-[10px] text-slate-500">0</span>
+                                  <input
+                                    type="range"
+                                    min={0}
+                                    max={20}
+                                    step={1}
+                                    value={subtitleAudioMaxCharacterCount}
+                                    disabled={!subtitleAudioShortFilterEnabled}
+                                    onChange={(event) => setSubtitleAudioMaxCharacterCount(Number(event.target.value))}
+                                    className="w-full accent-cyan-400"
+                                    aria-label="Số ký tự tối đa của câu ngắn"
+                                  />
+                                  <span className="w-5 text-right text-[10px] tabular-nums text-slate-400">{subtitleAudioMaxCharacterCount}</span>
+                                </div>
+                                <label className="flex items-center gap-2 text-xs text-slate-200">
+                                  <input
+                                    type="checkbox"
+                                    checked={subtitleAudioSpecialCharactersFilterEnabled}
+                                    onChange={(event) => setSubtitleAudioSpecialCharactersFilterEnabled(event.target.checked)}
+                                    className="accent-cyan-400"
+                                  />
+                                  Câu chỉ có ký tự đặc biệt, không có chữ hoặc số
+                                </label>
+                                <label className="flex items-center gap-2 text-xs text-slate-200">
+                                  <input
+                                    type="checkbox"
+                                    checked={subtitleAudioSimilarFilterEnabled}
+                                    onChange={(event) => setSubtitleAudioSimilarFilterEnabled(event.target.checked)}
+                                    className="accent-cyan-400"
+                                  />
+                                  Câu liền kề giống nhau trên 80%
+                                </label>
+                                <div className="flex justify-end border-t border-slate-800 pt-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setSubtitleAudioShortFilterEnabled(false);
+                                      setSubtitleAudioSpecialCharactersFilterEnabled(false);
+                                      setSubtitleAudioSimilarFilterEnabled(false);
+                                    }}
+                                    disabled={!activeSubtitleAudioFilterCount}
+                                    className="rounded-md px-2 py-1 text-[10px] font-semibold text-cyan-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
+                                  >
+                                    Xóa bộ lọc
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => void rebuildMasterFromSubtitleAudio()}
+                            disabled={!subtitleAudioInput.length || subtitleAudioSyncing || subtitleAudioMasterBusy || Boolean(subtitleAudioRegeneratingId) || isMasterGenerating || isMediaProcessing}
+                            className="inline-flex items-center gap-2 rounded-lg bg-violet-400 px-3 py-2 text-xs font-bold text-slate-950 hover:bg-violet-300 disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            {subtitleAudioMasterBusy ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                            Tạo lại Master
+                          </button>
+                        </div>
+                      </div>
+                      {(subtitleAudioError || subtitleAudioSyncing) && (
+                        <p role={subtitleAudioError ? "alert" : "status"} className={`rounded-lg border px-3 py-2 text-[11px] ${subtitleAudioError ? "border-rose-500/30 bg-rose-950/30 text-rose-200" : "border-slate-700 bg-slate-900 text-slate-400"}`}>
+                          {subtitleAudioError || "Đang đồng bộ danh sách câu phụ đề…"}
+                        </p>
+                      )}
+                      <div className="overflow-hidden rounded-lg border border-cyan-500/30 bg-cyan-950/10">
+                        <div
+                          role="row"
+                          aria-label="Câu phụ đề đang nói"
+                          className="grid w-full grid-cols-[3.5rem_minmax(0,1fr)_max-content_max-content] text-slate-300"
+                        >
+                          <div role="cell" className="px-2 py-1.5 font-mono text-cyan-300">
+                            {activeSubtitleAudioItem?.index ?? "—"}
+                          </div>
+                          <div role="cell" className="min-w-0 px-2 py-1">
+                            <div className="flex min-w-0 items-center gap-2">
+                              <span className="shrink-0 rounded bg-cyan-500/10 px-1.5 py-1 text-[9px] font-semibold text-cyan-200">
+                                Đang nói
+                              </span>
+                              <input
+                                type="text"
+                                aria-label="Nội dung phụ đề đang nói"
+                                placeholder="Không có câu phụ đề tại vị trí hiện tại"
+                                value={activeSubtitleAudioItem
+                                  ? subtitleAudioDrafts[activeSubtitleAudioItem.id] ?? activeSubtitleAudioItem.text
+                                  : ""}
+                                onChange={(event) => {
+                                  if (!activeSubtitleAudioItem) return;
+                                  setSubtitleAudioDrafts((current) => ({
+                                    ...current,
+                                    [activeSubtitleAudioItem.id]: event.target.value,
+                                  }));
+                                }}
+                                onBlur={() => {
+                                  if (activeSubtitleAudioItem) {
+                                    commitSubtitleAudioCueText(activeSubtitleAudioItem.id);
+                                  }
+                                }}
+                                disabled={!activeSubtitleAudioItem || subtitleAudioSyncing || Boolean(subtitleAudioRegeneratingId) || subtitleAudioMasterBusy || isMasterGenerating || isMediaProcessing}
+                                className="h-8 min-w-0 flex-1 rounded-md border border-cyan-500/30 bg-slate-950 px-2 text-xs text-slate-100 outline-none focus:border-cyan-300 disabled:opacity-60"
+                              />
+                              {activeSubtitleAudioItem && (
+                                <span className="shrink-0 text-[10px] text-slate-500">
+                                  {formatDuration(activeSubtitleAudioItem.startTime)} – {formatDuration(activeSubtitleAudioItem.endTime)}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <div role="cell" className="whitespace-nowrap px-2 py-1">
+                            <span className={`inline-flex items-center gap-1.5 text-[10px] ${activeSubtitleAudioRow?.status === "failed" ? "text-rose-300" : "text-slate-500"}`}>
+                              {activeSubtitleAudioRow?.status === "generating" && <LoaderCircle className="h-3 w-3 animate-spin" />}
+                              {activeSubtitleAudioRow?.status === "failed"
+                                ? activeSubtitleAudioRow.error || "Tạo audio thất bại"
+                                : activeSubtitleAudioRow?.status === "generating"
+                                  ? "Đang tạo audio…"
+                                  : activeSubtitleAudioRow?.audioUrl
+                                    ? "Đã có audio"
+                                    : activeSubtitleAudioItem
+                                      ? "Chưa có audio"
+                                      : "—"}
+                            </span>
+                          </div>
+                          <div role="cell" className="px-2 py-1" />
+                          <div role="cell" className="col-span-4 flex flex-wrap items-center gap-1.5 border-t border-cyan-500/15 px-2 py-1.5">
+                            <button
+                              type="button"
+                              onClick={() => previousSubtitleAudioItem && seekSubtitleTimeline(previousSubtitleAudioItem.startTime)}
+                              disabled={!previousSubtitleAudioItem || subtitleAudioSyncing || isMediaProcessing}
+                              className="rounded-md border border-slate-700 px-2 py-1 text-[10px] font-semibold text-slate-200 hover:border-cyan-500/50 disabled:cursor-not-allowed disabled:opacity-40"
+                              title="Nhảy đến câu phụ đề trước"
+                            >
+                              Câu Trước
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => nextSubtitleAudioItem && seekSubtitleTimeline(nextSubtitleAudioItem.startTime)}
+                              disabled={!nextSubtitleAudioItem || subtitleAudioSyncing || isMediaProcessing}
+                              className="rounded-md border border-slate-700 px-2 py-1 text-[10px] font-semibold text-slate-200 hover:border-cyan-500/50 disabled:cursor-not-allowed disabled:opacity-40"
+                              title="Nhảy đến câu phụ đề sau"
+                            >
+                              Câu Sau
+                            </button>
+                            <span className="mx-1 h-5 border-l border-slate-700" aria-hidden="true" />
+                            <span className="text-[10px] text-slate-400" title="Điều chỉnh điểm bắt đầu">Trước</span>
+                            <button
+                              type="button"
+                              onClick={() => activeSubtitleAudioItem && adjustSubtitleAudioCueTiming(activeSubtitleAudioItem.id, "start", -1)}
+                              disabled={!activeSubtitleAudioItem || subtitleAudioSyncing || Boolean(subtitleAudioRegeneratingId) || subtitleAudioMasterBusy || isMasterGenerating || isMediaProcessing}
+                              aria-label={`Mở rộng phía trước ${subtitleAudioTimingStepMs} mili giây`}
+                              title="Mở rộng thời gian phía trước"
+                              className="rounded-md border border-cyan-500/30 px-2 py-1 text-xs font-bold text-cyan-200 hover:bg-cyan-950/40 disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              +
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => activeSubtitleAudioItem && adjustSubtitleAudioCueTiming(activeSubtitleAudioItem.id, "start", 1)}
+                              disabled={!activeSubtitleAudioItem || subtitleAudioSyncing || Boolean(subtitleAudioRegeneratingId) || subtitleAudioMasterBusy || isMasterGenerating || isMediaProcessing}
+                              aria-label={`Thu gọn phía trước ${subtitleAudioTimingStepMs} mili giây`}
+                              title="Thu gọn thời gian phía trước"
+                              className="rounded-md border border-slate-700 px-2 py-1 text-xs font-bold text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              −
+                            </button>
+                            <input
+                              type="number"
+                              min={1}
+                              step={1}
+                              value={subtitleAudioTimingStepMs}
+                              onChange={(event) => {
+                                const value = Number(event.target.value);
+                                if (Number.isFinite(value) && value >= 1) {
+                                  setSubtitleAudioTimingStepMs(Math.round(value));
+                                }
+                              }}
+                              aria-label="Bước chỉnh thời gian câu đang nói (mili giây)"
+                              className="h-7 w-16 rounded border border-slate-700 bg-slate-950 px-1 text-center text-[10px] tabular-nums text-slate-200"
+                            />
+                            <span className="-ml-1 text-[10px] text-slate-400">ms</span>
+                            <span className="mx-1 h-5 border-l border-slate-700" aria-hidden="true" />
+                            <span className="text-[10px] text-slate-400" title="Điều chỉnh điểm kết thúc">Sau</span>
+                            <button
+                              type="button"
+                              onClick={() => activeSubtitleAudioItem && adjustSubtitleAudioCueTiming(activeSubtitleAudioItem.id, "end", -1)}
+                              disabled={!activeSubtitleAudioItem || subtitleAudioSyncing || Boolean(subtitleAudioRegeneratingId) || subtitleAudioMasterBusy || isMasterGenerating || isMediaProcessing}
+                              aria-label={`Thu gọn phía sau ${subtitleAudioTimingStepMs} mili giây`}
+                              title="Thu gọn thời gian phía sau"
+                              className="rounded-md border border-slate-700 px-2 py-1 text-xs font-bold text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              −
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => activeSubtitleAudioItem && adjustSubtitleAudioCueTiming(activeSubtitleAudioItem.id, "end", 1)}
+                              disabled={!activeSubtitleAudioItem || subtitleAudioSyncing || Boolean(subtitleAudioRegeneratingId) || subtitleAudioMasterBusy || isMasterGenerating || isMediaProcessing}
+                              aria-label={`Mở rộng phía sau ${subtitleAudioTimingStepMs} mili giây`}
+                              title="Mở rộng thời gian phía sau"
+                              className="rounded-md border border-cyan-500/30 px-2 py-1 text-xs font-bold text-cyan-200 hover:bg-cyan-950/40 disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              +
+                            </button>
+                            <span className="mx-1 h-5 border-l border-slate-700" aria-hidden="true" />
+                            {activeSubtitleAudioRow?.audioUrl && (
+                              <button
+                                type="button"
+                                onClick={() => void playSubtitleAudio(activeSubtitleAudioRow)}
+                                aria-label={subtitleAudioPlayingId === activeSubtitleAudioRow.id ? "Dừng audio câu đang nói" : "Phát audio câu đang nói"}
+                                title={subtitleAudioPlayingId === activeSubtitleAudioRow.id ? "Dừng phát" : "Phát audio"}
+                                className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-violet-500/30 bg-violet-500/10 text-violet-200 hover:bg-violet-500/20"
+                              >
+                                {subtitleAudioPlayingId === activeSubtitleAudioRow.id
+                                  ? <Pause className="h-3.5 w-3.5" />
+                                  : <Play className="h-3.5 w-3.5" />}
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (activeSubtitleAudio) {
+                                  regenerateSubtitleAudioWithDraft(activeSubtitleAudio);
+                                }
+                              }}
+                              disabled={!activeSubtitleAudio || !selectedVoice || subtitleAudioSyncing || Boolean(subtitleAudioRegeneratingId) || subtitleAudioMasterBusy || isMasterGenerating || isMediaProcessing}
+                              className="inline-flex items-center gap-1 rounded-md border border-violet-500/30 bg-violet-500/10 px-2 py-1 text-[10px] font-semibold text-violet-200 hover:bg-violet-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                              title="Tạo lại TTS cho câu đang nói"
+                            >
+                              {subtitleAudioRegeneratingId === activeSubtitleAudioItem?.id
+                                ? <LoaderCircle className="h-3 w-3 animate-spin" />
+                                : <RefreshCw className="h-3 w-3" />}
+                              Tạo lại
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="max-h-[70vh] overflow-auto rounded-lg border border-slate-800">
+                        <div role="table" aria-label="Danh sách phụ đề và audio" className="w-full text-xs">
+                          <div role="rowgroup">
+                            <div role="row" className="sticky top-0 z-10 grid w-full grid-cols-[3.5rem_minmax(0,1fr)_max-content_max-content] bg-slate-900 text-[10px] uppercase tracking-wider text-slate-500">
+                              <div role="columnheader" className="px-2 py-2">#</div>
+                              <div role="columnheader" className="px-2 py-2">Phụ đề</div>
+                              <div role="columnheader" className="whitespace-nowrap px-2 py-2">Audio</div>
+                              <div role="columnheader" className="whitespace-nowrap px-2 py-2 text-right">Tác vụ</div>
+                            </div>
+                          </div>
+                          <div role="rowgroup" className="divide-y divide-slate-800/80">
+                            {filteredSubtitleAudioInput.length ? filteredSubtitleAudioInput.map((item) => {
+                              const audio = subtitleAudioItems.find((entry) => entry.id === item.id);
+                              const editedAfterAudio = Boolean(audio?.audioUrl && audio.generatedText !== item.text);
+                              const subtitleItem: SubtitleItem = {
+                                ...item,
+                                targetDuration: Math.max(0.1, item.endTime - item.startTime),
+                                status: "pending",
+                              };
+                              const subtitleCueIndex = previewSubtitleCues.findIndex(
+                                (cue) => cue.id === item.id,
+                              );
+                              const combineDisabled =
+                                subtitleCueIndex <= 0 ||
+                                subtitleAudioSyncing ||
+                                Boolean(subtitleAudioRegeneratingId) ||
+                                subtitleAudioMasterBusy ||
+                                isMasterGenerating ||
+                                isMediaProcessing;
+                              return (
+                                <div key={item.id} role="row" className="grid w-full grid-cols-[3.5rem_minmax(0,1fr)_max-content_max-content] text-slate-300">
+                                  <div
+                                    role="cell"
+                                    onClick={() => seekSubtitleTimeline(item.startTime)}
+                                    title={`Tua preview đến câu ${item.index}`}
+                                    className="cursor-pointer px-2 py-1.5 font-mono text-slate-500 hover:bg-cyan-950/20"
+                                  >
+                                    {item.index}
+                                  </div>
+                                  <div
+                                    role="cell"
+                                    onClick={() => seekSubtitleTimeline(item.startTime)}
+                                    title={`Tua preview đến câu ${item.index}`}
+                                    className="min-w-0 cursor-pointer px-2 py-1 hover:bg-cyan-950/20"
+                                  >
+                                    <div className="flex min-w-0 items-center gap-2">
+                                    <input
+                                      type="text"
+                                      aria-label={`Nội dung phụ đề câu ${item.index}`}
+                                      value={subtitleAudioDrafts[item.id] ?? item.text}
+                                      onChange={(event) => setSubtitleAudioDrafts((current) => ({ ...current, [item.id]: event.target.value }))}
+                                      onBlur={() => commitSubtitleAudioCueText(item.id)}
+                                      disabled={subtitleAudioSyncing || Boolean(subtitleAudioRegeneratingId) || subtitleAudioMasterBusy || isMasterGenerating || isMediaProcessing}
+                                      className="h-8 min-w-0 flex-1 rounded-md border border-slate-700 bg-slate-950 px-2 text-xs text-slate-100 outline-none focus:border-violet-400"
+                                    />
+                                    <span className="shrink-0 text-[10px] text-slate-500">
+                                      {formatDuration(item.startTime)} – {formatDuration(item.endTime)}
+                                    </span>
+                                    {editedAfterAudio && (
+                                      <span className="shrink-0 text-[10px] text-amber-300" title="Audio vẫn dùng nội dung trước">
+                                        Audio cũ
+                                      </span>
+                                    )}
+                                    </div>
+                                  </div>
+                                  <div role="cell" className="whitespace-nowrap px-2 py-1">
+                                    {audio?.audioUrl ? (
+                                      <div className="flex items-center gap-2">
+                                        <button
+                                          type="button"
+                                          onClick={() => void playSubtitleAudio(audio)}
+                                          aria-label={subtitleAudioPlayingId === item.id ? `Dừng audio câu ${item.index}` : `Phát audio câu ${item.index}`}
+                                          title={subtitleAudioPlayingId === item.id ? "Dừng phát" : "Phát audio"}
+                                          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-violet-500/30 bg-violet-500/10 text-violet-200 hover:bg-violet-500/20"
+                                        >
+                                          {subtitleAudioPlayingId === item.id
+                                            ? <Pause className="h-3.5 w-3.5" />
+                                            : <Play className="h-3.5 w-3.5" />}
+                                        </button>
+                                        {audio.status === "failed" && <span className="max-w-36 truncate text-[10px] text-rose-300" title={audio.error}>{audio.error || "Tạo audio thất bại"}</span>}
+                                      </div>
+                                    ) : (
+                                      <span className={`inline-flex items-center gap-1.5 text-[10px] ${audio?.status === "failed" ? "text-rose-300" : "text-slate-500"}`}>
+                                        {audio?.status === "generating" && <LoaderCircle className="h-3 w-3 animate-spin" />}
+                                        {audio?.status === "failed" ? audio.error || "Tạo audio thất bại" : audio?.status === "generating" ? "Đang tạo audio…" : "Chưa có audio"}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div role="cell" className="whitespace-nowrap px-2 py-1 text-right">
+                                    <div className="flex flex-nowrap justify-end gap-1">
+                                      <button
+                                        type="button"
+                                        onClick={() => regenerateSubtitleAudioWithDraft(subtitleItem)}
+                                        disabled={!selectedVoice || subtitleAudioSyncing || Boolean(subtitleAudioRegeneratingId) || subtitleAudioMasterBusy || isMasterGenerating || isMediaProcessing}
+                                        className="inline-flex items-center gap-1 rounded-md border border-violet-500/30 bg-violet-500/10 px-1.5 py-1 text-[9px] font-semibold text-violet-200 hover:bg-violet-500/20 disabled:opacity-40"
+                                        title={`Tạo lại audio câu ${item.index}`}
+                                      >
+                                        {subtitleAudioRegeneratingId === item.id ? <LoaderCircle className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}Tạo lại
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => combineSubtitleAudioCueAbove(item.id, "merge")}
+                                        disabled={combineDisabled}
+                                        className="rounded-md border border-amber-500/30 px-1.5 py-1 text-[9px] font-semibold text-amber-200 hover:bg-amber-950/30 disabled:cursor-not-allowed disabled:opacity-40"
+                                        title="Gộp với câu phía trên, giữ nội dung câu phía trên và mở rộng thời gian"
+                                      >
+                                        Merge above
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => combineSubtitleAudioCueAbove(item.id, "join")}
+                                        disabled={combineDisabled}
+                                        className="rounded-md border border-cyan-500/30 px-1.5 py-1 text-[9px] font-semibold text-cyan-200 hover:bg-cyan-950/30 disabled:cursor-not-allowed disabled:opacity-40"
+                                        title="Nối nội dung với câu phía trên và mở rộng thời gian"
+                                      >
+                                        Join above
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => deleteSubtitleAudioCue(item.id)}
+                                        disabled={subtitleAudioSyncing || Boolean(subtitleAudioRegeneratingId) || subtitleAudioMasterBusy || isMasterGenerating || isMediaProcessing}
+                                        className="inline-flex items-center gap-1 rounded-md border border-rose-500/30 bg-rose-500/10 px-1.5 py-1 text-[9px] font-semibold text-rose-200 hover:bg-rose-500/20 disabled:opacity-40"
+                                        title={`Xóa câu ${item.index} và audio`}
+                                      >
+                                        <Trash2 className="h-3 w-3" />Xóa
+                                      </button>
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            }                            ) : (
+                              <div role="row" className="grid w-full grid-cols-[3.5rem_minmax(0,1fr)_max-content_max-content]">
+                                <div role="cell" className="col-span-4 px-4 py-10 text-center text-xs text-slate-500">
+                                  {subtitleAudioInput.length
+                                    ? "Không có câu nào khớp bộ lọc hiện tại."
+                                    : "Chưa có câu phụ đề để tạo audio."}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </section>
+                  )}
                   {timelineWorkspaceTab === "subtitle" && (
                 <section className="space-y-3 rounded-xl border border-slate-800 bg-slate-950/60 p-3">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
                       <h4 className="text-xs font-semibold text-white">Timeline phụ đề</h4>
-                      <p className="mt-1 text-[10px] text-slate-500">Khi phát, timeline bám theo video; khi dừng, bấm timeline để di chuyển playhead riêng · Ctrl+cuộn để zoom · Shift+cuộn để cuộn ngang</p>
+                      <p className="mt-1 text-[10px] text-slate-500">Khi phát, timeline bám theo video; khi dừng, bấm timeline để di chuyển playhead riêng · Ctrl+C/V sao chép/dán tại playhead · Delete xóa cue · Ctrl+cuộn để zoom vào playhead · Shift+Z fit toàn timeline · Shift+cuộn để cuộn ngang</p>
                     </div>
                     <div className="flex items-center gap-2 text-[10px] text-slate-400">
                       <span>{previewSubtitleCues.length} câu</span>
@@ -7161,14 +10621,49 @@ export default function VideoDubbingTab() {
                       </button>
                       <button
                         type="button"
-                        disabled={!job}
-                        onClick={addTextOverlayToTrack}
+                        disabled={!textTracks.some((track) => track.id === activeTextTrackId)}
+                        onClick={deleteActiveTextTrack}
+                        title="Xóa timeline đang chọn và các clip trên timeline đó"
+                        aria-label="Xóa timeline đang chọn"
+                        className="inline-flex items-center gap-1 rounded-md border border-rose-500/30 px-2 py-1 text-rose-200 hover:bg-rose-950/30 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        <Trash2 className="h-3 w-3" />Xóa timeline
+                      </button>
+                      <button
+                        type="button"
+                        disabled={!job || !textTracks.length}
+                        onClick={() => addTextOverlayToTrack()}
                         className="inline-flex items-center gap-1 rounded-md border border-violet-500/30 px-2 py-1 text-violet-200 hover:bg-violet-950/40 disabled:cursor-not-allowed disabled:opacity-40"
                       >
                         <Plus className="h-3 w-3" />Text
                       </button>
+                      <button
+                        type="button"
+                        disabled={!job || !textTracks.length}
+                        onClick={() => addTextOverlayToTrack("character-card")}
+                        className="inline-flex items-center gap-1 rounded-md border border-amber-500/30 px-2 py-1 text-amber-200 hover:bg-amber-950/40 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        <Plus className="h-3 w-3" />Card nhân vật
+                      </button>
+                      <button
+                        type="button"
+                        disabled={!job || !job.metadata || isMediaProcessing}
+                        onClick={() => void saveEndSceneForCurrentVideo(!endSceneEnabled)}
+                        className="inline-flex items-center gap-1 rounded-md border border-orange-500/30 px-2 py-1 text-orange-200 hover:bg-orange-950/30 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        {endSceneEnabled ? "Bỏ End Scene" : "Add End Scene"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={fitSubtitleTimelineToPanel}
+                        title="Fit timeline vừa panel và cuộn về đầu (Shift+Z)"
+                        aria-label="Fit timeline vừa panel và cuộn về đầu"
+                        className="rounded-md border border-slate-700 px-2 py-1 text-slate-300 hover:border-cyan-500/50"
+                      >
+                        Fit
+                      </button>
                       <label className="flex items-center gap-2">Zoom
-                        <input type="range" min={8} max={180} step={1} value={subtitleTimelineZoom} onChange={(event) => setSubtitleTimelineZoom(Number(event.target.value))} className="w-20 accent-cyan-400" aria-label="Zoom timeline phụ đề" />
+                        <input type="range" min={subtitleTimelineMinZoom} max={180} step="any" value={subtitleTimelineZoom} onChange={(event) => changeSubtitleTimelineZoom(Number(event.target.value))} className="w-20 accent-cyan-400" aria-label="Zoom timeline phụ đề" />
                       </label>
                     </div>
                   </div>
@@ -7182,11 +10677,14 @@ export default function VideoDubbingTab() {
                       </span>
                     </div>
                   )}
-                  {previewSubtitleCues.length === 0 && textTracks.length === 0 ? (
+                  {previewSubtitleCues.length === 0 && textTracks.length === 0 && !endSceneEnabled ? (
                     <p className="rounded-lg border border-dashed border-slate-700 p-4 text-xs text-slate-500">Chọn file SRT để tạo các clip phụ đề trên timeline.</p>
                   ) : (
                     <div
                       ref={subtitleTimelineScrollRef}
+                      data-video-dubbing-timeline
+                      tabIndex={0}
+                      aria-label="Timeline phụ đề và card nhân vật"
                       className="max-h-64 overflow-auto overscroll-contain rounded-lg border border-slate-800 bg-slate-900/50"
                     >
                       <div style={{ width: `${subtitleTimelineWidth}px` }}>
@@ -7207,7 +10705,7 @@ export default function VideoDubbingTab() {
                         <div
                           ref={subtitleTimelineTrackRef}
                           className="relative cursor-crosshair bg-slate-950/30"
-                          style={{ height: `${Math.max(54, subtitleTimelineLaneEnds.length * 34 + 10)}px` }}
+                          style={{ height: `${Math.max(54, subtitleTimelineLaneEnds.length * 34 + (endSceneEnabled ? 34 : 0) + 10)}px` }}
                           onClick={(event) => {
                             if (event.target !== event.currentTarget) return;
                             setSelectedSubtitleCue(null);
@@ -7243,6 +10741,31 @@ export default function VideoDubbingTab() {
                               </div>
                             );
                           })}
+                          {endSceneEnabled && job?.metadata && (
+                            <div
+                              role="button"
+                              tabIndex={0}
+                              title={`End Scene · ${formatDuration(job.metadata.durationSeconds)} – ${formatDuration(job.metadata.durationSeconds + endSceneDurationSeconds)}`}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                seekSubtitleTimeline(job.metadata!.durationSeconds + 0.01);
+                              }}
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter" || event.key === " ") {
+                                  event.preventDefault();
+                                  seekSubtitleTimeline(job.metadata!.durationSeconds + 0.01);
+                                }
+                              }}
+                              className="absolute z-10 flex h-7 cursor-pointer items-center overflow-hidden rounded-md border border-orange-300/70 bg-orange-600/80 px-2 text-[9px] font-semibold text-white"
+                              style={{
+                                left: `${(job.metadata.durationSeconds / subtitleTimelineDuration) * subtitleTimelineWidth}px`,
+                                top: `${5 + subtitleTimelineLaneEnds.length * 34}px`,
+                                width: `${Math.max(22, (endSceneDurationSeconds / subtitleTimelineDuration) * subtitleTimelineWidth)}px`,
+                              }}
+                            >
+                              End Scene
+                            </div>
+                          )}
                         </div>
                         {textTracks.map((track) => (
                           <div
@@ -7258,7 +10781,13 @@ export default function VideoDubbingTab() {
                               <span className="text-[9px] font-semibold text-violet-300">{track.name}</span>
                             </div>
                             <div
-                              className="relative h-8"
+                              className="relative"
+                              style={{
+                                height: `${Math.max(
+                                  32,
+                                  (textTimelineLanes.countsByTrackId[track.id] ?? 1) * 34 - 2,
+                                )}px`,
+                              }}
                               onClick={(event) => {
                                 setActiveTextTrackId(track.id);
                                 if (event.target !== event.currentTarget) return;
@@ -7275,9 +10804,10 @@ export default function VideoDubbingTab() {
                                 .map(({ cue, index }) => {
                                   const left = (cue.startTime / subtitleTimelineDuration) * subtitleTimelineWidth;
                                   const width = Math.max(18, ((cue.endTime - cue.startTime) / subtitleTimelineDuration) * subtitleTimelineWidth);
-                                  return <div key={`text-${index}`} role="button" tabIndex={0} title={`${cue.text}\n${formatDuration(cue.startTime)} – ${formatDuration(cue.endTime)}`} onClick={(event) => { event.stopPropagation(); setActiveTextTrackId(track.id); setSelectedSubtitleCue(null); setSelectedTextOverlay(index); seekSubtitleTimeline(cue.startTime); }} onPointerDown={(event) => { setActiveTextTrackId(track.id); setSelectedSubtitleCue(null); startSubtitleTimelineDrag(event, index, cue.startTime, cue.endTime, "move", "text"); }} className={`absolute inset-y-1 z-10 flex select-none items-center overflow-hidden rounded-md border px-1 text-[9px] text-white ${selectedTextOverlay === index ? "border-violet-200 bg-violet-500/90" : "border-violet-400/50 bg-violet-700/75"} cursor-grab active:cursor-grabbing`} style={{ left: `${left}px`, width: `${width}px` }}>
+                                  const lane = textTimelineLanes.lanes[index] ?? 0;
+                                  return <div key={`text-${index}`} role="button" tabIndex={0} title={`${cue.text}${cue.kind === "character-card" ? ` · ${cue.characterRole ?? ""}` : ""}\n${formatDuration(cue.startTime)} – ${formatDuration(cue.endTime)}`} onClick={(event) => { event.stopPropagation(); setActiveTextTrackId(track.id); setSelectedSubtitleCue(null); setSelectedTextOverlay(index); seekSubtitleTimeline(cue.startTime); }} onPointerDown={(event) => { setActiveTextTrackId(track.id); setSelectedSubtitleCue(null); startSubtitleTimelineDrag(event, index, cue.startTime, cue.endTime, "move", "text"); }} className={`absolute z-10 flex h-6 select-none items-center overflow-hidden rounded-md border px-1 text-[9px] text-white ${selectedTextOverlay === index ? "border-violet-200 bg-violet-500/90" : "border-violet-400/50 bg-violet-700/75"} cursor-grab active:cursor-grabbing`} style={{ left: `${left}px`, top: `${4 + lane * 34}px`, width: `${width}px` }}>
                                     <span onClick={(event) => event.stopPropagation()} onPointerDown={(event) => { event.stopPropagation(); setActiveTextTrackId(track.id); startSubtitleTimelineDrag(event, index, cue.startTime, cue.endTime, "start", "text"); }} className="absolute inset-y-0 left-0 z-20 w-1.5 cursor-ew-resize bg-violet-100/80" />
-                                    <span className="pointer-events-none truncate px-1">{cue.text}</span>
+                                    <span className="pointer-events-none truncate px-1">{cue.kind === "character-card" ? `${cue.text} · ${cue.characterRole ?? ""}` : cue.text}</span>
                                     <span onClick={(event) => event.stopPropagation()} onPointerDown={(event) => { event.stopPropagation(); setActiveTextTrackId(track.id); startSubtitleTimelineDrag(event, index, cue.startTime, cue.endTime, "end", "text"); }} className="absolute inset-y-0 right-0 z-20 w-1.5 cursor-ew-resize bg-violet-100/80" />
                                   </div>;
                                 })}
@@ -7331,16 +10861,51 @@ export default function VideoDubbingTab() {
                           className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-white"
                         />
                       </label>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          updatePreviewSubtitleCues((cues) => cues.filter((_, index) => index !== selectedSubtitleCue));
-                          setSelectedSubtitleCue(null);
-                        }}
-                        className="inline-flex items-center justify-center gap-1 justify-self-start rounded-md border border-rose-500/30 px-2 py-1.5 text-xs text-rose-200 hover:bg-rose-950/30"
-                      >
-                        <Trash2 className="h-3 w-3" />Xóa câu
-                      </button>
+                      {subtitleAudioError && (
+                        <p role="alert" className="rounded-md border border-rose-500/30 bg-rose-950/20 px-2 py-1.5 text-[10px] text-rose-200 sm:col-span-2">
+                          {subtitleAudioError}
+                        </p>
+                      )}
+                      <div className="flex flex-wrap items-center gap-2 sm:col-span-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (selectedSubtitleCueTtsItem) {
+                              void regenerateSubtitleAudio(selectedSubtitleCueTtsItem);
+                            }
+                          }}
+                          disabled={!selectedSubtitleCueTtsItem || !selectedVoice || subtitleAudioSyncing || Boolean(subtitleAudioRegeneratingId) || subtitleAudioMasterBusy || isMasterGenerating || isMediaProcessing}
+                          className="inline-flex items-center justify-center gap-1 rounded-md border border-violet-500/30 bg-violet-500/10 px-2 py-1.5 text-xs text-violet-200 hover:bg-violet-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                          title="Tạo lại TTS cho câu đang chọn"
+                        >
+                          {subtitleAudioRegeneratingId === selectedSubtitleCueTtsItem?.id
+                            ? <LoaderCircle className="h-3 w-3 animate-spin" />
+                            : <RefreshCw className="h-3 w-3" />}
+                          Tạo lại TTS
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void rebuildMasterFromSubtitleAudio()}
+                          disabled={!subtitleAudioInput.length || subtitleAudioSyncing || Boolean(subtitleAudioRegeneratingId) || subtitleAudioMasterBusy || isMasterGenerating || isMediaProcessing}
+                          className="inline-flex items-center justify-center gap-1 rounded-md border border-violet-500/30 px-2 py-1.5 text-xs text-violet-200 hover:bg-violet-950/30 disabled:cursor-not-allowed disabled:opacity-40"
+                          title="Tạo lại Master từ audio của các câu phụ đề"
+                        >
+                          {subtitleAudioMasterBusy || isMasterGenerating
+                            ? <LoaderCircle className="h-3 w-3 animate-spin" />
+                            : <RefreshCw className="h-3 w-3" />}
+                          Tạo lại Master
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            updatePreviewSubtitleCues((cues) => cues.filter((_, index) => index !== selectedSubtitleCue));
+                            setSelectedSubtitleCue(null);
+                          }}
+                          className="inline-flex items-center justify-center gap-1 rounded-md border border-rose-500/30 px-2 py-1.5 text-xs text-rose-200 hover:bg-rose-950/30"
+                        >
+                          <Trash2 className="h-3 w-3" />Xóa câu
+                        </button>
+                      </div>
                     </div>
                   )}
                   {selectedTextOverlay !== null && textOverlays[selectedTextOverlay] && !textOverlays[selectedTextOverlay].isTitle && (() => {
@@ -7377,7 +10942,13 @@ export default function VideoDubbingTab() {
                           Apply to All
                         </button>
                       </div>
-                      <label className="space-y-1 text-[10px] text-slate-400 sm:col-span-2">Nội dung<textarea value={cue.text} onChange={(event) => updateSelectedTextOverlay({ text: event.target.value })} rows={2} className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-white" /></label>
+                      <label className="space-y-1 text-[10px] text-slate-400 sm:col-span-2">{cue.kind === "character-card" ? "Tên nhân vật" : "Nội dung"}<textarea value={cue.text} onChange={(event) => updateSelectedTextOverlay({ text: event.target.value })} rows={2} className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-white" /></label>
+                      {cue.kind === "character-card" && (
+                        <>
+                          <label className="space-y-1 text-[10px] text-slate-400 sm:col-span-2">Chức vụ<textarea value={cue.characterRole ?? ""} onChange={(event) => updateSelectedTextOverlay({ characterRole: event.target.value })} rows={2} className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-white" /></label>
+                          <label className="space-y-1 text-[10px] text-slate-400">Cỡ chữ chức vụ<div className="flex items-center gap-2"><input type="range" min={8} max={160} value={cue.characterRoleFontSize ?? Math.max(8, Math.round(cue.fontSize * 0.7))} onChange={(event) => updateSelectedTextOverlay({ characterRoleFontSize: Number(event.target.value) })} className="w-full accent-violet-400" aria-label="Cỡ chữ chức vụ" /><input type="number" min={8} max={160} value={cue.characterRoleFontSize ?? Math.max(8, Math.round(cue.fontSize * 0.7))} onChange={(event) => updateSelectedTextOverlay({ characterRoleFontSize: Math.max(8, Math.min(160, Number(event.target.value) || 8)) })} className="w-16 rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-center text-xs text-white" /></div></label>
+                        </>
+                      )}
                       <div className="sm:col-span-2 xl:col-span-4"><TextStyleControls value={textStyleValue} onChange={updateSelectedTextOverlay} fontOptions={subtitleFontOptions} /></div>
                       <label className="inline-flex items-center gap-2 text-xs text-slate-300 sm:col-span-2 xl:col-span-4">
                         <input
@@ -7416,7 +10987,7 @@ export default function VideoDubbingTab() {
                       duration={job.metadata?.durationSeconds || 1}
                       currentTime={subtitleTimelineCursor}
                       zoom={subtitleTimelineZoom}
-                      onZoomChange={setSubtitleTimelineZoom}
+                      onZoomChange={changeSubtitleTimelineZoom}
                       onSeek={seekSubtitleTimeline}
                       vocalsAvailable={Boolean(job.separation?.vocalsSizeBytes)}
                       instrumentalAvailable={Boolean(
@@ -7449,7 +11020,7 @@ export default function VideoDubbingTab() {
               )}
               </div>
 
-              <div className="space-y-4">
+              <div className={`space-y-4 ${videoWorkspaceTab === "preview" ? "" : "hidden"}`}>
 
               {!hasMasterAudio && job?.metadata?.audioCodec && (
                 <p className="rounded-lg border border-amber-500/25 bg-amber-950/20 p-3 text-xs text-amber-200">
@@ -7934,11 +11505,12 @@ export default function VideoDubbingTab() {
           <div role="tablist" aria-label="Video preview" className="flex gap-1 rounded-xl border border-slate-800 bg-slate-950/70 p-1">
             <button type="button" role="tab" aria-selected={videoWorkspaceTab === "preview"} onClick={() => setVideoWorkspaceTab("preview")} className={`flex-1 rounded-lg px-3 py-2 text-xs font-semibold ${videoWorkspaceTab === "preview" ? "bg-cyan-400 text-slate-950" : "text-slate-300 hover:bg-slate-800"}`}>Video Mixer Preview</button>
             <button type="button" role="tab" aria-selected={videoWorkspaceTab === "merged"} onClick={() => setVideoWorkspaceTab("merged")} className={`flex-1 rounded-lg px-3 py-2 text-xs font-semibold ${videoWorkspaceTab === "merged" ? "bg-emerald-400 text-slate-950" : "text-slate-300 hover:bg-slate-800"}`}>Merged Video</button>
+            <button type="button" role="tab" aria-selected={videoWorkspaceTab === "end-scene"} onClick={() => setVideoWorkspaceTab("end-scene")} className={`flex-1 rounded-lg px-3 py-2 text-xs font-semibold ${videoWorkspaceTab === "end-scene" ? "bg-orange-400 text-slate-950" : "text-slate-300 hover:bg-slate-800"}`}>End Scene</button>
           </div>
           <div className="flex min-h-64 flex-col items-center justify-center gap-3 p-6 text-center">
             <Film className="h-9 w-9 text-cyan-400" />
-            <h3 className="font-semibold text-white">{videoWorkspaceTab === "preview" ? "Chưa có video preview" : "Chưa có video đã merge"}</h3>
-            <p className="max-w-md text-sm text-slate-400">Chọn video nguồn và chạy hàng đợi để xem mixer preview; video export hoàn tất sẽ xuất hiện trong tab Merged Video.</p>
+            <h3 className="font-semibold text-white">{videoWorkspaceTab === "preview" ? "Chưa có video preview" : videoWorkspaceTab === "merged" ? "Chưa có video đã merge" : "End Scene cần video hoàn tất"}</h3>
+            <p className="max-w-md text-sm text-slate-400">Chọn video nguồn và chạy hàng đợi để xem mixer preview; video export hoàn tất sẽ xuất hiện trong tab Merged Video. End Scene được cấu hình khi video đã hoàn tất.</p>
           </div>
         </section>
       )}

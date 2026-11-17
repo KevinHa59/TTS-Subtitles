@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import express from "express";
 import fs from "node:fs";
@@ -6,11 +7,39 @@ import os from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { after, test } from "node:test";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import SubtitleOverlayRenderer from "../src/components/SubtitleOverlayRenderer";
 import { VideoDubbingManager } from "../videoDubbingManager";
 import { createVideoDubbingRouter } from "../videoDubbingRoutes";
 import { VideoDubbingMediaCoordinator } from "../videoDubbingMedia";
 
 const temporaryDirectories: string[] = [];
+
+test("renders a character card with two aligned lines and distinct font sizes", () => {
+  const markup = renderToStaticMarkup(createElement(SubtitleOverlayRenderer, {
+    text: "Mina",
+    secondaryText: "Detective",
+    secondaryFontSize: 18,
+    scale: 1,
+    fontSize: 30,
+    fontFamily: "Verdana",
+    fontWeight: true,
+    fontStyle: false,
+    color: "#ffffff",
+    backgroundMode: "color",
+    backgroundColor: "#123456",
+    paddingPx: 4,
+    position: "middle-center",
+    textAlign: "center",
+  }));
+  assert.ok(markup.includes("Mina"));
+  assert.ok(markup.includes("Detective"));
+  assert.ok(markup.includes("font-size:30px"));
+  assert.ok(markup.includes("font-size:18px"));
+  assert.ok(markup.includes("text-align:center"));
+  assert.equal((markup.match(/background-color:#123456/g) ?? []).length, 1);
+});
 
 async function createTemporaryDirectory(): Promise<string> {
   const directory = await fs.promises.mkdtemp(
@@ -153,6 +182,17 @@ async function waitForTask(
   assert.fail(`Timed out waiting for ${task}: ${JSON.stringify(manager.getJob(jobId)?.[task])}`);
 }
 
+async function waitForMediaIdle(
+  coordinator: VideoDubbingMediaCoordinator,
+  jobId: string,
+): Promise<void> {
+  const deadline = Date.now() + 15_000;
+  while (coordinator.isBusy(jobId) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.equal(coordinator.isBusy(jobId), false);
+}
+
 function decodeAudio(filePath: string): Float64Array {
   const result = spawnSync(
     "ffmpeg",
@@ -179,6 +219,28 @@ function decodeAudio(filePath: string): Float64Array {
     samples[frame] = result.stdout.readInt16LE(frame * 4) / 32768;
   }
   return samples;
+}
+
+function hashH264VideoStream(filePath: string): string {
+  const result = spawnSync(
+    "ffmpeg",
+    [
+      "-v",
+      "error",
+      "-i",
+      filePath,
+      "-map",
+      "0:v:0",
+      "-c:v",
+      "copy",
+      "-f",
+      "h264",
+      "pipe:1",
+    ],
+    { windowsHide: true, maxBuffer: 16 * 1024 * 1024 },
+  );
+  assert.equal(result.status, 0, result.stderr.toString());
+  return createHash("sha256").update(result.stdout).digest("hex");
 }
 
 function amplitudeAt(
@@ -223,7 +285,7 @@ function probeMedia(filePath: string) {
     "-v",
     "error",
     "-show_entries",
-    "format=duration:stream=codec_type,codec_name,width,height,sample_rate,channels",
+    "format=duration:stream=codec_type,codec_name,width,height,sample_rate,channels,duration",
     "-of",
     "json",
     filePath,
@@ -237,6 +299,7 @@ function probeMedia(filePath: string) {
       height?: number;
       sample_rate?: string;
       channels?: number;
+      duration?: string;
     }>;
   };
 }
@@ -654,7 +717,6 @@ test("cancels a final mix before publishing output and leaves no task-owned file
   coordinator.startFinalMix(job.id, settings);
   await coordinator.cancel(job.id);
   assert.equal(manager.getJob(job.id)?.finalMix?.status, "cancelled");
-  assert.equal(coordinator.isBusy(job.id), false);
   const directory = manager.getJobDirectory(job.id)!;
   assert.equal(fs.existsSync(path.join(directory, "mixed-audio.wav")), false);
   assert.deepEqual(
@@ -789,6 +851,10 @@ test("exports an MP4, verifies it with FFprobe, and serves the real download", a
   coordinator.startFinalMix(job.id, settings);
   await waitForTask(manager, job.id, "finalMix");
   assert.equal(manager.getJob(job.id)?.finalMix?.status, "completed");
+  assert.throws(
+    () => coordinator.startUpdateRenderedAudio(job.id),
+    /render video/i,
+  );
 
   coordinator.startExport(job.id);
   await waitForTask(manager, job.id, "videoExport");
@@ -804,6 +870,8 @@ test("exports an MP4, verifies it with FFprobe, and serves the real download", a
   assert.equal(probe.streams[0].codec_name, "h264");
   assert.equal(probe.streams[1].codec_name, "aac");
   assert.ok(Math.abs(Number(probe.format.duration) - 1.4) < 0.1);
+  const originalVideoHash = hashH264VideoStream(outputPath);
+  const originalDecodedAudio = decodeAudio(outputPath);
 
   const app = express();
   app.use("/api/video-dubbing", createVideoDubbingRouter(manager, undefined, coordinator));
@@ -830,6 +898,34 @@ test("exports an MP4, verifies it with FFprobe, and serves the real download", a
       Buffer.from(await sourceRangeResponse.arrayBuffer()),
       job.source.subarray(0, 32),
     );
+
+    coordinator.startFinalMix(
+      job.id,
+      {
+        vocals: { volumePercent: 0, muted: false },
+        instrumental: { volumePercent: 0, muted: false },
+        ttsMaster: { volumePercent: 0, muted: false },
+      },
+      100,
+      true,
+      false,
+    );
+    await waitForTask(manager, job.id, "finalMix");
+    assert.equal(manager.getJob(job.id)?.finalMix?.status, "completed");
+    await waitForMediaIdle(coordinator, job.id);
+    const updateAudioResponse = await fetch(
+      `http://127.0.0.1:${address.port}/api/video-dubbing/jobs/${job.id}/update-rendered-audio`,
+      { method: "POST" },
+    );
+    assert.equal(updateAudioResponse.status, 202);
+    await waitForTask(manager, job.id, "videoExport");
+    assert.equal(
+      manager.getJob(job.id)?.videoExport?.status,
+      "completed",
+      manager.getJob(job.id)?.videoExport?.error,
+    );
+    assert.equal(hashH264VideoStream(outputPath), originalVideoHash);
+    assert.notDeepEqual(decodeAudio(outputPath), originalDecodedAudio);
 
     const previewResponse = await fetch(
       `http://127.0.0.1:${address.port}/api/video-dubbing/jobs/${job.id}/exported-video`,
@@ -987,6 +1083,22 @@ test("uploads a Unicode-caption logo and composites subtitle PNG and logo overla
     "-y",
     logoPath,
   ]);
+  const coverPath = path.join(fixtureDirectory, "cover.png");
+  run("ffmpeg", [
+    "-hide_banner",
+    "-loglevel",
+    "error",
+    "-f",
+    "lavfi",
+    "-i",
+    "color=c=yellow:s=640x240",
+    "-vf",
+    "drawbox=x=0:y=0:w=50:h=240:color=red:t=fill,drawbox=x=590:y=0:w=50:h=240:color=blue:t=fill,drawbox=x=200:y=0:w=240:h=240:color=green:t=fill",
+    "-frames:v",
+    "1",
+    "-y",
+    coverPath,
+  ]);
   const app = express();
   app.use(
     "/api/video-dubbing",
@@ -1001,6 +1113,7 @@ test("uploads a Unicode-caption logo and composites subtitle PNG and logo overla
   assert.ok(address && typeof address !== "string");
   const baseUrl = `http://127.0.0.1:${address.port}/api/video-dubbing/jobs/${job.id}`;
   let logo: Awaited<ReturnType<typeof manager.getJob>> = null;
+  let cover: Awaited<ReturnType<typeof manager.getJob>> = null;
   try {
     const uploadResponse = await fetch(`${baseUrl}/logo?extension=.png`, {
       method: "PUT",
@@ -1013,6 +1126,17 @@ test("uploads a Unicode-caption logo and composites subtitle PNG and logo overla
     const preview = await fetch(`${baseUrl}/logo`);
     assert.equal(preview.status, 200);
     assert.match(preview.headers.get("content-type") || "", /image\/png/i);
+
+    const coverUploadResponse = await fetch(`${baseUrl}/cover?extension=.png`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/octet-stream" },
+      body: fs.readFileSync(coverPath),
+    });
+    assert.equal(coverUploadResponse.status, 200);
+    cover = (await coverUploadResponse.json()).job;
+    const coverPreview = await fetch(`${baseUrl}/cover`);
+    assert.equal(coverPreview.status, 200);
+    assert.match(coverPreview.headers.get("content-type") || "", /image\/png/i);
   } finally {
     server.closeAllConnections();
     await new Promise<void>((resolve, reject) => {
@@ -1021,6 +1145,10 @@ test("uploads a Unicode-caption logo and composites subtitle PNG and logo overla
   }
   assert.ok(logo);
   assert.equal(logo.overlaySettings?.logoFileName, "overlay-logo.png");
+  assert.ok(cover);
+  assert.equal(cover.overlaySettings?.coverFileName, "overlay-cover.png");
+  assert.equal(cover.overlaySettings?.coverEnabled, true);
+  assert.equal(cover.overlaySettings?.coverFrameCount, 5);
   assert.equal(logo.overlaySettings?.logoPosition, "top-left");
   assert.equal(logo.overlaySettings?.subtitlePosition, "bottom-center");
 
@@ -1032,6 +1160,8 @@ test("uploads a Unicode-caption logo and composites subtitle PNG and logo overla
   await waitForTask(manager, job.id, "finalMix");
   assert.equal(manager.getJob(job.id)?.finalMix?.status, "completed");
   coordinator.startExport(job.id, {
+    coverEnabled: true,
+    coverFrameCount: 8,
     logoEnabled: true,
     logoWidthPercent: 15,
     logoPaddingPx: 40,
@@ -1040,24 +1170,67 @@ test("uploads a Unicode-caption logo and composites subtitle PNG and logo overla
     subtitles: [
       { startTime: 0.1, endTime: 1.1, text: "Xin chào tiếng Việt" },
     ],
-    textOverlays: [{
-      startTime: 0.1,
-      endTime: 1.1,
-      text: "Long text stays anchored to the left",
-      trackId: "text-track-1",
-      textAlign: "left",
-      fontSize: 28,
-      fontFamily: "Verdana",
-      color: "#ffffff",
-      bold: false,
-      italic: false,
-      position: "top-center",
-      xPercent: 50,
-      yPercent: 15,
-      backgroundColor: "#000000",
-      backgroundTransparent: true,
-      paddingPx: 0,
-    }],
+    textOverlays: [
+      {
+        startTime: 0.1,
+        endTime: 1.1,
+        text: "Long text stays anchored to the left",
+        trackId: "text-track-1",
+        textAlign: "left",
+        fontSize: 28,
+        fontFamily: "Verdana",
+        color: "#ffffff",
+        bold: false,
+        italic: false,
+        position: "top-center",
+        xPercent: 50,
+        yPercent: 15,
+        backgroundColor: "#000000",
+        backgroundTransparent: true,
+        paddingPx: 0,
+      },
+      {
+        kind: "character-card",
+        startTime: 0.1,
+        endTime: 1.1,
+        text: "Mina",
+        characterRole: "Detective",
+        characterRoleFontSize: 18,
+        trackId: "text-track-1",
+        textAlign: "center",
+        fontSize: 30,
+        fontFamily: "Verdana",
+        color: "#ffffff",
+        bold: true,
+        italic: false,
+        position: "bottom-center",
+        backgroundColor: "#000000",
+        backgroundTransparent: true,
+        paddingPx: 0,
+      },
+    ],
+    endScene: {
+      enabled: true,
+      durationSeconds: 1.2,
+      textOverlays: [
+        {
+          startTime: 0,
+          endTime: 1.2,
+          text: "Hết Phim",
+          fontSize: 32,
+          fontFamily: "Verdana",
+          color: "#ffffff",
+          bold: true,
+          italic: false,
+          position: "middle-center",
+          xPercent: 50,
+          yPercent: 50,
+          backgroundColor: "#000000",
+          backgroundTransparent: true,
+          paddingPx: 0,
+        },
+      ],
+    },
     subtitleFontSize: 28,
     subtitleFontFamily: "Verdana",
     subtitleColor: "#f0e0d0",
@@ -1073,13 +1246,32 @@ test("uploads a Unicode-caption logo and composites subtitle PNG and logo overla
   const exportTask = manager.getJob(job.id)?.videoExport;
   assert.equal(exportTask?.status, "completed", exportTask?.error);
   assert.equal(manager.getJob(job.id)?.overlaySettings?.subtitles[0].text, "Xin chào tiếng Việt");
+  assert.equal(manager.getJob(job.id)?.overlaySettings?.coverFrameCount, 8);
   assert.equal(manager.getJob(job.id)?.overlaySettings?.subtitleFontFamily, "Verdana");
   assert.equal(manager.getJob(job.id)?.overlaySettings?.subtitleColor, "#f0e0d0");
   assert.equal(manager.getJob(job.id)?.overlaySettings?.subtitleBold, true);
   assert.equal(manager.getJob(job.id)?.overlaySettings?.textOverlays?.[0].textAlign, "left");
+  assert.equal(manager.getJob(job.id)?.overlaySettings?.textOverlays?.[1].kind, "character-card");
+  assert.equal(manager.getJob(job.id)?.overlaySettings?.textOverlays?.[1].characterRole, "Detective");
+  assert.equal(manager.getJob(job.id)?.overlaySettings?.textOverlays?.[1].characterRoleFontSize, 18);
+  assert.equal(manager.getJob(job.id)?.overlaySettings?.endScene?.enabled, true);
+  assert.equal(manager.getJob(job.id)?.overlaySettings?.endScene?.textOverlays[0].text, "Hết Phim");
   const outputPath = coordinator.getVideoExportPath(job.id);
   assert.ok(outputPath);
   const overlayProbe = probeMedia(outputPath);
+  assert.ok(Math.abs(Number(overlayProbe.format.duration) - 2.6) < 0.15);
+  assert.equal(
+    overlayProbe.streams.find((stream) => stream.codec_type === "audio")?.codec_name,
+    "aac",
+  );
+  assert.ok(
+    Math.abs(
+      Number(
+        overlayProbe.streams.find((stream) => stream.codec_type === "audio")
+          ?.duration,
+      ) - 2.6,
+    ) < 0.15,
+  );
   assert.equal(
     overlayProbe.streams[0].codec_name,
     "h264",
@@ -1109,6 +1301,70 @@ test("uploads a Unicode-caption logo and composites subtitle PNG and logo overla
   assert.ok(pixel.stdout[0] > 120, `expected red logo pixel, got ${pixel.stdout}`);
   assert.ok(pixel.stdout[1] < 100, `expected red logo pixel, got ${pixel.stdout}`);
   assert.ok(pixel.stdout[2] < 100, `expected red logo pixel, got ${pixel.stdout}`);
+  const coverCenter = spawnSync(
+    "ffmpeg",
+    [
+      "-v",
+      "error",
+      "-ss",
+      "0.05",
+      "-i",
+      outputPath,
+      "-frames:v",
+      "1",
+      "-vf",
+      "crop=1:1:960:540,format=rgb24",
+      "-f",
+      "rawvideo",
+      "pipe:1",
+    ],
+    { windowsHide: true, maxBuffer: 1024 },
+  );
+  assert.equal(coverCenter.status, 0, coverCenter.stderr.toString());
+  assert.ok(coverCenter.stdout[1] > 120, `expected green center from cropped cover, got ${coverCenter.stdout}`);
+  assert.ok(coverCenter.stdout[0] < 100, `expected green center from cropped cover, got ${coverCenter.stdout}`);
+  const coverEdge = spawnSync(
+    "ffmpeg",
+    [
+      "-v",
+      "error",
+      "-ss",
+      "0.05",
+      "-i",
+      outputPath,
+      "-frames:v",
+      "1",
+      "-vf",
+      "crop=1:1:10:540,format=rgb24",
+      "-f",
+      "rawvideo",
+      "pipe:1",
+    ],
+    { windowsHide: true, maxBuffer: 1024 },
+  );
+  assert.equal(coverEdge.status, 0, coverEdge.stderr.toString());
+  assert.ok(coverEdge.stdout[0] > 150 && coverEdge.stdout[1] > 150, `expected centered crop to remove outer red edge, got ${coverEdge.stdout}`);
+  const frameAfterCover = spawnSync(
+    "ffmpeg",
+    [
+      "-v",
+      "error",
+      "-ss",
+      "0.5",
+      "-i",
+      outputPath,
+      "-frames:v",
+      "1",
+      "-vf",
+      "crop=1:1:960:540,format=rgb24",
+      "-f",
+      "rawvideo",
+      "pipe:1",
+    ],
+    { windowsHide: true, maxBuffer: 1024 },
+  );
+  assert.equal(frameAfterCover.status, 0, frameAfterCover.stderr.toString());
+  assert.ok(frameAfterCover.stdout[1] < 50, `expected source video after cover frames, got ${frameAfterCover.stdout}`);
   const subtitleFrame = spawnSync(
     "ffmpeg",
     [

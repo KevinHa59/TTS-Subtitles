@@ -166,6 +166,16 @@ function makeTimelineJob(
   };
 }
 
+function writeGeneratedItemAudio(job: TimelineJob, workingDirectory: string): void {
+  for (const item of job.items) {
+    if (item.status !== "completed") continue;
+    fs.writeFileSync(
+      path.join(workingDirectory, `item_${item.index}_adjusted.wav`),
+      createWav(item.finalDuration || item.targetDuration),
+    );
+  }
+}
+
 async function waitForMaster(
   manager: VideoDubbingManager,
   jobId: string,
@@ -215,6 +225,7 @@ test("supports VieNeu Turbo and trims a long SRT timeline at video end", async (
       job.items.forEach((item) => (item.status = "completed"));
       job.overallProgress.completed = job.items.length;
       job.overallProgress.percent = 100;
+      writeGeneratedItemAudio(job, workingDirectory);
       fs.writeFileSync(path.join(workingDirectory, "master.wav"), createWav(2.2));
       job.status = "completed";
     },
@@ -297,6 +308,7 @@ test("keeps a short master short and isolates concurrent jobs with different Pip
       });
       job.overallProgress.completed = job.items.length;
       job.overallProgress.percent = 100;
+      writeGeneratedItemAudio(job, workingDirectory);
       await fs.promises.writeFile(
         path.join(workingDirectory, "master.wav"),
         createWav(job.model.endsWith("a") ? 1.25 : 1.5),
@@ -401,6 +413,7 @@ test("reports failure, cancels cleanly, and keeps an earlier completed master", 
       });
       job.overallProgress.completed = job.items.length;
       job.overallProgress.percent = 100;
+      writeGeneratedItemAudio(job, workingDirectory);
       await fs.promises.writeFile(
         path.join(workingDirectory, "master.wav"),
         createWav(1),
@@ -441,6 +454,92 @@ test("reports failure, cancels cleanly, and keeps an earlier completed master", 
   );
 });
 
+test("keeps successful cue audio when another cue fails and rebuilds from saved audio", async () => {
+  const directory = await createTemporaryDirectory();
+  const manager = new VideoDubbingManager({
+    storageDirectory: path.join(directory, "video_jobs"),
+    ffprobePath: "ffprobe",
+  });
+  const readyVideo = await createReadyVideo(manager, directory, "source.mp4", 2);
+  const items: SubtitleItem[] = [
+    {
+      id: "cue-fail",
+      index: 1,
+      startTime: 0,
+      endTime: 0.6,
+      targetDuration: 0.6,
+      text: "Câu cần thử lại.",
+      status: "pending",
+    },
+    {
+      id: "cue-ok",
+      index: 2,
+      startTime: 1,
+      endTime: 1.6,
+      targetDuration: 0.6,
+      text: "Câu đã tạo thành công.",
+      status: "pending",
+    },
+  ];
+  let shouldFailFirstCue = true;
+  const coordinator = new VideoDubbingMasterCoordinator(manager, {
+    isVoiceAvailable: () => true,
+    createJob: (request) => makeTimelineJob("timeline-audio-persistence", request),
+    processJob: async (job, workingDirectory) => {
+      job.items.forEach((item) => {
+        item.status = shouldFailFirstCue && item.id === "cue-fail"
+          ? "failed"
+          : "completed";
+        item.finalDuration = 0.4;
+        if (item.status === "failed") item.error = "TTS test failure";
+      });
+      writeGeneratedItemAudio(job, workingDirectory);
+      job.overallProgress.completed = job.items.filter((item) => item.status === "completed").length;
+      job.overallProgress.percent = 100;
+      job.status = "completed";
+      shouldFailFirstCue = false;
+    },
+    removeJob: () => {},
+    getAudioDuration: readWavDuration,
+    ffmpegPath: "ffmpeg",
+  });
+  const request = {
+    items,
+    model: "local:piper-a",
+    options: { minSpeed: 0.8, maxSpeed: 1.5, speedPriority: "balanced" as const },
+  };
+
+  coordinator.start(readyVideo.id, request);
+  await waitForMaster(manager, readyVideo.id, "failed");
+  assert.match(
+    manager.getJob(readyVideo.id)?.masterGeneration?.error || "",
+    /#1 \(ID cue-fail\)/,
+  );
+  const savedAfterFailure = coordinator.getSubtitleAudioItems(readyVideo.id);
+  assert.equal(savedAfterFailure.find((item) => item.id === "cue-fail")?.status, "failed");
+  assert.equal(savedAfterFailure.find((item) => item.id === "cue-ok")?.status, "completed");
+  assert.ok(coordinator.getSubtitleAudioPath(readyVideo.id, "cue-ok"));
+
+  await coordinator.regenerateSubtitleAudioItem(readyVideo.id, {
+    ...request,
+    items: [items[0]],
+  });
+  const regenerated = coordinator.getSubtitleAudioItems(readyVideo.id);
+  assert.equal(regenerated.find((item) => item.id === "cue-fail")?.status, "completed");
+  assert.equal(regenerated.find((item) => item.id === "cue-fail")?.generatedText, items[0].text);
+
+  const editedItems = items.map((item) => item.id === "cue-ok"
+    ? { ...item, text: "Đã sửa nội dung, vẫn dùng audio cũ." }
+    : item);
+  coordinator.rebuildMasterFromSubtitleAudio(readyVideo.id, editedItems);
+  assert.equal(manager.getJob(readyVideo.id)?.masterGeneration?.status, "completed");
+  assert.ok(manager.getMasterAudioPath(readyVideo.id));
+  const editedAudio = coordinator.getSubtitleAudioItems(readyVideo.id)
+    .find((item) => item.id === "cue-ok");
+  assert.equal(editedAudio?.text, "Đã sửa nội dung, vẫn dùng audio cũ.");
+  assert.equal(editedAudio?.generatedText, items[1].text);
+});
+
 test("master HTTP API starts a job, reports progress, and streams WAV", async () => {
   const directory = await createTemporaryDirectory();
   const manager = new VideoDubbingManager({
@@ -458,6 +557,7 @@ test("master HTTP API starts a job, reports progress, and streams WAV", async ()
       });
       job.overallProgress.completed = job.items.length;
       job.overallProgress.percent = 100;
+      writeGeneratedItemAudio(job, workingDirectory);
       await fs.promises.writeFile(
         path.join(workingDirectory, "master.wav"),
         createWav(1.25),
@@ -531,6 +631,56 @@ test("master HTTP API starts a job, reports progress, and streams WAV", async ()
     assert.ok(Math.abs(readWavDuration(
       path.join(manager.getJobDirectory(readyVideo.id)!, "tts-master.wav"),
     ) - 1.25) < 1 / 22050);
+
+    const listResponse = await fetch(`${baseUrl}/subtitle-audio`);
+    assert.equal(listResponse.status, 200);
+    const audioItems = (await listResponse.json()).items;
+    assert.equal(audioItems.length, 1);
+    assert.equal(audioItems[0].status, "completed");
+    const cueAudioResponse = await fetch(new URL(audioItems[0].audioUrl, baseUrl));
+    assert.equal(cueAudioResponse.status, 200);
+    assert.match(cueAudioResponse.headers.get("content-type") || "", /audio\/wav/i);
+
+    const editedItem = {
+      id: "s1",
+      index: 1,
+      startTime: 0.2,
+      endTime: 1.2,
+      text: "Đã sửa nội dung câu.",
+    };
+    const syncResponse = await fetch(`${baseUrl}/subtitle-audio`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items: [editedItem] }),
+    });
+    assert.equal(syncResponse.status, 200);
+    const syncedItems = (await syncResponse.json()).items;
+    assert.equal(syncedItems[0].text, editedItem.text);
+    assert.equal(syncedItems[0].generatedText, "Tạo Master qua API.");
+
+    const regenerateResponse = await fetch(
+      `${baseUrl}/subtitle-audio/s1/regenerate`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          items: [editedItem],
+          model: "local:piper-a",
+          options: { minSpeed: 0.8, maxSpeed: 1.5, speedPriority: "balanced" },
+        }),
+      },
+    );
+    assert.equal(regenerateResponse.status, 200);
+    const regeneratedItems = (await regenerateResponse.json()).items;
+    assert.equal(regeneratedItems[0].generatedText, editedItem.text);
+
+    const rebuildResponse = await fetch(`${baseUrl}/subtitle-audio/master`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items: [editedItem] }),
+    });
+    assert.equal(rebuildResponse.status, 200);
+    assert.equal((await rebuildResponse.json()).job.masterGeneration.status, "completed");
   } finally {
     server.closeAllConnections();
     await new Promise<void>((resolve, reject) => {

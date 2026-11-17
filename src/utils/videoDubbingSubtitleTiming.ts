@@ -2,6 +2,16 @@ import type { VideoDubbingSubtitleCue } from "../types/videoDubbing";
 
 export type SubtitleTimingField = "start" | "end" | "move";
 
+export function adjustSubtitleTimelineZoom(
+  currentZoom: number,
+  direction: "in" | "out",
+  minimumZoom: number,
+  maximumZoom = 180,
+): number {
+  const scale = direction === "in" ? 1.15 : 1 / 1.15;
+  return Math.max(minimumZoom, Math.min(maximumZoom, currentZoom * scale));
+}
+
 export function adjustSubtitleCueTimings(
   cues: VideoDubbingSubtitleCue[],
   field: SubtitleTimingField,

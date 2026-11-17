@@ -83,12 +83,16 @@ export type VideoDubbingExportQuality = "source" | "low" | "medium" | "high";
 export type VideoDubbingTextAlignment = "left" | "center" | "right";
 
 export interface VideoDubbingSubtitleCue {
+  id?: string;
   startTime: number;
   endTime: number;
   text: string;
 }
 
 export interface VideoDubbingTextOverlayCue extends VideoDubbingSubtitleCue {
+  kind?: "text" | "character-card";
+  characterRole?: string;
+  characterRoleFontSize?: number;
   extendToVideoEnd?: boolean;
   isTitle?: boolean;
   enabled?: boolean;
@@ -115,8 +119,25 @@ export interface VideoDubbingTextOverlayCue extends VideoDubbingSubtitleCue {
   paddingPx: number;
 }
 
+export type VideoDubbingEndSceneAspectRatio =
+  | "16:9"
+  | "9:16"
+  | "1:1"
+  | "4:3"
+  | "21:9";
+
+export interface VideoDubbingEndSceneSettings {
+  enabled: boolean;
+  durationSeconds: number;
+  aspectRatio: VideoDubbingEndSceneAspectRatio;
+  textOverlays: VideoDubbingTextOverlayCue[];
+}
+
 export interface VideoDubbingOverlaySettings {
   exportQuality?: VideoDubbingExportQuality;
+  coverEnabled?: boolean;
+  coverFileName?: string;
+  coverFrameCount?: number;
   logoEnabled: boolean;
   logoFileName?: string;
   logoWidthPercent: number;
@@ -125,6 +146,7 @@ export interface VideoDubbingOverlaySettings {
   subtitlesEnabled: boolean;
   subtitles: VideoDubbingSubtitleCue[];
   textOverlays?: VideoDubbingTextOverlayCue[];
+  endScene?: VideoDubbingEndSceneSettings;
   subtitleFontSize: number;
   subtitleFontFamily: string;
   subtitleColor: string;

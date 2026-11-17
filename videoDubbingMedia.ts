@@ -20,6 +20,8 @@ import {
   VideoDubbingOverlayPosition,
   VideoDubbingOverlaySettings,
   VideoDubbingSubtitleCue,
+  VideoDubbingEndSceneAspectRatio,
+  VideoDubbingEndSceneSettings,
   VideoDubbingTextOverlayCue,
 } from "./src/types/videoDubbing";
 import { VideoDubbingManager } from "./videoDubbingManager";
@@ -39,6 +41,8 @@ const VIDEO_EXPORT_PREPARATION_PROGRESS = 10;
 const VIDEO_EXPORT_FFMPEG_PROGRESS_SPAN = 84;
 const DEFAULT_OVERLAY_SETTINGS: VideoDubbingOverlaySettings = {
   exportQuality: "high",
+  coverEnabled: false,
+  coverFrameCount: 5,
   logoEnabled: false,
   logoWidthPercent: 15,
   logoPaddingPx: 24,
@@ -46,6 +50,12 @@ const DEFAULT_OVERLAY_SETTINGS: VideoDubbingOverlaySettings = {
   subtitlesEnabled: false,
   subtitles: [],
   textOverlays: [],
+  endScene: {
+    enabled: false,
+    durationSeconds: 5,
+    aspectRatio: "16:9",
+    textOverlays: [],
+  },
   subtitleFontSize: 32,
   subtitleFontFamily: "Arial",
   subtitleColor: "#ffffff",
@@ -78,6 +88,13 @@ const OVERLAY_POSITIONS = new Set<VideoDubbingOverlayPosition>([
   "bottom-left",
   "bottom-center",
   "bottom-right",
+]);
+const END_SCENE_ASPECT_RATIOS = new Set([
+  "16:9",
+  "9:16",
+  "1:1",
+  "4:3",
+  "21:9",
 ]);
 
 interface ProbeStream {
@@ -278,6 +295,9 @@ export class VideoDubbingMediaCoordinator {
     this.assertNoActiveTask(jobId);
     const mixedAudioPath = this.requireMixedAudio(jobId, job);
     const settings = this.validateOverlaySettings(input, job);
+    if (settings.coverEnabled && !this.manager.getOverlayCoverPath(jobId)) {
+      throw new Error("Hãy chọn và tải ảnh cover lên trước khi bật cover đầu video.");
+    }
     if (settings.logoEnabled && !this.manager.getOverlayLogoPath(jobId)) {
       throw new Error("Hãy chọn và tải logo lên trước khi bật chèn logo.");
     }
@@ -290,12 +310,16 @@ export class VideoDubbingMediaCoordinator {
     const task = this.createTask(jobId, "videoExport", {
       status: "running",
       phase:
-        settings.logoEnabled || settings.subtitlesEnabled || Boolean(settings.textOverlays?.length) || settings.exportQuality === "low" || settings.exportQuality === "medium"
+        settings.coverEnabled || settings.logoEnabled || settings.subtitlesEnabled || Boolean(settings.textOverlays?.length) || settings.endScene?.enabled || settings.exportQuality === "low" || settings.exportQuality === "medium"
           ? "rendering"
           : "remuxing",
       progressPercent: 0,
-      detail: settings.subtitlesEnabled
+      detail: settings.endScene?.enabled
+        ? "Đang chuẩn bị render End Scene và các overlay"
+        : settings.subtitlesEnabled
         ? "Đang chuẩn bị Chromium render phụ đề trong suốt"
+        : settings.coverEnabled
+          ? "Đang chuẩn bị ghép cover vào các frame đầu video"
         : settings.logoEnabled
           ? "Đang chuẩn bị ghép logo và mã hóa video"
           : "Đang remux video và audio final mix",
@@ -315,10 +339,44 @@ export class VideoDubbingMediaCoordinator {
     return { ...task };
   }
 
+  startUpdateRenderedAudio(jobId: string): VideoDubbingMediaTask {
+    const job = this.requireReadyJob(jobId);
+    this.assertNoActiveTask(jobId);
+    const renderedVideoPath = this.getVideoExportPath(jobId);
+    if (!renderedVideoPath) {
+      throw new Error("Hãy render video trước khi cập nhật audio MP4.");
+    }
+    const mixedAudioPath = this.requireMixedAudio(jobId, job);
+    const previous = job.videoExport;
+    const startedAtMs = Date.now();
+    const task = this.createTask(jobId, "videoExport", {
+      status: "running",
+      phase: "remuxing",
+      progressPercent: 0,
+      detail: "Đang thay audio trong MP4 đã render, giữ nguyên hình ảnh",
+      startedAtMs,
+      completedAtMs: undefined,
+      elapsedSeconds: 0,
+      durationSeconds: previous?.durationSeconds,
+      sizeBytes: previous?.sizeBytes,
+    });
+    const active = this.registerTask(jobId, "videoExport");
+    active.operation = this.runUpdateRenderedAudio(
+      job,
+      active,
+      renderedVideoPath,
+      mixedAudioPath,
+    );
+    return { ...task };
+  }
+
   saveOverlaySettings(jobId: string, input: unknown): VideoDubbingJob {
     const job = this.requireReadyJob(jobId);
     this.assertNoActiveTask(jobId);
     const settings = this.validateOverlaySettings(input, job);
+    if (settings.coverEnabled && !this.manager.getOverlayCoverPath(jobId)) {
+      throw new Error("Hãy tải ảnh cover vào job trước khi bật cover đầu video.");
+    }
     if (settings.logoEnabled && !this.manager.getOverlayLogoPath(jobId)) {
       throw new Error("Hãy tải logo vào job trước khi bật chèn logo.");
     }
@@ -373,6 +431,63 @@ export class VideoDubbingMediaCoordinator {
       await fs.promises.rm(temporaryPath, { force: true });
       throw error;
     }
+  }
+
+  async uploadCover(
+    jobId: string,
+    request: Readable,
+    extensionInput: unknown,
+  ): Promise<VideoDubbingJob> {
+    this.requireReadyJob(jobId);
+    this.assertNoActiveTask(jobId);
+    const extension = typeof extensionInput === "string" ? extensionInput.toLowerCase() : "";
+    if (![".png", ".jpg", ".jpeg", ".webp"].includes(extension)) {
+      throw new Error("Ảnh cover chỉ hỗ trợ PNG, JPG hoặc WebP.");
+    }
+    const directory = this.requireDirectory(jobId);
+    const temporaryPath = path.join(
+      directory,
+      `.overlay-cover-${randomBytes(8).toString("hex")}.upload`,
+    );
+    let receivedBytes = 0;
+    try {
+      const sizeLimiter = new Transform({
+        transform(chunk: Buffer, _encoding, callback) {
+          receivedBytes += chunk.length;
+          if (receivedBytes > MAX_LOGO_BYTES) {
+            callback(new Error("Ảnh cover vượt quá giới hạn 20 MB."));
+            return;
+          }
+          callback(null, chunk);
+        },
+      });
+      await pipeline(
+        request,
+        sizeLimiter,
+        fs.createWriteStream(temporaryPath, { flags: "wx" }),
+      );
+      if (receivedBytes === 0) throw new Error("Tệp ảnh cover rỗng.");
+      this.assertLogoImage(temporaryPath, extension, "Ảnh cover");
+      const fileName = `overlay-cover${extension}`;
+      const targetPath = path.join(directory, fileName);
+      this.publishFile(temporaryPath, targetPath, directory);
+      this.manager.setOverlayCover(jobId, fileName);
+      return this.manager.getJob(jobId)!;
+    } catch (error) {
+      await fs.promises.rm(temporaryPath, { force: true });
+      throw error;
+    }
+  }
+
+  removeCover(jobId: string): VideoDubbingJob {
+    this.requireReadyJob(jobId);
+    this.assertNoActiveTask(jobId);
+    this.manager.setOverlayCover(jobId, undefined);
+    return this.manager.getJob(jobId)!;
+  }
+
+  getCoverPath(jobId: string): string | null {
+    return this.manager.getOverlayCoverPath(jobId);
   }
 
   async uploadProjectLogo(
@@ -769,6 +884,19 @@ export class VideoDubbingMediaCoordinator {
       }
       return selected as VideoDubbingOverlayPosition;
     };
+    const coverEnabled = values.coverEnabled ?? saved.coverEnabled ?? false;
+    if (typeof coverEnabled !== "boolean") {
+      throw new Error("Trạng thái cover không hợp lệ.");
+    }
+    const coverFrameCount = numberInRange(
+      values.coverFrameCount ?? saved.coverFrameCount ?? 5,
+      5,
+      10,
+      "Số frame cover",
+    );
+    if (!Number.isSafeInteger(coverFrameCount)) {
+      throw new Error("Số frame cover phải là số nguyên từ 5 đến 10.");
+    }
     const logoEnabled = values.logoEnabled ?? saved.logoEnabled;
     const subtitlesEnabled = values.subtitlesEnabled ?? saved.subtitlesEnabled;
     if (typeof logoEnabled !== "boolean" || typeof subtitlesEnabled !== "boolean") {
@@ -845,58 +973,118 @@ export class VideoDubbingMediaCoordinator {
         text: values.text,
       };
     });
-    const inputTextOverlays = values.textOverlays ?? saved.textOverlays ?? [];
-    if (!Array.isArray(inputTextOverlays) || inputTextOverlays.length > 1_000) {
-      throw new Error("Danh sách text timeline không hợp lệ hoặc vượt quá 1.000 clip.");
-    }
-    const textOverlays: VideoDubbingTextOverlayCue[] = inputTextOverlays.map((cue) => {
-      if (!cue || typeof cue !== "object") throw new Error("Text clip không hợp lệ.");
-      const item = cue as Record<string, unknown>;
-      if (typeof item.text !== "string" || item.text.length > 10_000) throw new Error("Nội dung text clip không hợp lệ.");
-      if (typeof item.fontFamily !== "string" || !getSupportedSubtitleFontFamilies().has(item.fontFamily)) throw new Error("Font text clip không được hỗ trợ.");
-      if (item.textAlign !== undefined && item.textAlign !== "left" && item.textAlign !== "center" && item.textAlign !== "right") {
-        throw new Error("Căn chỉnh text không hợp lệ.");
+    const normalizeTextOverlays = (
+      inputTextOverlays: unknown,
+      maximumDuration: number,
+      label: string,
+    ): VideoDubbingTextOverlayCue[] => {
+      if (!Array.isArray(inputTextOverlays) || inputTextOverlays.length > 1_000) {
+        throw new Error(`Danh sách ${label} không hợp lệ hoặc vượt quá 1.000 clip.`);
       }
-      return {
-        startTime: numberInRange(item.startTime, 0, job.metadata!.durationSeconds, "Thời điểm bắt đầu text"),
-        endTime: numberInRange(item.endTime, 0, job.metadata!.durationSeconds, "Thời điểm kết thúc text"),
-        text: item.text,
-        trackId: typeof item.trackId === "string" && item.trackId.length <= 100
-          ? item.trackId
-          : undefined,
-        extendToVideoEnd: booleanValue(item.extendToVideoEnd, false, "Hiển thị text đến hết video"),
-        isTitle: booleanValue(item.isTitle, false, "Text tiêu đề"),
-        enabled: booleanValue(item.enabled, true, "Trạng thái tiêu đề"),
-        textAlign: item.textAlign === "left" || item.textAlign === "center" || item.textAlign === "right"
-          ? item.textAlign
-          : undefined,
-        fontSize: numberInRange(item.fontSize, 8, 160, "Cỡ chữ text"),
-        fontFamily: item.fontFamily,
-        color: color(item.color, "#ffffff", "Màu chữ text"),
-        bold: booleanValue(item.bold, false, "Text đậm"),
-        italic: booleanValue(item.italic, false, "Text nghiêng"),
-        underline: booleanValue(item.underline, false, "Text gạch chân"),
-        textCase: textCaseValue(item.textCase, "none", "Kiểu chữ text"),
-        outlineEnabled: booleanValue(item.outlineEnabled, false, "Outline text"),
-        outlineColor: color(item.outlineColor, "#000000", "Màu outline text"),
-        outlineWidthPx: numberInRange(item.outlineWidthPx ?? 2, 0, 8, "Độ dày outline text"),
-        characterSpacingPx: numberInRange(item.characterSpacingPx ?? 0, 0, 40, "Giãn ký tự text"),
-        lineSpacingPx: numberInRange(item.lineSpacingPx ?? 0, 0, 80, "Giãn dòng text"),
-        position: position(item.position, "middle-center", "Vị trí text"),
-        xPercent: item.xPercent === undefined
-          ? undefined
-          : numberInRange(item.xPercent, 0, 100, "Tọa độ ngang text"),
-        yPercent: item.yPercent === undefined
-          ? undefined
-          : numberInRange(item.yPercent, 0, 100, "Tọa độ dọc text"),
-        backgroundColor: color(item.backgroundColor, "#000000", "Màu nền text"),
-        backgroundTransparent: booleanValue(item.backgroundTransparent, true, "Nền text trong suốt"),
-        paddingPx: numberInRange(item.paddingPx, 0, 40, "Padding text"),
-      };
-    });
-    if (textOverlays.some((cue) => cue.endTime <= cue.startTime)) throw new Error("Thời điểm kết thúc text phải sau thời điểm bắt đầu.");
+      const normalized: VideoDubbingTextOverlayCue[] = inputTextOverlays.map((cue): VideoDubbingTextOverlayCue => {
+        if (!cue || typeof cue !== "object") throw new Error("Text clip không hợp lệ.");
+        const item = cue as Record<string, unknown>;
+        if (typeof item.text !== "string" || item.text.length > 10_000) throw new Error("Nội dung text clip không hợp lệ.");
+        if (item.kind !== undefined && item.kind !== "text" && item.kind !== "character-card") {
+          throw new Error("Loại text clip không hợp lệ.");
+        }
+        if (item.characterRole !== undefined && (typeof item.characterRole !== "string" || item.characterRole.length > 10_000)) {
+          throw new Error("Chức vụ trong card nhân vật không hợp lệ.");
+        }
+        if (typeof item.fontFamily !== "string" || !getSupportedSubtitleFontFamilies().has(item.fontFamily)) throw new Error("Font text clip không được hỗ trợ.");
+        if (item.textAlign !== undefined && item.textAlign !== "left" && item.textAlign !== "center" && item.textAlign !== "right") {
+          throw new Error("Căn chỉnh text không hợp lệ.");
+        }
+        const startTime = numberInRange(item.startTime, 0, maximumDuration, `Thời điểm bắt đầu ${label}`);
+        const endTime = numberInRange(item.endTime, 0, maximumDuration, `Thời điểm kết thúc ${label}`);
+        if (endTime <= startTime) throw new Error("Thời điểm kết thúc text phải sau thời điểm bắt đầu.");
+        return {
+          kind: item.kind === "character-card" ? "character-card" : "text",
+          characterRole: item.kind === "character-card"
+            ? typeof item.characterRole === "string" ? item.characterRole : ""
+            : undefined,
+          characterRoleFontSize: item.kind === "character-card"
+            ? numberInRange(item.characterRoleFontSize ?? Math.max(8, Math.round(Number(item.fontSize) * 0.7)), 8, 160, "Cỡ chữ chức vụ")
+            : undefined,
+          startTime,
+          endTime,
+          text: item.text,
+          trackId: typeof item.trackId === "string" && item.trackId.length <= 100
+            ? item.trackId
+            : undefined,
+          extendToVideoEnd: booleanValue(item.extendToVideoEnd, false, "Hiển thị text đến hết video"),
+          isTitle: booleanValue(item.isTitle, false, "Text tiêu đề"),
+          enabled: booleanValue(item.enabled, true, "Trạng thái tiêu đề"),
+          textAlign: item.textAlign === "left" || item.textAlign === "center" || item.textAlign === "right"
+            ? item.textAlign
+            : undefined,
+          fontSize: numberInRange(item.fontSize, 8, 160, "Cỡ chữ text"),
+          fontFamily: item.fontFamily,
+          color: color(item.color, "#ffffff", "Màu chữ text"),
+          bold: booleanValue(item.bold, false, "Text đậm"),
+          italic: booleanValue(item.italic, false, "Text nghiêng"),
+          underline: booleanValue(item.underline, false, "Text gạch chân"),
+          textCase: textCaseValue(item.textCase, "none", "Kiểu chữ text"),
+          outlineEnabled: booleanValue(item.outlineEnabled, false, "Outline text"),
+          outlineColor: color(item.outlineColor, "#000000", "Màu outline text"),
+          outlineWidthPx: numberInRange(item.outlineWidthPx ?? 2, 0, 8, "Độ dày outline text"),
+          characterSpacingPx: numberInRange(item.characterSpacingPx ?? 0, 0, 40, "Giãn ký tự text"),
+          lineSpacingPx: numberInRange(item.lineSpacingPx ?? 0, 0, 80, "Giãn dòng text"),
+          position: position(item.position, "middle-center", "Vị trí text"),
+          xPercent: item.xPercent === undefined
+            ? undefined
+            : numberInRange(item.xPercent, 0, 100, "Tọa độ ngang text"),
+          yPercent: item.yPercent === undefined
+            ? undefined
+            : numberInRange(item.yPercent, 0, 100, "Tọa độ dọc text"),
+          backgroundColor: color(item.backgroundColor, "#000000", "Màu nền text"),
+          backgroundTransparent: booleanValue(item.backgroundTransparent, true, "Nền text trong suốt"),
+          paddingPx: numberInRange(item.paddingPx, 0, 40, "Padding text"),
+        };
+      });
+      return normalized;
+    };
+    const textOverlays = normalizeTextOverlays(
+      values.textOverlays ?? saved.textOverlays ?? [],
+      job.metadata!.durationSeconds,
+      "text timeline",
+    );
+    const inputEndScene = values.endScene ?? saved.endScene ?? {
+      enabled: false,
+      durationSeconds: 5,
+      textOverlays: [],
+    };
+    if (!inputEndScene || typeof inputEndScene !== "object" || Array.isArray(inputEndScene)) {
+      throw new Error("Cấu hình End Scene không hợp lệ.");
+    }
+    const endSceneInput = inputEndScene as Record<string, unknown>;
+    const endSceneAspectRatio = endSceneInput.aspectRatio ?? "16:9";
+    if (
+      typeof endSceneAspectRatio !== "string" ||
+      !END_SCENE_ASPECT_RATIOS.has(endSceneAspectRatio)
+    ) {
+      throw new Error("Tỉ lệ khung hình End Scene không hợp lệ.");
+    }
+    const endScene: VideoDubbingEndSceneSettings = {
+      enabled: booleanValue(endSceneInput.enabled, false, "Trạng thái End Scene"),
+      durationSeconds: numberInRange(
+        endSceneInput.durationSeconds ?? 5,
+        1,
+        120,
+        "Thời lượng End Scene",
+      ),
+      aspectRatio: endSceneAspectRatio as VideoDubbingEndSceneAspectRatio,
+      textOverlays: normalizeTextOverlays(
+        endSceneInput.textOverlays ?? [],
+        numberInRange(endSceneInput.durationSeconds ?? 5, 1, 120, "Thời lượng End Scene"),
+        "text End Scene",
+      ),
+    };
     return {
       exportQuality: exportQualityValue as VideoDubbingExportQuality,
+      coverEnabled,
+      coverFileName: saved.coverFileName,
+      coverFrameCount,
       logoEnabled,
       logoFileName: saved.logoFileName,
       logoWidthPercent: numberInRange(
@@ -919,6 +1107,7 @@ export class VideoDubbingMediaCoordinator {
       subtitlesEnabled,
       subtitles,
       textOverlays,
+      endScene,
       subtitleFontSize: numberInRange(
         values.subtitleFontSize ?? saved.subtitleFontSize,
         12,
@@ -1003,7 +1192,7 @@ export class VideoDubbingMediaCoordinator {
     };
   }
 
-  private assertLogoImage(filePath: string, extension: string): void {
+  private assertLogoImage(filePath: string, extension: string, label = "Logo"): void {
     const header = Buffer.alloc(12);
     const descriptor = fs.openSync(filePath, "r");
     try {
@@ -1023,7 +1212,7 @@ export class VideoDubbingMediaCoordinator {
       (extension === ".webp" &&
         header.toString("ascii", 0, 4) === "RIFF" &&
         header.toString("ascii", 8, 12) === "WEBP");
-    if (!valid) throw new Error("Nội dung tệp không khớp định dạng logo đã chọn.");
+    if (!valid) throw new Error(`Nội dung tệp không khớp định dạng ${label.toLowerCase()} đã chọn.`);
   }
 
   private overlayCoordinates(
@@ -1194,7 +1383,7 @@ export class VideoDubbingMediaCoordinator {
 
   private updateVideoExportProgress(
     active: ActiveTask,
-    phase: "rendering" | "validating",
+    phase: "rendering" | "remuxing" | "validating",
     progressPercent: number,
     detail: string,
   ): void {
@@ -1739,6 +1928,26 @@ export class VideoDubbingMediaCoordinator {
     settings: VideoDubbingOverlaySettings,
     directory: string,
   ): Promise<SubtitlePngOverlay[]> {
+    const sourceDuration = job.metadata!.durationSeconds;
+    const endSceneEnabled = Boolean(settings.endScene?.enabled);
+    const outputDuration = sourceDuration +
+      (endSceneEnabled ? settings.endScene!.durationSeconds : 0);
+    const exportTextOverlays = [
+      ...(settings.textOverlays ?? [])
+        .filter((cue) => cue.enabled !== false)
+        .map((cue) =>
+        endSceneEnabled && (cue.isTitle || cue.extendToVideoEnd)
+          ? { ...cue, endTime: outputDuration }
+          : cue,
+        ),
+      ...(endSceneEnabled
+        ? settings.endScene!.textOverlays.map((cue) => ({
+            ...cue,
+            startTime: sourceDuration + cue.startTime,
+            endTime: sourceDuration + cue.endTime,
+          }))
+        : []),
+    ];
     const renderItems = [
       ...(settings.subtitlesEnabled ? settings.subtitles.map((cue) => ({
         cue,
@@ -1767,10 +1976,11 @@ export class VideoDubbingMediaCoordinator {
           wrap: true,
         },
       })) : []),
-      ...(settings.textOverlays ?? []).map((cue) => ({
+      ...exportTextOverlays.map((cue) => ({
         cue,
         style: {
           fontSize: cue.fontSize,
+          secondaryFontSize: cue.characterRoleFontSize,
           fontFamily: cue.fontFamily,
           color: cue.color,
           bold: cue.bold,
@@ -1843,7 +2053,9 @@ export class VideoDubbingMediaCoordinator {
         const horizontal = style.position.endsWith("-left") ? "flex-start" : style.position.endsWith("-right") ? "flex-end" : "center";
         const vertical = style.position.startsWith("top-") ? "flex-start" : style.position.startsWith("bottom-") ? "flex-end" : "center";
         const cacheKey = [
-          cue.text, style.fontSize, style.fontFamily, style.color,
+          cue.text, "characterRole" in cue ? cue.characterRole : undefined,
+          style.fontSize, "secondaryFontSize" in style ? style.secondaryFontSize : undefined,
+          style.fontFamily, style.color,
           style.backgroundMode, style.backgroundColor, style.backgroundImage,
           style.backgroundTransparent, style.position, style.xPercent, style.yPercent,
           style.paddingPx, style.marginPx,
@@ -1855,6 +2067,8 @@ export class VideoDubbingMediaCoordinator {
         if (!imageCache.has(cacheKey)) {
           const subtitle = renderToStaticMarkup(React.createElement(SubtitleOverlayRenderer, {
             text: cue.text,
+            secondaryText: "characterRole" in cue ? cue.characterRole : undefined,
+            secondaryFontSize: "secondaryFontSize" in style ? style.secondaryFontSize : undefined,
             scale: 1,
             fontSize: style.fontSize,
             fontFamily: style.fontFamily,
@@ -1983,19 +2197,45 @@ export class VideoDubbingMediaCoordinator {
     const directory = this.requireDirectory(active.jobId);
     const tempOutput = path.join(directory, `.output-${randomBytes(8).toString("hex")}.mp4`);
     active.temporaryFiles.add(tempOutput);
-    const duration = job.metadata!.durationSeconds;
+    const sourceDuration = job.metadata!.durationSeconds;
+    const endSceneEnabled = Boolean(settings.endScene?.enabled);
+    const endSceneDuration = endSceneEnabled
+      ? settings.endScene!.durationSeconds
+      : 0;
+    const duration = sourceDuration + endSceneDuration;
     const finalMixInput = path.extname(mixedAudioPath).toLowerCase() === ".wav";
-    const renderVideo = settings.logoEnabled || settings.subtitlesEnabled || Boolean(settings.textOverlays?.length);
+    const renderVideo = Boolean(settings.coverEnabled) || settings.logoEnabled || settings.subtitlesEnabled || Boolean(settings.textOverlays?.length) || endSceneEnabled;
     const encodeForQuality = settings.exportQuality === "low" || settings.exportQuality === "medium";
     const encodeVideo = renderVideo || encodeForQuality;
     const logoPath = settings.logoEnabled ? this.manager.getOverlayLogoPath(active.jobId) : null;
-    const audioCodecArgs = finalMixInput
-      ? ["-c:a", "aac", "-b:a", "192k", "-ar", String(AUDIO_SAMPLE_RATE), "-ac", "2"]
-      : ["-c:a", "copy"];
+    const coverPath = settings.coverEnabled ? this.manager.getOverlayCoverPath(active.jobId) : null;
+    const audioCodecArgs = [
+      ...(endSceneEnabled ? ["-af", `apad=pad_dur=${endSceneDuration}`] : []),
+      ...(finalMixInput || endSceneEnabled
+        ? ["-c:a", "aac", "-b:a", "192k", "-ar", String(AUDIO_SAMPLE_RATE), "-ac", "2"]
+        : ["-c:a", "copy"]),
+    ];
 
     try {
+      if (settings.coverEnabled && !coverPath) {
+        throw new Error("Không tìm thấy ảnh cover trong thư mục job.");
+      }
       if (settings.logoEnabled && !logoPath) {
         throw new Error("Không tìm thấy logo trong thư mục job.");
+      }
+
+      let coverInputPath = coverPath;
+      if (coverPath) {
+        coverInputPath = path.join(
+          directory,
+          `.scaled-overlay-cover-${randomBytes(8).toString("hex")}.png`,
+        );
+        active.temporaryFiles.add(coverInputPath);
+        await sharp(coverPath)
+          .resize(job.metadata!.width, job.metadata!.height, { fit: "cover", position: "centre" })
+          .png()
+          .toFile(coverInputPath);
+        this.assertNotCancelled(active);
       }
 
       let logoInputPath = logoPath;
@@ -2015,12 +2255,14 @@ export class VideoDubbingMediaCoordinator {
       }
 
       let subtitleOverlays: SubtitlePngOverlay[] = [];
-      if (settings.subtitlesEnabled) {
+      if (settings.subtitlesEnabled || endSceneEnabled || Boolean(settings.textOverlays?.length)) {
         this.updateVideoExportProgress(
           active,
           "rendering",
           5,
-          "Đang chuẩn bị Chromium render phụ đề trong suốt",
+          endSceneEnabled
+            ? "Đang chuẩn bị Chromium render End Scene và text overlay"
+            : "Đang chuẩn bị Chromium render phụ đề trong suốt",
         );
         subtitleOverlays = await this.createTransparentSubtitleOverlay(active, job, settings, directory);
         this.assertNotCancelled(active);
@@ -2035,7 +2277,7 @@ export class VideoDubbingMediaCoordinator {
       const sourceVideoStream = sourceProbe?.streams?.find((stream) => stream.codec_type === "video");
       const sourceCodec = sourceVideoStream?.codec_name || job.metadata!.videoCodec;
       const sourceBitrate = Number(sourceVideoStream?.bit_rate) ||
-        Math.max(250_000, Math.round((job.sizeBytes * 8 / duration) * 0.94));
+        Math.max(250_000, Math.round((job.sizeBytes * 8 / sourceDuration) * 0.94));
       const bitrateMultiplier = settings.exportQuality === "low" ? 0.7 : settings.exportQuality === "medium" ? 0.9 : 1;
       const targetVideoBitrate = Math.max(250_000, Math.round(sourceBitrate * bitrateMultiplier / 10_000) * 10_000);
       const useHevc = sourceCodec === "hevc" || sourceCodec === "h265";
@@ -2047,14 +2289,23 @@ export class VideoDubbingMediaCoordinator {
         ? ["-init_hw_device", "qsv:hw,child_device_type=d3d11va"]
         : [];
       const ffmpegArgs = ["-y", ...qsvDeviceArgs, "-i", this.requireVideoPath(active.jobId), "-i", mixedAudioPath];
+      let nextInputIndex = 2;
+      let coverInputIndex: number | null = null;
+      if (coverInputPath) {
+        coverInputIndex = nextInputIndex++;
+        const frameRate = job.metadata!.frameRate && Number.isFinite(job.metadata!.frameRate)
+          ? job.metadata!.frameRate
+          : 25;
+        ffmpegArgs.push("-loop", "1", "-framerate", String(frameRate), "-i", coverInputPath);
+      }
       let logoInputIndex: number | null = null;
       if (logoInputPath) {
-        logoInputIndex = 2;
+        logoInputIndex = nextInputIndex++;
         ffmpegArgs.push("-loop", "1", "-i", logoInputPath);
       }
       let subtitleInputIndex: number | null = null;
       if (subtitleOverlayStream) {
-        subtitleInputIndex = 2 + (logoInputPath ? 1 : 0);
+        subtitleInputIndex = nextInputIndex;
         ffmpegArgs.push(
           "-f", "rawvideo",
           "-pixel_format", "rgba",
@@ -2067,6 +2318,19 @@ export class VideoDubbingMediaCoordinator {
 
       const filters: string[] = [];
       let videoLabel = "0:v:0";
+      if (endSceneEnabled) {
+        filters.push(
+          `[${videoLabel}]tpad=stop_mode=add:stop_duration=${endSceneDuration}:color=black[v_end_scene]`,
+        );
+        videoLabel = "v_end_scene";
+      }
+      if (coverPath && coverInputIndex !== null) {
+        filters.push(`[${coverInputIndex}:v:0]format=rgba[cover]`);
+        filters.push(
+          `[${videoLabel}][cover]overlay=x=0:y=0:format=auto:eof_action=repeat:shortest=0:enable='lt(n,${settings.coverFrameCount ?? 5})'[v_cover]`,
+        );
+        videoLabel = "v_cover";
+      }
       if (logoPath) {
         const { x, y } = this.overlayCoordinates(settings.logoPosition, settings.logoPaddingPx);
         filters.push(`[${logoInputIndex}:v:0]format=rgba[scaledlogo]`);
@@ -2139,6 +2403,10 @@ export class VideoDubbingMediaCoordinator {
         VIDEO_EXPORT_PREPARATION_PROGRESS,
         settings.subtitlesEnabled
           ? "Đang composite overlay phụ đề và logo lên video gốc"
+          : endSceneEnabled
+            ? "Đang thêm End Scene và composite logo/text"
+          : coverPath
+            ? "Đang ghép ảnh cover vào các frame đầu video"
           : logoPath
             ? "Đang composite logo lên video gốc"
             : encodeForQuality
@@ -2238,6 +2506,131 @@ export class VideoDubbingMediaCoordinator {
       } catch (error) {
         console.error("[VideoDubbing] Không thể dọn các bản export cũ:", error);
       }
+    } catch (error) {
+      this.failOrCancel(active, error);
+    } finally {
+      await this.cleanup(active);
+    }
+  }
+
+  private async runUpdateRenderedAudio(
+    job: VideoDubbingJob,
+    active: ActiveTask,
+    renderedVideoPath: string,
+    mixedAudioPath: string,
+  ): Promise<void> {
+    const directory = this.requireDirectory(active.jobId);
+    const tempOutput = path.join(
+      directory,
+      `.audio-update-${randomBytes(8).toString("hex")}.mp4`,
+    );
+    active.temporaryFiles.add(tempOutput);
+    const duration = job.metadata!.durationSeconds;
+
+    try {
+      this.updateVideoExportProgress(
+        active,
+        "remuxing",
+        5,
+        "Đang thay audio, không mã hóa lại hình ảnh",
+      );
+      await this.runFfmpeg(
+        active,
+        [
+          "-y",
+          "-i",
+          renderedVideoPath,
+          "-i",
+          mixedAudioPath,
+          "-map",
+          "0:v:0",
+          "-map",
+          "1:a:0",
+          "-map_metadata",
+          "0",
+          "-map_chapters",
+          "0",
+          "-c:v",
+          "copy",
+          "-c:a",
+          "aac",
+          "-b:a",
+          "192k",
+          "-ar",
+          String(AUDIO_SAMPLE_RATE),
+          "-ac",
+          "2",
+          "-t",
+          String(duration),
+          "-movflags",
+          "+faststart",
+          tempOutput,
+        ],
+        duration,
+        "remuxing",
+        5,
+        85,
+      );
+      this.assertNotCancelled(active);
+      this.createTask(active.jobId, active.kind, {
+        ...(this.getTask(active.jobId, active.kind) as VideoDubbingMediaTask),
+        status: "running",
+        phase: "validating",
+        progressPercent: 95,
+        detail: "Đang xác minh MP4 sau khi thay audio",
+      });
+      this.assertOutputExists(tempOutput, "FFmpeg không tạo được MP4 sau khi cập nhật audio.");
+      const sourceProbe = await this.probe(renderedVideoPath, active);
+      this.assertNotCancelled(active);
+      const outputProbe = await this.probe(tempOutput, active);
+      this.assertNotCancelled(active);
+      const sourceVideo = sourceProbe.streams?.find(
+        (stream) => stream.codec_type === "video",
+      );
+      const outputVideo = outputProbe.streams?.find(
+        (stream) => stream.codec_type === "video",
+      );
+      const outputAudio = outputProbe.streams?.find(
+        (stream) => stream.codec_type === "audio",
+      );
+      const outputDuration = Number(outputProbe.format?.duration);
+      const durationTolerance = Math.max(
+        0.1,
+        job.metadata!.frameRate ? 2 / job.metadata!.frameRate : 0,
+      );
+      if (
+        !sourceVideo ||
+        !outputVideo ||
+        !outputAudio ||
+        sourceVideo.codec_name !== outputVideo.codec_name ||
+        sourceVideo.width !== outputVideo.width ||
+        sourceVideo.height !== outputVideo.height ||
+        !Number.isFinite(outputDuration) ||
+        Math.abs(outputDuration - duration) > durationTolerance
+      ) {
+        throw new Error(
+          "MP4 sau khi cập nhật audio không vượt qua xác minh stream video/audio hoặc thời lượng.",
+        );
+      }
+
+      const outputPath = renderedVideoPath;
+      this.publishFile(tempOutput, outputPath, directory);
+      active.temporaryFiles.delete(tempOutput);
+      const completedTask = this.getTask(
+        active.jobId,
+        active.kind,
+      ) as VideoDubbingMediaTask;
+      const completedAtMs = Date.now();
+      this.createTask(active.jobId, active.kind, {
+        ...completedTask,
+        status: "completed",
+        progressPercent: 100,
+        durationSeconds: outputDuration,
+        sizeBytes: fs.statSync(outputPath).size,
+        detail: "Đã cập nhật audio MP4; luồng hình ảnh được giữ nguyên",
+        completedAtMs,
+        elapsedSeconds: Math.max(0, (completedAtMs - (completedTask.startedAtMs || completedAtMs)) / 1000),
+      });
     } catch (error) {
       this.failOrCancel(active, error);
     } finally {

@@ -11,7 +11,12 @@ if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="backslashreplace")
 
 
+service_job_id = None
+
+
 def emit(value):
+    if service_job_id is not None:
+        value = {**value, "jobId": service_job_id}
     print(json.dumps(value, ensure_ascii=False), flush=True)
 
 
@@ -166,6 +171,105 @@ def recognize_batch(pipeline, candidates, confidence_threshold, converter):
         )
 
 
+def recognize_directml_candidates(ocr, candidates, confidence_threshold, converter):
+    crops = []
+    owners = []
+    for candidate in candidates:
+        candidate["recognized"] = []
+        for polygon, crop in zip(
+            candidate["polygons"],
+            ocr.crop_text_regions(candidate["image"], candidate["polygons"]),
+        ):
+            if crop is None or not crop.size:
+                continue
+            points = polygon.tolist() if hasattr(polygon, "tolist") else polygon
+            x = min(float(point[0]) for point in points)
+            y = sum(float(point[1]) for point in points) / len(points)
+            crops.append(crop)
+            owners.append((candidate, y, x))
+    if crops:
+        result = ocr.recognize_txt(crops)
+        texts = result.txts or ()
+        scores = result.scores or ()
+        for index, (candidate, y, x) in enumerate(owners):
+            try:
+                text = str(texts[index]).strip()
+                score = float(scores[index])
+            except (IndexError, TypeError, ValueError):
+                continue
+            if text and score >= confidence_threshold:
+                if converter:
+                    text = converter.convert(text)
+                candidate["recognized"].append((y, x, text, score))
+    for candidate in candidates:
+        candidate["recognized"].sort(key=lambda item: (item[0], item[1]))
+        candidate["text"] = "\n".join(item[2] for item in candidate["recognized"])
+        candidate["score"] = (
+            sum(item[3] for item in candidate["recognized"]) / len(candidate["recognized"])
+            if candidate["recognized"] else 0.0
+        )
+
+
+class DirectMLBackendError(RuntimeError):
+    pass
+
+
+def create_directml_ocr(options):
+    import onnxruntime
+    if "DmlExecutionProvider" not in onnxruntime.get_available_providers():
+        raise RuntimeError("ONNX Runtime không có DmlExecutionProvider.")
+
+    import rapidocr.inference_engine.onnxruntime.main as rapid_onnxruntime
+    from rapidocr import EngineType, LangCls, LangDet, LangRec, ModelType, OCRVersion, RapidOCR
+
+    original_session = rapid_onnxruntime.InferenceSession
+
+    def create_session(model_path, sess_options=None, providers=None):
+        session_options = sess_options or onnxruntime.SessionOptions()
+        session_options.enable_mem_pattern = False
+        session_options.execution_mode = onnxruntime.ExecutionMode.ORT_SEQUENTIAL
+        # RapidOCR can pass OmegaConf mappings, but ONNX Runtime expects plain dicts.
+        normalized_providers = [
+            (provider, dict(options))
+            if isinstance(provider, tuple)
+            else provider
+            for provider, options in (providers or [])
+        ]
+        session = original_session(model_path, sess_options=session_options, providers=normalized_providers)
+        active_providers = session.get_providers()
+        if not active_providers or active_providers[0] != "DmlExecutionProvider":
+            raise RuntimeError(f"DirectML không phải execution provider chính: {active_providers}")
+        return session
+
+    rapid_onnxruntime.InferenceSession = create_session
+    engine = RapidOCR(params={
+        "Global.model_root_dir": options["gpuModelRoot"],
+        "Global.use_cls": bool(options.get("angleClassification", False)),
+        "EngineConfig.onnxruntime.use_dml": True,
+        "EngineConfig.onnxruntime.dml_ep_cfg": {"device_id": 0},
+        "Det.engine_type": EngineType.ONNXRUNTIME,
+        "Det.lang_type": LangDet.MULTI,
+        "Det.model_type": ModelType.MOBILE,
+        "Det.ocr_version": OCRVersion.PPOCRV5,
+        "Det.limit_type": "max",
+        "Det.limit_side_len": 960,
+        "Cls.engine_type": EngineType.ONNXRUNTIME,
+        "Cls.lang_type": LangCls.CH,
+        "Cls.model_type": ModelType.MOBILE,
+        "Cls.ocr_version": OCRVersion.PPOCRV5,
+        "Rec.engine_type": EngineType.ONNXRUNTIME,
+        "Rec.lang_type": LangRec.CH,
+        "Rec.model_type": ModelType.MOBILE,
+        "Rec.ocr_version": OCRVersion.PPOCRV5,
+        "Rec.rec_batch_num": 24,
+    })
+    engine._load_det_model()
+    engine._load_rec_model()
+    if options.get("angleClassification"):
+        engine._load_cls_model()
+    return engine
+
+
 def normalize(text):
     return re.sub(r"\s+", "", text).strip()
 
@@ -232,37 +336,50 @@ def build_cues(observations, duration, interval, similarity_threshold, max_merge
     return cues
 
 
-def main():
-    if len(sys.argv) != 5:
-        raise RuntimeError("Usage: worker.py VIDEO DET_MODEL REC_MODEL OPTIONS_JSON")
-    video_path, detection_model, recognition_model = sys.argv[1:4]
-    options = json.loads(sys.argv[4])
+def create_ocr_engine(detection_model, recognition_model, options):
+    backend = options.get("backend", "cpu")
+    if backend == "directml":
+        emit({"type": "progress", "processed": 0, "total": 0, "message": "Đang nạp RapidOCR DirectML…"})
+        try:
+            engine = create_directml_ocr(options)
+        except Exception as error:
+            raise DirectMLBackendError(f"Không thể khởi tạo DirectML OCR: {error}") from error
+        emit({"type": "backend", "backend": "directml", "message": "Đang nhận diện bằng ONNX Runtime DirectML GPU."})
+    else:
+        # Paddle's oneDNN CPU kernel currently fails on the PP-OCRv5 det graph
+        # with an unsupported PIR ArrayAttribute. Force the portable CPU kernels.
+        os.environ["FLAGS_use_mkldnn"] = "0"
+        from paddleocr import PaddleOCR
+        emit({"type": "progress", "processed": 0, "total": 0, "message": "Đang nạp PaddleOCR CPU vào bộ nhớ…"})
+        engine = PaddleOCR(
+            text_detection_model_name="PP-OCRv5_mobile_det",
+            text_detection_model_dir=detection_model,
+            text_recognition_model_name="PP-OCRv5_mobile_rec",
+            text_recognition_model_dir=recognition_model,
+            device="cpu",
+            enable_mkldnn=False,
+            cpu_threads=max(1, min(32, int(options.get("cpuThreads", 8)))),
+            use_doc_orientation_classify=False,
+            use_doc_unwarping=False,
+            use_textline_orientation=bool(options.get("angleClassification", False)),
+        )
+        emit({"type": "backend", "backend": "cpu", "message": "Đang nhận diện bằng PaddleOCR CPU."})
+    return engine
+
+
+def run_ocr_job(video_path, detection_model, recognition_model, options, engine=None):
     confidence_threshold = max(0.0, min(1.0, float(options.get("confidence", 75)) / 100))
 
-    # Paddle's oneDNN CPU kernel currently fails on the PP-OCRv5 det graph
-    # with an unsupported PIR ArrayAttribute. Force the portable CPU kernels.
-    os.environ["FLAGS_use_mkldnn"] = "0"
-
     import cv2
-    from paddleocr import PaddleOCR
     converter = None
     if options.get("normalizeTraditional"):
         from opencc import OpenCC
         converter = OpenCC("t2s")
 
-    emit({"type": "progress", "processed": 0, "total": 0, "message": "Đang nạp PaddleOCR vào bộ nhớ…"})
-    ocr = PaddleOCR(
-        text_detection_model_name="PP-OCRv5_mobile_det",
-        text_detection_model_dir=detection_model,
-        text_recognition_model_name="PP-OCRv5_mobile_rec",
-        text_recognition_model_dir=recognition_model,
-        device="cpu",
-        enable_mkldnn=False,
-        cpu_threads=max(1, min(32, int(options.get("cpuThreads", 8)))),
-        use_doc_orientation_classify=False,
-        use_doc_unwarping=False,
-        use_textline_orientation=bool(options.get("angleClassification", False)),
-    )
+    backend = options.get("backend", "cpu")
+    ocr = engine or create_ocr_engine(detection_model, recognition_model, options)
+    if engine is not None:
+        emit({"type": "backend", "backend": backend, "message": "Đang nhận diện phụ đề…"})
     capture = cv2.VideoCapture(video_path)
     if not capture.isOpened():
         raise RuntimeError("Không mở được video bằng OpenCV.")
@@ -288,38 +405,85 @@ def main():
         if options.get("useDualZone"):
             zones.append((options.get("zone2", "center"), options.get("alignment2", "bottom-center")))
     observations = [[] for _ in zones]
-    pipeline = ocr.paddlex_pipeline._pipeline
+    pipeline = ocr.paddlex_pipeline._pipeline if backend == "cpu" else None
     previous_unique = [None for _ in zones]
     previous_gray = [None for _ in zones]
     previous_observation = [None for _ in zones]
     pending_records = []
     pending_observations = [[] for _ in zones]
-    batch_size = 24
+    batch_size = max(1, min(24, int(options.get("ocrBatchSize", 24))))
+    pending_batch_samples = 0
     frame_index = 0
+    if start_frame > 0 and capture.set(cv2.CAP_PROP_POS_FRAMES, start_frame):
+        seek_frame = int(capture.get(cv2.CAP_PROP_POS_FRAMES) or 0)
+        if seek_frame > 0:
+            frame_index = seek_frame
+    decoded_frames = 0
     sampled = 0
     last_report = 0.0
 
+    def collect_subtitles():
+        cues = []
+        for zone_observations in observations:
+            cues.extend(build_cues(
+                zone_observations, duration, interval,
+                float(options.get("similarity", 80)),
+                float(options.get("maxMergeGap", 0.6)),
+                float(options.get("minimumDuration", 0.2)),
+            ))
+        cues.sort(key=lambda cue: (cue["startTime"], cue["alignment"]))
+        return cues
+
     def flush_batch():
+        nonlocal pending_batch_samples
         if pending_records:
-            detected = list(pipeline.text_det_model([record["image"] for record in pending_records]))
-            unique_candidates = []
-            for record, detection in zip(pending_records, detected):
-                polygons = pipeline._sort_boxes(detection.get("dt_polys", []))
-                record["polygons"] = polygons
-                tight = box_crop(record["image"], polygons, cv2)
-                if tight is None or not tight.size:
-                    previous_unique[record["zone"]] = None
-                    record["reference"] = None
-                    continue
-                previous = previous_unique[record["zone"]]
-                if previous is not None and image_similarity(tight, previous["tight"], cv2) * 100 >= float(options.get("ssimThreshold", 92)):
-                    record["reference"] = previous
-                    continue
-                candidate = {"image": record["image"], "polygons": polygons, "tight": tight, "text": "", "score": 0.0}
-                record["reference"] = candidate
-                unique_candidates.append(candidate)
-                previous_unique[record["zone"]] = candidate
-            recognize_batch(pipeline, unique_candidates, confidence_threshold, converter)
+            if backend == "cpu":
+                detected = list(pipeline.text_det_model([record["image"] for record in pending_records]))
+                unique_candidates = []
+                for record, detection in zip(pending_records, detected):
+                    polygons = pipeline._sort_boxes(detection.get("dt_polys", []))
+                    record["polygons"] = polygons
+                    tight = box_crop(record["image"], polygons, cv2)
+                    if tight is None or not tight.size:
+                        previous_unique[record["zone"]] = None
+                        record["reference"] = None
+                        continue
+                    previous = previous_unique[record["zone"]]
+                    if previous is not None and image_similarity(tight, previous["tight"], cv2) * 100 >= float(options.get("ssimThreshold", 92)):
+                        record["reference"] = previous
+                        continue
+                    candidate = {"image": record["image"], "polygons": polygons, "tight": tight, "text": "", "score": 0.0}
+                    record["reference"] = candidate
+                    unique_candidates.append(candidate)
+                    previous_unique[record["zone"]] = candidate
+                recognize_batch(pipeline, unique_candidates, confidence_threshold, converter)
+            else:
+                unique_candidates = []
+                for record in pending_records:
+                    try:
+                        result = ocr(record["image"], use_rec=False)
+                    except Exception as error:
+                        raise DirectMLBackendError(f"DirectML phát hiện chữ thất bại: {error}") from error
+                    polygons = getattr(result, "boxes", None)
+                    polygons = polygons if polygons is not None else []
+                    record["polygons"] = polygons
+                    tight = box_crop(record["image"], polygons, cv2)
+                    if tight is None or not tight.size:
+                        previous_unique[record["zone"]] = None
+                        record["reference"] = None
+                        continue
+                    previous = previous_unique[record["zone"]]
+                    if previous is not None and image_similarity(tight, previous["tight"], cv2) * 100 >= float(options.get("ssimThreshold", 92)):
+                        record["reference"] = previous
+                        continue
+                    candidate = {"image": record["image"], "polygons": polygons, "tight": tight, "text": "", "score": 0.0}
+                    record["reference"] = candidate
+                    unique_candidates.append(candidate)
+                    previous_unique[record["zone"]] = candidate
+                try:
+                    recognize_directml_candidates(ocr, unique_candidates, confidence_threshold, converter)
+                except Exception as error:
+                    raise DirectMLBackendError(f"DirectML nhận dạng chữ thất bại: {error}") from error
 
         for zone_index, items in enumerate(pending_observations):
             for item in items:
@@ -337,11 +501,14 @@ def main():
                 observations[zone_index].append((item["timestamp"], text, score, item["alignment"]))
             items.clear()
         pending_records.clear()
+        pending_batch_samples = 0
+        emit({"type": "subtitles", "subtitles": collect_subtitles()})
 
     while True:
         ok, frame = capture.read()
         if not ok:
             break
+        decoded_frames += 1
         if frame_index >= end_frame:
             break
         if frame_index >= start_frame and (frame_index - start_frame) % step == 0:
@@ -387,30 +554,85 @@ def main():
                 previous_observation[zone_index] = record
                 pending_observations[zone_index].append(record)
             sampled += 1
-            if len(pending_records) >= batch_size:
-                flush_batch()
+            pending_batch_samples += 1
             now = time.time()
-            if now - last_report >= 0.5:
+            if sampled == 1 or pending_batch_samples >= batch_size or now - last_report >= 0.5:
                 emit({
                     "type": "progress", "processed": sampled, "total": total_samples,
-                    "message": f"Đang nhận diện theo nhóm · {sampled}/{total_samples}",
+                    "message": f"Đang đọc và nhận diện mẫu · {sampled}/{total_samples}",
                 })
                 last_report = now
+            if pending_batch_samples >= batch_size:
+                flush_batch()
         frame_index += 1
     capture.release()
+    if decoded_frames == 0 or sampled == 0:
+        raise RuntimeError("Không đọc được frame video để OCR. Hãy kiểm tra codec hoặc chuyển video sang MP4/H.264 rồi thử lại.")
     flush_batch()
     if duration <= 0:
         duration = frame_index / fps
-    cues = []
-    for zone_observations in observations:
-        cues.extend(build_cues(
-            zone_observations, duration, interval,
-            float(options.get("similarity", 80)),
-            float(options.get("maxMergeGap", 0.6)),
-            float(options.get("minimumDuration", 0.2)),
-        ))
-    cues.sort(key=lambda cue: (cue["startTime"], cue["alignment"]))
+    cues = collect_subtitles()
+    emit({
+        "type": "progress", "processed": sampled, "total": total_samples,
+        "message": f"Đã quét {sampled}/{total_samples} mẫu video bằng {('DirectML GPU' if backend == 'directml' else 'CPU')}.",
+    })
     emit({"type": "result", "subtitles": cues})
+
+
+def main():
+    if len(sys.argv) == 3 and sys.argv[1] == "--verify-directml":
+        import numpy as np
+        engine = create_directml_ocr(json.loads(sys.argv[2]))
+        engine(np.zeros((64, 256, 3), dtype=np.uint8))
+        emit({"type": "verified", "backend": "directml"})
+        return
+    if len(sys.argv) == 5 and sys.argv[1] == "--service":
+        detection_model, recognition_model = sys.argv[2:4]
+        options = json.loads(sys.argv[4])
+        engine = create_ocr_engine(detection_model, recognition_model, options)
+        if options.get("backend") == "directml":
+            import numpy as np
+            emit({"type": "progress", "processed": 0, "total": 0, "message": "Đang làm nóng model ONNX DirectML…"})
+            engine(np.zeros((64, 256, 3), dtype=np.uint8))
+        emit({"type": "ready", "backend": options.get("backend", "cpu")})
+        global service_job_id
+        for line in sys.stdin:
+            if not line.strip():
+                continue
+            request = json.loads(line)
+            service_job_id = str(request["jobId"])
+            try:
+                run_ocr_job(
+                    request["videoPath"], detection_model, recognition_model,
+                    request["options"], engine=engine,
+                )
+            except Exception as error:
+                emit({"type": "error", "message": str(error)})
+            finally:
+                service_job_id = None
+        return
+    if len(sys.argv) != 5:
+        raise RuntimeError("Usage: worker.py VIDEO DET_MODEL REC_MODEL OPTIONS_JSON")
+    video_path, detection_model, recognition_model = sys.argv[1:4]
+    options = json.loads(sys.argv[4])
+    try:
+        run_ocr_job(video_path, detection_model, recognition_model, options)
+    except DirectMLBackendError as error:
+        if options.get("backend") != "directml":
+            raise
+        cpu_python = options.get("cpuPython")
+        if not cpu_python:
+            raise RuntimeError(f"DirectML OCR thất bại và không có Python CPU để dự phòng: {error}") from error
+        fallback_options = {**options, "backend": "cpu"}
+        emit({
+            "type": "backend",
+            "backend": "cpu",
+            "message": f"DirectML gặp lỗi ({error}); đang chạy lại video bằng PaddleOCR CPU.",
+        })
+        os.execv(
+            cpu_python,
+            [cpu_python, os.path.abspath(__file__), video_path, detection_model, recognition_model, json.dumps(fallback_options)],
+        )
 
 
 if __name__ == "__main__":

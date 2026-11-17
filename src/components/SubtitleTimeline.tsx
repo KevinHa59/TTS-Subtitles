@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { CirclePlus, Minus, Plus, Waves } from "lucide-react";
 import type { EditableSubtitleCue } from "../utils/subtitleEditor";
 
@@ -23,7 +23,10 @@ type DragState = {
   startX: number;
   originalStart: number;
   originalEnd: number;
+  hasMoved: boolean;
 };
+
+const CUE_DRAG_THRESHOLD_PX = 4;
 
 function formatTimelineTime(seconds: number): string {
   const wholeSeconds = Math.max(0, Math.floor(seconds));
@@ -187,27 +190,32 @@ export default function SubtitleTimeline({
     if (container) setScrollLeft(container.scrollLeft);
   };
 
-  const handleWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
+  useEffect(() => {
     const container = scrollRef.current;
     if (!container) return;
-    if (event.ctrlKey) {
+    const handleWheel = (event: WheelEvent) => {
+      if (!event.ctrlKey && !event.shiftKey) return;
       event.preventDefault();
-      const bounds = container.getBoundingClientRect();
-      const pointerX = event.clientX - bounds.left;
-      const anchoredTime = (container.scrollLeft + pointerX) / pixelsPerSecond;
-      const nextPixelsPerSecond = Math.max(8, Math.min(160, pixelsPerSecond + (event.deltaY < 0 ? 8 : -8)));
-      if (nextPixelsPerSecond === pixelsPerSecond) return;
-      setPixelsPerSecond(nextPixelsPerSecond);
-      window.requestAnimationFrame(() => {
-        container.scrollLeft = Math.max(0, anchoredTime * nextPixelsPerSecond - pointerX);
-        setScrollLeft(container.scrollLeft);
-      });
-    } else if (event.shiftKey) {
-      event.preventDefault();
+      event.stopPropagation();
+      if (event.ctrlKey) {
+        const bounds = container.getBoundingClientRect();
+        const pointerX = event.clientX - bounds.left;
+        const anchoredTime = (container.scrollLeft + pointerX) / pixelsPerSecond;
+        const nextPixelsPerSecond = Math.max(8, Math.min(160, pixelsPerSecond + (event.deltaY < 0 ? 8 : -8)));
+        if (nextPixelsPerSecond === pixelsPerSecond) return;
+        setPixelsPerSecond(nextPixelsPerSecond);
+        window.requestAnimationFrame(() => {
+          container.scrollLeft = Math.max(0, anchoredTime * nextPixelsPerSecond - pointerX);
+          setScrollLeft(container.scrollLeft);
+        });
+        return;
+      }
       container.scrollLeft += event.deltaY || event.deltaX;
       setScrollLeft(container.scrollLeft);
-    }
-  };
+    };
+    container.addEventListener("wheel", handleWheel, { passive: false });
+    return () => container.removeEventListener("wheel", handleWheel);
+  }, [pixelsPerSecond]);
 
   const seekAtPointer = (event: ReactPointerEvent<HTMLDivElement>) => {
     const container = scrollRef.current;
@@ -253,6 +261,7 @@ export default function SubtitleTimeline({
       startX: event.clientX,
       originalStart: cue.startTime,
       originalEnd: cue.endTime,
+      hasMoved: false,
     };
     onCueSelect(cueIndex);
   };
@@ -260,6 +269,10 @@ export default function SubtitleTimeline({
   const handlePointerMove = (event: ReactPointerEvent<HTMLElement>) => {
     const drag = dragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
+    if (!drag.hasMoved) {
+      if (Math.abs(event.clientX - drag.startX) < CUE_DRAG_THRESHOLD_PX) return;
+      drag.hasMoved = true;
+    }
     const delta = (event.clientX - drag.startX) / pixelsPerSecond;
     const length = drag.originalEnd - drag.originalStart;
     if (drag.mode === "move") {
@@ -300,7 +313,7 @@ export default function SubtitleTimeline({
           <button type="button" onClick={() => handleZoom(8)} disabled={pixelsPerSecond >= 160} aria-label="Phóng to timeline" className="rounded-md border border-slate-700 p-1.5 text-slate-300 hover:border-cyan-500/50 disabled:opacity-40"><Plus className="h-3 w-3" /></button>
         </div>
       </div>
-      <div ref={scrollRef} onScroll={updateScroll} onWheel={handleWheel} className="overflow-x-auto overscroll-x-contain">
+      <div ref={scrollRef} onScroll={updateScroll} className="overflow-x-auto overscroll-x-contain">
         <div className="relative min-h-[148px] bg-slate-950/60" style={{ width: `${timelineWidth}px` }}>
           <div
             onPointerDown={handleSeekPointerDown}

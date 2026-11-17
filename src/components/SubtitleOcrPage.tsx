@@ -15,6 +15,7 @@ import {
   Upload,
   Video,
   Volume2,
+  X,
 } from "lucide-react";
 
 type SubtitleRegion = "lower" | "center" | "upper";
@@ -31,16 +32,18 @@ type InstallStatus = {
   progressPercent: number | null;
   message: string;
   error?: string;
+  gpuRuntimeError?: string;
   runtimeReady: boolean;
+  gpuRuntimeReady: boolean;
   modelsReady: boolean;
 };
 
 const initialInstallStatus: InstallStatus = {
   status: "not_installed", stage: "idle", progressPercent: null,
-  message: "Chưa cài bộ nhận diện.", runtimeReady: false, modelsReady: false,
+  message: "Chưa cài bộ nhận diện.", runtimeReady: false, gpuRuntimeReady: false, modelsReady: false,
 };
 type OcrCue = { startTime: number; endTime: number; text: string; translatedText?: string; confidence: number; alignment?: string };
-type OcrJob = { id: string; status: "queued" | "running" | "completed" | "error" | "cancelled"; startedAt: number; elapsedMs: number; progressPercent: number; processedFrames: number; totalFrames: number; message: string; subtitles: OcrCue[]; error?: string };
+type OcrJob = { id: string; status: "queued" | "running" | "completed" | "error" | "cancelled"; startedAt: number; elapsedMs: number; progressPercent: number; processedFrames: number; totalFrames: number; message: string; backend?: "cpu" | "directml"; subtitles: OcrCue[]; error?: string };
 type BatchVideo = { id: string; file: File; status: "pending" | "running" | "completed" | "error" | "cancelled"; job?: OcrJob; error?: string };
 
 function formatTime(seconds: number) {
@@ -183,6 +186,7 @@ export default function SubtitleOcrPage({ onOpenSetup }: { onOpenSetup: () => vo
   const [alignment2, setAlignment2] = useState("bottom-center");
   const [subtitleAlignment, setSubtitleAlignment] = useState(false);
   const [angleClassification, setAngleClassification] = useState(false);
+  const [useGpu, setUseGpu] = useState(true);
   const [normalizeTraditional, setNormalizeTraditional] = useState(true);
   const [dragging, setDragging] = useState(false);
   const [installStatus, setInstallStatus] = useState<InstallStatus>(initialInstallStatus);
@@ -191,6 +195,10 @@ export default function SubtitleOcrPage({ onOpenSetup }: { onOpenSetup: () => vo
   const [ocrError, setOcrError] = useState("");
   const [translationPending, setTranslationPending] = useState(false);
   const [translationError, setTranslationError] = useState("");
+  const [translationStyle, setTranslationStyle] = useState("");
+  const [translationStyleDraft, setTranslationStyleDraft] = useState("");
+  const [translationStyleDialogOpen, setTranslationStyleDialogOpen] = useState(false);
+  const [translationProgress, setTranslationProgress] = useState<{ current: number; total: number } | null>(null);
   const [parallelVideos, setParallelVideos] = useState(1);
   const [cpuThreads, setCpuThreads] = useState(8);
   const [downloadAllMessage, setDownloadAllMessage] = useState("");
@@ -363,7 +371,7 @@ export default function SubtitleOcrPage({ onOpenSetup }: { onOpenSetup: () => vo
       ssimThreshold: String(ssimThreshold), maxImageWidth, framesToSkip,
       minimumDuration, useFullFrame: String(useFullFrame), useDualZone: String(useDualZone),
       zone1, zone2, alignment1, alignment2, angleClassification: String(angleClassification),
-      normalizeTraditional: String(normalizeTraditional), cpuThreads: String(cpuThreads),
+      normalizeTraditional: String(normalizeTraditional), cpuThreads: String(cpuThreads), useGpu: String(useGpu),
     });
     if (cropRegion && !useFullFrame && width > 0 && height > 0) {
       query.set("cropX", String(Math.round(cropRegion.x * width)));
@@ -474,33 +482,92 @@ export default function SubtitleOcrPage({ onOpenSetup }: { onOpenSetup: () => vo
     const jobId = job.id;
     const sourceFile = file;
     const cues = job.subtitles;
+    const groups = Array.from({ length: Math.ceil(cues.length / 20) }, (_, index) => cues.slice(index * 20, (index + 1) * 20));
     setTranslationPending(true);
+    setTranslationProgress({ current: 0, total: groups.length });
     setTranslationError("");
     try {
-      const response = await fetch("/api/subtitle-translation/translate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cues: cues.map((cue, index) => ({ id: String(index), text: cue.text })) }),
-      });
-      const body = await response.json();
-      if (!response.ok || !body.success) throw new Error(body.error || "Không thể dịch phụ đề.");
-      if (!Array.isArray(body.translations)) throw new Error("Máy chủ trả về danh sách bản dịch không hợp lệ.");
-      const translations = new Map<string, string>();
-      for (const item of body.translations as Array<{ id?: unknown; translation?: unknown }>) {
-        if (typeof item?.id === "string" && typeof item.translation === "string" && item.translation.trim()) translations.set(item.id, item.translation.trim());
+      for (let groupIndex = 0; groupIndex < groups.length; groupIndex++) {
+        const group = groups[groupIndex];
+        const expectedIds = new Set(group.map((_cue, index) => String(groupIndex * 20 + index)));
+        const translations = new Map<string, string>();
+        let complete = false;
+        const response = await fetch("/api/subtitle-translation/translate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            cues: group.map((cue, index) => ({ id: String(groupIndex * 20 + index), text: cue.text })),
+            translationStyle: translationStyle || undefined,
+          }),
+        });
+        if (!response.ok) throw new Error(`Không thể dịch nhóm ${groupIndex + 1} (HTTP ${response.status}).`);
+        if (!response.body) throw new Error("Máy chủ không hỗ trợ stream kết quả dịch.");
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let pending = "";
+        let eventData: string[] = [];
+        const processEvent = () => {
+          if (!eventData.length) return;
+          let event: { type?: string; id?: string; translation?: string; count?: number; error?: string };
+          try {
+            event = JSON.parse(eventData.join("\n")) as typeof event;
+          } catch (error) {
+            throw new Error(`Không đọc được phản hồi dịch: ${error instanceof Error ? error.message : String(error)}`);
+          }
+          eventData = [];
+          if (event.type === "translation") {
+            if (typeof event.id === "string" && expectedIds.has(event.id) && typeof event.translation === "string" && event.translation.trim()) {
+              translations.set(event.id, event.translation.trim());
+            }
+          } else if (event.type === "complete") {
+            complete = event.count === group.length;
+          } else if (event.type === "error") {
+            throw new Error(event.error || `Dịch nhóm ${groupIndex + 1} thất bại.`);
+          }
+        };
+        try {
+          let done = false;
+          while (!done) {
+            const chunk = await reader.read();
+            done = chunk.done;
+            pending += decoder.decode(chunk.value, { stream: !done });
+            let newlineIndex = pending.indexOf("\n");
+            while (newlineIndex >= 0) {
+              const line = pending.slice(0, newlineIndex).replace(/\r$/, "");
+              pending = pending.slice(newlineIndex + 1);
+              if (!line) processEvent();
+              else if (line.startsWith("data:")) eventData.push(line.slice(5).trimStart());
+              newlineIndex = pending.indexOf("\n");
+            }
+          }
+          if (pending.trim().startsWith("data:")) eventData.push(pending.trim().slice(5).trimStart());
+          processEvent();
+        } finally {
+          reader.releaseLock();
+        }
+        if (!complete || translations.size !== group.length) {
+          throw new Error(`Kết quả dịch nhóm ${groupIndex + 1} chưa đầy đủ. Hãy kiểm tra model/prompt rồi thử lại.`);
+        }
+        const applyGroup = (current: OcrJob | null): OcrJob | null => current?.id === jobId
+          ? {
+            ...current,
+            subtitles: current.subtitles.map((cue, index) => {
+              const translation = translations.get(String(index));
+              return translation ? { ...cue, translatedText: translation } : cue;
+            }),
+          }
+          : current;
+        setOcrJob(applyGroup);
+        setBatchVideos((current) => current.map((item) => item.file === sourceFile && item.job?.id === jobId
+          ? { ...item, job: applyGroup(item.job) || item.job }
+          : item));
+        setTranslationProgress({ current: groupIndex + 1, total: groups.length });
       }
-      if (translations.size !== cues.length || cues.some((_cue, index) => !translations.has(String(index)))) {
-        throw new Error("Kết quả dịch chưa đầy đủ. Hãy kiểm tra model/prompt rồi thử lại.");
-      }
-      const translatedSubtitles = cues.map((cue, index) => ({ ...cue, translatedText: translations.get(String(index))! }));
-      setOcrJob((current) => current?.id === jobId ? { ...current, subtitles: translatedSubtitles } : current);
-      setBatchVideos((current) => current.map((item) => item.file === sourceFile && item.job?.id === jobId
-        ? { ...item, job: { ...item.job, subtitles: translatedSubtitles } }
-        : item));
     } catch (error) {
       setTranslationError(error instanceof Error ? error.message : String(error));
     } finally {
       setTranslationPending(false);
+      setTranslationProgress(null);
     }
   };
 
@@ -729,7 +796,10 @@ export default function SubtitleOcrPage({ onOpenSetup }: { onOpenSetup: () => vo
                 {useDualZone && <label className="space-y-1"><span className="text-[10px] text-slate-400">Zone 2</span><select value={alignment2} onChange={(event) => setAlignment2(event.target.value)} className="w-full rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 text-[10px] text-white">{["bottom-left","bottom-center","bottom-right","middle-left","middle-center","middle-right","top-left","top-center","top-right"].map((value) => <option key={value}>{value}</option>)}</select></label>}
               </div>}
               <label className="flex items-center gap-2 text-xs text-slate-500" title="Cần tải thêm orientation model; chưa được đóng gói trong bộ model hiện tại."><input type="checkbox" disabled checked={angleClassification} onChange={(event) => setAngleClassification(event.target.checked)} className="accent-cyan-400" />Enable Angle Classification · cần model bổ sung</label>
-              <label className="flex items-center gap-2 text-xs text-slate-500" title="Runtime PaddlePaddle hiện tại dùng CPU."><input type="checkbox" disabled className="accent-cyan-400" />Enable GPU Usage · CPU build</label>
+              <label className={`flex items-center gap-2 text-xs ${installStatus.gpuRuntimeReady ? "text-slate-300" : "text-slate-500"}`} title={installStatus.gpuRuntimeReady ? "Ưu tiên Intel GPU qua DirectML; nếu khởi tạo hoặc suy luận lỗi, tự chạy lại bằng PaddleOCR CPU." : installStatus.gpuRuntimeError || "Cài DirectML trong Setup để bật OCR GPU."}>
+                <input type="checkbox" checked={useGpu} disabled={!installStatus.gpuRuntimeReady || ocrRequestPending} onChange={(event) => setUseGpu(event.target.checked)} className="accent-cyan-400 disabled:opacity-50" />
+                Enable GPU Usage · DirectML{installStatus.gpuRuntimeReady ? "" : " · chưa cài"}
+              </label>
               <label className="flex items-center gap-2 text-xs text-slate-500" title="VideOCR chỉ hỗ trợ post-processing cho một số ngôn ngữ Latin."><input type="checkbox" disabled className="accent-cyan-400" />Enable Post Processing · không áp dụng tiếng Trung</label>
               <label className="flex items-center gap-2 text-xs text-slate-300"><input type="checkbox" checked={normalizeTraditional} onChange={(event) => setNormalizeTraditional(event.target.checked)} className="accent-cyan-400" />Normalize Traditional to Simplified Chinese</label>
               <label className="flex items-center gap-2 text-xs text-slate-500" title="Model server chỉ dùng cho cấu hình GPU; ứng dụng này đang chạy PaddleOCR CPU."><input type="checkbox" disabled className="accent-cyan-400" />Use Server Model · chỉ GPU</label>
@@ -875,12 +945,13 @@ export default function SubtitleOcrPage({ onOpenSetup }: { onOpenSetup: () => vo
               <div className="max-h-[65vh] divide-y divide-slate-800/70 overflow-y-auto">
                 {batchVideos.length ? batchVideos.map((item) => {
                   const isPreview = item.file === videoFile;
+                  const backendText = item.job?.backend === "directml" ? "DirectML GPU" : item.job?.backend === "cpu" ? "CPU" : "";
                   const statusText = item.status === "completed" ? "Hoàn tất" : item.status === "running" ? "Đang nhận diện" : item.status === "error" ? "Lỗi" : item.status === "cancelled" ? "Đã hủy" : "Chờ xử lý";
                   const statusColor = item.status === "completed" ? "text-emerald-300" : item.status === "running" ? "text-cyan-300" : item.status === "error" ? "text-rose-300" : "text-slate-500";
-                  return <div key={item.id} className={`flex min-w-0 items-center gap-2 px-3 py-2.5 ${isPreview ? "bg-cyan-500/5" : ""}`} title={item.error || item.file.name}>
+                  return <div key={item.id} className={`flex min-w-0 items-center gap-2 px-3 py-2.5 ${isPreview ? "bg-cyan-500/5" : ""}`} title={item.error || item.job?.message || item.file.name}>
                     <button type="button" onClick={() => selectPreviewVideo(item.file, item.job)} aria-pressed={isPreview} className="flex min-w-0 flex-1 items-center gap-2 rounded-md text-left outline-none hover:bg-slate-800/60 focus-visible:ring-1 focus-visible:ring-cyan-400">
                       <FileVideo2 className={`h-4 w-4 shrink-0 ${isPreview ? "text-cyan-300" : "text-slate-500"}`} />
-                      <span className="min-w-0 flex-1"><span className="block truncate text-[11px] font-medium text-slate-200">{item.file.name}</span><span className={`mt-0.5 block text-[10px] ${statusColor}`}>{item.status === "running" ? `${statusText} · ${item.job?.progressPercent || 0}%` : statusText}{isPreview ? " · preview" : ""}</span></span>
+                      <span className="min-w-0 flex-1"><span className="block truncate text-[11px] font-medium text-slate-200">{item.file.name}</span><span className={`mt-0.5 block text-[10px] ${statusColor}`}>{item.status === "running" ? `${statusText}${backendText ? ` · ${backendText}` : ""} · ${item.job?.progressPercent || 0}%` : `${statusText}${backendText ? ` · ${backendText}` : ""}`}{isPreview ? " · preview" : ""}</span></span>
                     </button>
                     {item.job?.subtitles.length ? <button type="button" onClick={() => exportSrt(item.job!.subtitles, item.file.name)} className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-cyan-500/25 bg-cyan-500/10 text-cyan-200 hover:bg-cyan-500/20" title={`Tải SRT · ${item.file.name}`} aria-label={`Tải phụ đề của ${item.file.name}`}><Download className="h-3.5 w-3.5" /></button> : <span className="h-7 w-7 shrink-0" />}
                   </div>;
@@ -898,17 +969,20 @@ export default function SubtitleOcrPage({ onOpenSetup }: { onOpenSetup: () => vo
                 {translationError && <p role="alert" className="mt-2 text-[11px] text-rose-300">{translationError}</p>}
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                <button type="button" disabled={!previewOcrJob?.subtitles.length || translationPending} onClick={() => void translateSubtitles(previewOcrJob, videoFile)} className="inline-flex items-center gap-1.5 rounded-lg border border-violet-500/30 bg-violet-500/10 px-3 py-2 text-xs font-semibold text-violet-200 transition-colors hover:bg-violet-500/20 disabled:cursor-not-allowed disabled:border-slate-700 disabled:bg-slate-800/60 disabled:text-slate-600">
+                <button type="button" onClick={() => { setTranslationStyleDraft(translationStyle); setTranslationStyleDialogOpen(true); }} disabled={translationPending} className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${translationStyle ? "border-violet-400/40 bg-violet-500/15 text-violet-100" : "border-slate-700 bg-slate-950/60 text-slate-300 hover:bg-slate-800"}`}>
+                  <Settings2 className="h-3.5 w-3.5" />Phong Cách Dịch{translationStyle ? " · tùy chỉnh" : ""}
+                </button>
+                <button type="button" disabled={!previewOcrJob?.subtitles.length || previewOcrJob.status !== "completed" || translationPending} onClick={() => void translateSubtitles(previewOcrJob, videoFile)} title={previewOcrJob?.status === "running" ? "Đợi OCR hoàn tất trước khi dịch" : undefined} className="inline-flex items-center gap-1.5 rounded-lg border border-violet-500/30 bg-violet-500/10 px-3 py-2 text-xs font-semibold text-violet-200 transition-colors hover:bg-violet-500/20 disabled:cursor-not-allowed disabled:border-slate-700 disabled:bg-slate-800/60 disabled:text-slate-600">
                   {translationPending ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Languages className="h-3.5 w-3.5" />}
-                  {translationPending ? "Đang dịch…" : "Dịch"}
+                  {translationPending ? `Đang dịch ${translationProgress?.current || 0}/${translationProgress?.total || 0}…` : "Dịch"}
                 </button>
                 <button type="button" disabled={!previewOcrJob?.subtitles.length} onClick={() => exportSrt(previewOcrJob?.subtitles || [], videoFile?.name)} className="rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-3 py-2 text-xs font-semibold text-cyan-200 transition-colors hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:border-slate-700 disabled:bg-slate-800/60 disabled:text-slate-600">Xuất SRT</button>
                 <button type="button" disabled={!previewOcrJob?.subtitles.length || !previewOcrJob.subtitles.every((cue) => Boolean(cue.translatedText?.trim()))} onClick={() => exportSrt(previewOcrJob?.subtitles || [], videoFile?.name, true)} className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-200 transition-colors hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:border-slate-700 disabled:bg-slate-800/60 disabled:text-slate-600">Xuất SRT đã dịch</button>
               </div>
             </div>
-            <div className="overflow-x-auto">
+            <div className="max-h-[65vh] overflow-auto">
               <table className="w-full min-w-[860px] border-collapse text-left text-xs">
-                <thead className="bg-slate-950/70 text-[10px] uppercase tracking-wider text-slate-500">
+                <thead className="sticky top-0 z-10 bg-slate-950 text-[10px] uppercase tracking-wider text-slate-500">
                   <tr><th className="w-16 px-4 py-3 font-semibold">#</th><th className="px-4 py-3 font-semibold">Nội dung</th><th className="px-4 py-3 font-semibold">Dịch</th><th className="w-28 px-4 py-3 font-semibold">Thời lượng</th><th className="w-32 px-4 py-3 font-semibold">Bắt đầu</th><th className="w-32 px-4 py-3 font-semibold">Kết thúc</th></tr>
                 </thead>
                 <tbody>
@@ -943,6 +1017,38 @@ export default function SubtitleOcrPage({ onOpenSetup }: { onOpenSetup: () => vo
           </section>
         </div>
       </div>
+      {translationStyleDialogOpen && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm">
+          <section role="dialog" aria-modal="true" aria-labelledby="ocr-translation-style-title" className="flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-slate-700 bg-slate-900 shadow-2xl">
+            <header className="flex items-center justify-between gap-3 border-b border-slate-800 px-5 py-4">
+              <div><h2 id="ocr-translation-style-title" className="text-sm font-bold text-white">Phong Cách Dịch</h2><p className="mt-1 text-[11px] text-slate-400">Phong cách này thay thế Quy tắc dịch trong Setup và chỉ áp dụng cho trang OCR này.</p></div>
+              <button type="button" onClick={() => setTranslationStyleDialogOpen(false)} aria-label="Đóng phong cách dịch" className="rounded-lg p-2 text-slate-400 hover:bg-slate-800 hover:text-white"><X className="h-4 w-4" /></button>
+            </header>
+            <div className="min-h-0 flex-1 overflow-y-auto p-5">
+              <textarea
+                autoFocus
+                value={translationStyleDraft}
+                onChange={(event) => setTranslationStyleDraft(event.target.value)}
+                maxLength={4000}
+                rows={10}
+                placeholder="Ví dụ: Dùng lời thoại tự nhiên, ngắn gọn; xưng hô thân mật; giữ nguyên tên riêng…"
+                className="w-full resize-y rounded-xl border border-slate-700 bg-slate-950 p-3 text-xs leading-relaxed text-slate-100 outline-none placeholder:text-slate-600 focus:border-violet-400"
+              />
+              <div className="mt-2 flex items-center justify-between gap-2 text-[10px] text-slate-500">
+                <span>Để trống để dùng Quy tắc dịch đã cấu hình trong Setup.</span>
+                <span>{translationStyleDraft.length.toLocaleString()}/4.000</span>
+              </div>
+            </div>
+            <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-800 px-5 py-3">
+              <button type="button" onClick={() => { setTranslationStyle(""); setTranslationStyleDraft(""); setTranslationStyleDialogOpen(false); }} className="rounded-lg border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-300 hover:bg-slate-800">Dùng quy tắc Setup</button>
+              <div className="flex items-center gap-2">
+                <button type="button" onClick={() => setTranslationStyleDialogOpen(false)} className="rounded-lg border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-300 hover:bg-slate-800">Hủy</button>
+                <button type="button" disabled={translationStyleDraft.length > 4000} onClick={() => { setTranslationStyle(translationStyleDraft.trim()); setTranslationStyleDialogOpen(false); }} className="rounded-lg bg-violet-500 px-4 py-2 text-xs font-bold text-white hover:bg-violet-400 disabled:opacity-40">Áp dụng</button>
+              </div>
+            </footer>
+          </section>
+        </div>
+      )}
     </div>
   );
 }
