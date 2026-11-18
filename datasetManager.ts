@@ -1,8 +1,8 @@
 import fs from "fs";
 import path from "path";
+import os, { availableParallelism } from "node:os";
 import { fileURLToPath } from "url";
 import { spawn, spawnSync, execSync } from "child_process";
-import { availableParallelism } from "node:os";
 import {
   getCpuWhisperCliPath,
   getWhisperBackend as getInstalledWhisperBackend,
@@ -1027,4 +1027,203 @@ export function createDatasetZip(datasetId: string): string {
   }
 
   return zipPath;
+}
+
+export interface MergeDatasetResult {
+  dataset: DatasetInfo;
+  zipDownloadUrl: string;
+  zipFilename: string;
+  totalZipsMerged: number;
+  totalClips: number;
+  totalDurationSec: number;
+  warnings?: string[];
+}
+
+export function mergeDatasetZips(
+  targetDatasetId: string,
+  voiceName: string,
+  zipPaths: string[]
+): MergeDatasetResult {
+  if (!zipPaths || zipPaths.length === 0) {
+    throw new Error("Không có file ZIP nào được cung cấp để ghép.");
+  }
+
+  const rawId = (targetDatasetId || voiceName || "merged_dataset").trim();
+  const safeId =
+    rawId
+      .replace(/[^a-zA-Z0-9_-]/g, "_")
+      .toLowerCase()
+      .replace(/_+/g, "_")
+      .replace(/^_+|_+$/g, "") || `merged_${Date.now()}`;
+
+  const destDatasetDir = path.join(DATASETS_ROOT, safeId);
+  const destWavDir = path.join(destDatasetDir, "wav");
+
+  // Xóa thư mục cũ nếu đã tồn tại để merge mới hoàn toàn
+  if (fs.existsSync(destDatasetDir)) {
+    fs.rmSync(destDatasetDir, { recursive: true, force: true });
+  }
+  fs.mkdirSync(destWavDir, { recursive: true });
+
+  const tempExtractRoot = fs.mkdtempSync(path.join(os.tmpdir(), "piper_merge_extract_"));
+  const pythonCommand = process.platform === "win32" ? "python" : "python3";
+  const allClips: DatasetClip[] = [];
+  const metadataLines: string[] = [];
+  const warnings: string[] = [];
+  let successfulZips = 0;
+
+  try {
+    for (let i = 0; i < zipPaths.length; i++) {
+      const zipPath = zipPaths[i];
+      if (!fs.existsSync(zipPath)) {
+        warnings.push(`File ZIP không tồn tại: ${path.basename(zipPath)}`);
+        continue;
+      }
+
+      const zipExtractDir = path.join(tempExtractRoot, `zip_${i}`);
+      fs.mkdirSync(zipExtractDir, { recursive: true });
+
+      // Giải nén ZIP bằng Python zipfile
+      const pyExtractCode = [
+        "import sys, zipfile",
+        "zip_p, target_dir = sys.argv[1:3]",
+        "with zipfile.ZipFile(zip_p, 'r') as z:",
+        "    z.extractall(target_dir)",
+      ].join("\n");
+
+      const extractProc = spawnSync(pythonCommand, ["-c", pyExtractCode, zipPath, zipExtractDir], {
+        encoding: "utf-8",
+        windowsHide: true,
+      });
+
+      if (extractProc.error || extractProc.status !== 0) {
+        warnings.push(`Không thể giải nén file ${path.basename(zipPath)}: ${extractProc.error?.message || extractProc.stderr?.trim()}`);
+        continue;
+      }
+
+      // Tìm metadata.csv trong zipExtractDir
+      let metadataCsvPath: string | null = null;
+      if (fs.existsSync(path.join(zipExtractDir, "metadata.csv"))) {
+        metadataCsvPath = path.join(zipExtractDir, "metadata.csv");
+      } else {
+        const subDirs = fs.readdirSync(zipExtractDir, { withFileTypes: true });
+        for (const sd of subDirs) {
+          if (sd.isDirectory()) {
+            const candidate = path.join(zipExtractDir, sd.name, "metadata.csv");
+            if (fs.existsSync(candidate)) {
+              metadataCsvPath = candidate;
+              break;
+            }
+          }
+        }
+      }
+
+      if (!metadataCsvPath) {
+        warnings.push(`File ${path.basename(zipPath)} không chứa file metadata.csv.`);
+        continue;
+      }
+
+      // Tìm thư mục wav
+      const metaDir = path.dirname(metadataCsvPath);
+      let wavDir: string = metaDir;
+      if (fs.existsSync(path.join(metaDir, "wav")) && fs.statSync(path.join(metaDir, "wav")).isDirectory()) {
+        wavDir = path.join(metaDir, "wav");
+      } else if (fs.existsSync(path.join(metaDir, "wavs")) && fs.statSync(path.join(metaDir, "wavs")).isDirectory()) {
+        wavDir = path.join(metaDir, "wavs");
+      } else if (fs.existsSync(path.join(zipExtractDir, "wav")) && fs.statSync(path.join(zipExtractDir, "wav")).isDirectory()) {
+        wavDir = path.join(zipExtractDir, "wav");
+      }
+
+      // Đọc metadata.csv
+      const metaContent = fs.readFileSync(metadataCsvPath, "utf-8");
+      const lines = metaContent.split(/\r?\n/);
+      let clipsFromThisZip = 0;
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || !trimmed.includes("|")) continue;
+
+        const parts = trimmed.split("|");
+        const origClipId = parts[0]?.trim();
+        const text = parts.slice(1).join("|").trim();
+        if (!origClipId || !text) continue;
+
+        // Tìm file wav gốc
+        const origWavName = origClipId.endsWith(".wav") ? origClipId : `${origClipId}.wav`;
+        const origWavPath = path.join(wavDir, origWavName);
+
+        if (!fs.existsSync(origWavPath) || !isValidPiperPcmWav(origWavPath)) {
+          continue;
+        }
+
+        // Đổi tên clip theo thứ tự tuần tự toàn cục để tránh trùng lặp
+        const newClipNumber = allClips.length + 1;
+        const newClipId = `clip_${String(newClipNumber).padStart(5, "0")}`;
+        const newFilename = `${newClipId}.wav`;
+        const destWavPath = path.join(destWavDir, newFilename);
+
+        fs.copyFileSync(origWavPath, destWavPath);
+
+        const durMs = getPcmWavDurationMs(destWavPath);
+        const durSec = Math.round((durMs / 1000) * 10) / 10;
+
+        allClips.push({
+          id: newClipId,
+          filename: newFilename,
+          text,
+          startMs: 0,
+          endMs: Math.round(durMs),
+          durationSec: durSec,
+        });
+
+        metadataLines.push(`${newClipId}|${text}`);
+        clipsFromThisZip++;
+      }
+
+      if (clipsFromThisZip > 0) {
+        successfulZips++;
+      } else {
+        warnings.push(`File ${path.basename(zipPath)} không có câu thoại hoặc audio WAV hợp lệ nào.`);
+      }
+    }
+
+    if (allClips.length === 0) {
+      throw new Error("Không có câu thoại hoặc audio WAV hợp lệ nào từ các file ZIP tải lên.");
+    }
+
+    // Ghi metadata.csv mới
+    fs.writeFileSync(path.join(destDatasetDir, "metadata.csv"), metadataLines.join("\n"), "utf-8");
+
+    // Tính tổng thời lượng
+    const totalDurationSec = Math.round(allClips.reduce((sum, c) => sum + c.durationSec, 0) * 10) / 10;
+
+    // Ghi info.json
+    const datasetInfo: DatasetInfo = {
+      id: safeId,
+      voiceName: (voiceName || safeId).trim(),
+      createdAt: new Date().toISOString(),
+      originalAudioFilename: `${successfulZips} file ZIP gộp`,
+      whisperModelUsed: "merged",
+      totalClips: allClips.length,
+      totalDurationSec,
+      clips: allClips,
+    };
+
+    fs.writeFileSync(path.join(destDatasetDir, "info.json"), JSON.stringify(datasetInfo, null, 2), "utf-8");
+
+    // Tạo file zip cho Google Colab
+    createDatasetZip(safeId);
+
+    return {
+      dataset: datasetInfo,
+      zipDownloadUrl: `/api/dataset/${safeId}/export-zip`,
+      zipFilename: `${safeId}_dataset.zip`,
+      totalZipsMerged: successfulZips,
+      totalClips: allClips.length,
+      totalDurationSec,
+      warnings: warnings.length > 0 ? warnings : undefined,
+    };
+  } finally {
+    fs.rmSync(tempExtractRoot, { recursive: true, force: true });
+  }
 }

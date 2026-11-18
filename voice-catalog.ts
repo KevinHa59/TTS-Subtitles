@@ -61,6 +61,7 @@ export const LOCAL_MODEL_FILES: Record<string, string | string[]> = {
   "local:news-flash-tr56_1794327616307": "news-flash-tr56_1794327616307.onnx",
   "local:news-flash-tr57_1794394913177": "news-flash-tr57_1794394913177.onnx",
   "local:kevinha-10_1794954036123": "kevinha-10_1794954036123.onnx",
+  "local:kevinha-15": "kevinha-15.onnx",
   [CSA_VOICE_MODEL_ID]: "vi_VN-csa-voice-piper-v3-medium.onnx",
 };
 
@@ -251,6 +252,17 @@ export const AVAILABLE_MODELS: VoiceDefinition[] = [
     id: "local:kevinha-10_1794954036123",
     modelId: "local:kevinha-10_1794954036123",
     name: "Kevin Hà",
+    tag: "Nam · Miền Nam · Giọng tùy chỉnh (Offline)",
+    gender: "male",
+    description: "Giọng nam tùy chỉnh của Kevin Hà.",
+    sampleText:
+      "Ta là tông chủ Thanh Vân Tiên Tông, Phong Thanh Dương. Cẩn tuân tông chủ chi lệnh.",
+    recommended: false,
+  },
+  {
+    id: "local:kevinha-15",
+    modelId: "local:kevinha-15",
+    name: "Kevin Hà v15",
     tag: "Nam · Miền Nam · Giọng tùy chỉnh (Offline)",
     gender: "male",
     description: "Giọng nam tùy chỉnh của Kevin Hà.",

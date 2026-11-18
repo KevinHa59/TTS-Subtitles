@@ -37,6 +37,7 @@ import {
 
 import { copyAudioToClipboard } from "../utils/clipboardAudio";
 import JoinAudioTab from "./JoinAudioTab";
+import { MergeDatasetTab } from "./MergeDatasetTab";
 
 interface SystemModelItem {
   id: string;
@@ -137,7 +138,9 @@ interface VoiceClonePageProps {
 }
 
 export default function VoiceClonePage({ onVoiceInstalled, onOpenSetup }: VoiceClonePageProps) {
-  const [activeTab, setActiveTab] = useState<"dataset" | "join-audio" | "tools" | "guide" | "upload" | "manage">("dataset");
+  const [activeTab, setActiveTab] = useState<
+    "dataset" | "merge-dataset" | "join-audio" | "tools" | "guide" | "upload" | "manage"
+  >("dataset");
 
   // === SYSTEM TOOLS & MODELS STATE ===
   const [systemStatus, setSystemStatus] = useState<SystemToolsStatus | null>(null);
@@ -908,6 +911,19 @@ export default function VoiceClonePage({ onVoiceInstalled, onOpenSetup }: VoiceC
         >
           <Scissors className="w-3.5 h-3.5" />
           <span>1. Chuẩn Bị Dữ Liệu Offline</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab("merge-dataset")}
+          className={`h-full px-3 text-xs font-bold flex items-center gap-1.5 whitespace-nowrap transition-colors cursor-pointer rounded-none border-r border-slate-800 ${
+            activeTab === "merge-dataset"
+              ? "bg-amber-500 text-slate-950"
+              : "text-slate-400 hover:text-white hover:bg-slate-900/60"
+          }`}
+        >
+          <Layers className="w-3.5 h-3.5" />
+          <span>Ghép Dữ Liệu</span>
         </button>
 
         <button
@@ -2113,6 +2129,16 @@ export default function VoiceClonePage({ onVoiceInstalled, onOpenSetup }: VoiceC
             </div>
           </div>
         </div>
+      )}
+
+      {activeTab === "merge-dataset" && (
+        <MergeDatasetTab
+          onOpenDataset={async (mergedDataset) => {
+            await fetchDatasetsAndModels();
+            setCurrentDataset(mergedDataset);
+            setActiveTab("dataset");
+          }}
+        />
       )}
 
       {activeTab === "join-audio" && (

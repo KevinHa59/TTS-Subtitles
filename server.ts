@@ -57,6 +57,7 @@ import {
   updateDatasetMetadata,
   deleteDataset,
   createDatasetZip,
+  mergeDatasetZips,
   getAvailableWhisperModels,
 } from "./datasetManager";
 import {
@@ -3762,6 +3763,7 @@ interface DatasetUploadSession {
   createdAt: number;
 }
 const datasetUploadSessions = new Map<string, DatasetUploadSession>();
+const datasetMergeSessions = new Map<string, DatasetUploadSession>();
 
 function startDatasetPreparation(
   audioSource: Buffer | string | (Buffer | string)[],
@@ -4217,6 +4219,74 @@ app.delete("/api/dataset/:datasetId", (req: Request, res: Response) => {
     res.json({ success: true, message: "Đã xóa dataset thành công." });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Merge Dataset ZIPs Sessions ──
+app.post("/api/dataset/merge-session", (_req: Request, res: Response) => {
+  try {
+    const sessionId = `merge_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "piper_merge_upload_"));
+    datasetMergeSessions.set(sessionId, {
+      tempDir,
+      files: [],
+      createdAt: Date.now(),
+    });
+    res.json({ success: true, sessionId });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Không thể khởi tạo phiên ghép dataset." });
+  }
+});
+
+app.post("/api/dataset/merge-session/:sessionId/upload", async (req: Request, res: Response) => {
+  const session = datasetMergeSessions.get(req.params.sessionId);
+  if (!session) {
+    return res.status(404).json({ error: "Phiên ghép dataset không tồn tại hoặc đã hết hạn." });
+  }
+
+  const rawFilename = typeof req.query.filename === "string" ? req.query.filename : `dataset_${session.files.length + 1}.zip`;
+  const originalFilename = path.basename(rawFilename);
+  const safeFilename = `zip_${session.files.length}_${originalFilename.replace(/[^a-zA-Z0-9_.-]/g, "_")}`;
+  const destPath = path.join(session.tempDir, safeFilename);
+
+  try {
+    await pipeline(req, fs.createWriteStream(destPath, { flags: "wx" }));
+    const stat = fs.statSync(destPath);
+    if (stat.size < 100) {
+      fs.rmSync(destPath, { force: true });
+      return res.status(400).json({ error: "File ZIP rỗng hoặc không hợp lệ." });
+    }
+    session.files.push({ path: destPath, originalFilename });
+    res.json({ success: true, fileCount: session.files.length, filename: originalFilename });
+  } catch (err: any) {
+    fs.rmSync(destPath, { force: true });
+    res.status(500).json({ error: err.message || "Lỗi khi lưu file ZIP vào phiên ghép." });
+  }
+});
+
+app.post("/api/dataset/merge-session/:sessionId/merge", (req: Request, res: Response) => {
+  const session = datasetMergeSessions.get(req.params.sessionId);
+  if (!session) {
+    return res.status(404).json({ error: "Phiên ghép dataset không tồn tại hoặc đã hết hạn." });
+  }
+  if (session.files.length === 0) {
+    return res.status(400).json({ error: "Phiên ghép không có file ZIP nào." });
+  }
+
+  const voiceName = typeof req.body.voiceName === "string" ? req.body.voiceName.trim() : "";
+  const datasetId = typeof req.body.datasetId === "string" ? req.body.datasetId.trim() : "";
+
+  try {
+    const zipPaths = session.files.map((f) => f.path);
+    const result = mergeDatasetZips(datasetId, voiceName, zipPaths);
+    res.json({ success: true, ...result });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Lỗi khi ghép dataset." });
+  } finally {
+    try {
+      fs.rmSync(session.tempDir, { recursive: true, force: true });
+    } catch {}
+    datasetMergeSessions.delete(req.params.sessionId);
   }
 });
 
