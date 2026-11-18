@@ -30,7 +30,6 @@ import {
 } from "../utils/subtitleEditor";
 
 type VideoSubtitleStatus = "missing-subtitle" | "missing-video" | "ready" | "translated" | "translating" | "error";
-type LeftPanelTab = "videos" | "subtitles" | "raw";
 type VideoFrameElement = HTMLVideoElement & {
   requestVideoFrameCallback?: (callback: (_now: number, metadata: { mediaTime: number }) => void) => number;
   cancelVideoFrameCallback?: (callbackId: number) => void;
@@ -120,13 +119,13 @@ function RawSubtitleColumn({
   };
 
   return (
-    <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-slate-800 bg-slate-950/50">
-      <header className="flex items-center justify-between gap-2 border-b border-slate-800 px-3 py-2">
+    <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-none border border-slate-800 bg-slate-950/50">
+      <header className="flex items-center justify-between gap-2 border-b border-slate-800 px-3 py-2 shrink-0 bg-slate-900/60">
         <div className="min-w-0">
           <h3 className="truncate text-[11px] font-bold text-slate-200">{title}</h3>
           <p className="text-[9px] text-slate-500">{cues.length} câu · định dạng SRT</p>
         </div>
-        <button type="button" onClick={() => void copyDraft()} className="inline-flex shrink-0 items-center gap-1 rounded-md border border-slate-700 px-2 py-1 text-[10px] font-semibold text-slate-300 hover:border-cyan-500/40 hover:text-cyan-200">
+        <button type="button" onClick={() => void copyDraft()} className="inline-flex shrink-0 items-center gap-1 rounded-none border border-slate-700 px-2 py-1 text-[10px] font-semibold text-slate-300 hover:border-cyan-500/40 hover:text-cyan-200 cursor-pointer">
           <Copy className="h-3 w-3" />{copyMessage || "Copy"}
         </button>
       </header>
@@ -182,7 +181,7 @@ export default function SubtitleEditorPage({ onOpenSetup }: { onOpenSetup: () =>
   const [activeCueIndex, setActiveCueIndex] = useState(-1);
   const activeCueIndexRef = useRef(-1);
   const [showTranslation, setShowTranslation] = useState(true);
-  const [leftPanelTab, setLeftPanelTab] = useState<LeftPanelTab>("videos");
+  const [rawDialogOpen, setRawDialogOpen] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [translationMode, setTranslationMode] = useState<"single" | "all" | null>(null);
   const [translationProgress, setTranslationProgress] = useState<TranslationProgress | null>(null);
@@ -213,9 +212,9 @@ export default function SubtitleEditorPage({ onOpenSetup }: { onOpenSetup: () =>
   };
 
   useEffect(() => {
-    if (leftPanelTab !== "subtitles" || activeCueIndex < 0) return;
+    if (activeCueIndex < 0) return;
     scrollSubtitleCueIntoView(activeCueIndex);
-  }, [activeCueIndex, leftPanelTab, selectedId, selectedItem?.cues.length]);
+  }, [activeCueIndex, selectedId, selectedItem?.cues.length]);
 
   useEffect(() => {
     if (!items.some((item) => item.id === selectedId)) {
@@ -618,7 +617,6 @@ export default function SubtitleEditorPage({ onOpenSetup }: { onOpenSetup: () =>
     if (!cue) return;
     activeCueIndexRef.current = index;
     setActiveCueIndex(index);
-    setLeftPanelTab("subtitles");
     scrollSubtitleCueIntoView(index);
     setVideoCurrentTime(cue.startTime);
     if (videoRef.current) videoRef.current.currentTime = cue.startTime;
@@ -638,7 +636,6 @@ export default function SubtitleEditorPage({ onOpenSetup }: { onOpenSetup: () =>
     });
     activeCueIndexRef.current = created.index;
     setActiveCueIndex(created.index);
-    setLeftPanelTab("subtitles");
     scrollSubtitleCueIntoView(created.index);
     setBatchMessage("");
   };
@@ -701,259 +698,423 @@ export default function SubtitleEditorPage({ onOpenSetup }: { onOpenSetup: () =>
   const readyVideoCount = items.filter((item) => item.video && item.cues.length).length;
 
   return (
-    <div className="w-full space-y-4 px-3 sm:px-5 lg:px-7">
-      <header className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <div className="flex items-center gap-2 text-violet-300"><Subtitles className="h-5 w-5" /><span className="text-[11px] font-semibold uppercase tracking-[0.18em]">Subtitle Studio</span></div>
-          <h1 className="mt-1 text-xl font-bold text-white sm:text-2xl">Dịch & sửa phụ đề</h1>
-          <p className="mt-1 text-sm text-slate-400">Kéo video cùng tệp SRT vào; các tệp được ghép theo tên để dịch, chỉnh sửa và xem trước.</p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <button type="button" onClick={() => fileInputRef.current?.click()} className="inline-flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-xs font-semibold text-slate-200 hover:border-violet-400/50 hover:text-white"><Plus className="h-3.5 w-3.5" />Thêm video / SRT</button>
-          <button type="button" onClick={onOpenSetup} className="inline-flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-xs font-semibold text-slate-200 hover:border-violet-400/50 hover:text-white"><Settings className="h-3.5 w-3.5" />Cài đặt dịch</button>
-          <button type="button" onClick={() => void openPromptDialog()} disabled={translationInProgress} className="inline-flex items-center gap-2 rounded-xl border border-violet-500/30 bg-violet-500/10 px-3 py-2 text-xs font-semibold text-violet-200 hover:bg-violet-500/20 disabled:opacity-40"><Subtitles className="h-3.5 w-3.5" />Prompt riêng</button>
-          <button type="button" disabled={!selectedItem?.video || !selectedItem.cues.length || translationInProgress} onClick={() => void translateSelected()} className="inline-flex items-center gap-2 rounded-xl border border-violet-500/30 bg-violet-500/10 px-3 py-2 text-xs font-semibold text-violet-200 hover:bg-violet-500/20 disabled:opacity-40">{translationMode === "single" ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Languages className="h-3.5 w-3.5" />}{translationMode === "single" ? "Đang dịch video…" : "Dịch video đang chọn"}</button>
-          <button type="button" disabled={!items.some((item) => item.video && item.cues.length && item.status !== "translated") || translationInProgress} onClick={() => void translateAll()} className="inline-flex items-center gap-2 rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-3 py-2 text-xs font-semibold text-cyan-200 hover:bg-cyan-500/20 disabled:opacity-40">{translationMode === "all" ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Languages className="h-3.5 w-3.5" />}{translationMode === "all" ? "Đang dịch lần lượt…" : `Dịch tất cả (${items.filter((item) => item.video && item.cues.length && item.status !== "translated").length})`}</button>
-        </div>
-      </header>
-
-      {translationProgress && (
-        <section
-          aria-label="Tiến trình dịch phụ đề"
-          className="rounded-xl border border-violet-500/25 bg-violet-500/5 px-4 py-3"
-        >
-          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
-            <div className="flex min-w-0 items-center gap-2 text-xs font-semibold text-violet-100">
-              <LoaderCircle className="h-3.5 w-3.5 shrink-0 animate-spin" />
-              <span className="truncate">{translationProgress.currentVideo}</span>
-            </div>
-            <span className="shrink-0 font-mono text-xs font-bold text-violet-200">
-              {translationProgress.total
-                ? `${Math.floor(translationProgress.completed * 100 / translationProgress.total)}% · ${translationProgress.completed}/${translationProgress.total} câu`
-                : "Đang chuẩn bị…"}
+    <div className="w-full h-full flex flex-col overflow-hidden bg-slate-950">
+      {/* ── TOP TOOLBAR ── */}
+      <div className="h-10 px-3 shrink-0 flex items-center justify-between gap-2 border-b border-slate-800 bg-slate-900/90 select-none">
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 text-violet-300"><Subtitles className="h-4 w-4" /><span className="text-xs font-bold uppercase tracking-wide text-white">Dịch &amp; Sửa Phụ Đề</span></div>
+          {selectedItem && (
+            <span className={`hidden sm:inline border px-1.5 py-0.5 text-[9px] font-semibold ${statusColor(selectedItem.status)} border-slate-700`}>
+              {statusLabel(selectedItem.status)}
             </span>
-            <button type="button" onClick={cancelTranslation} className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-rose-500/30 bg-rose-500/10 px-2.5 py-1.5 text-[10px] font-semibold text-rose-200 hover:bg-rose-500/20">
-              <X className="h-3 w-3" />Dừng dịch
-            </button>
+          )}
+        </div>
+        <div className="flex items-center gap-1.5 shrink-0">
+          <button type="button" onClick={() => fileInputRef.current?.click()} className="inline-flex items-center gap-1 border border-slate-700 bg-slate-900 px-2 py-1 text-[10px] font-semibold text-slate-200 hover:border-violet-400/50 hover:text-white cursor-pointer"><Plus className="h-3 w-3" /><span className="hidden sm:inline">Thêm Video/SRT</span><span className="sm:hidden">Thêm</span></button>
+          <button type="button" onClick={onOpenSetup} className="inline-flex items-center gap-1 border border-slate-700 bg-slate-900 px-2 py-1 text-[10px] font-semibold text-slate-200 hover:border-violet-400/50 hover:text-white cursor-pointer"><Settings className="h-3 w-3" /><span className="hidden sm:inline">Cài đặt dịch</span></button>
+          <button type="button" onClick={() => void openPromptDialog()} disabled={translationInProgress} className="inline-flex items-center gap-1 border border-violet-500/30 bg-violet-500/10 px-2 py-1 text-[10px] font-semibold text-violet-200 hover:bg-violet-500/20 disabled:opacity-40 cursor-pointer"><Subtitles className="h-3 w-3" /><span className="hidden md:inline">Prompt riêng</span></button>
+          <button type="button" disabled={!selectedItem?.video || !selectedItem.cues.length || translationInProgress} onClick={() => void translateSelected()} className="inline-flex items-center gap-1 border border-violet-500/30 bg-violet-500/10 px-2 py-1 text-[10px] font-semibold text-violet-200 hover:bg-violet-500/20 disabled:opacity-40 cursor-pointer">{translationMode === "single" ? <LoaderCircle className="h-3 w-3 animate-spin" /> : <Languages className="h-3 w-3" />}<span className="hidden lg:inline">{translationMode === "single" ? "Đang dịch…" : "Dịch video này"}</span></button>
+          <button type="button" disabled={!items.some((item) => item.video && item.cues.length && item.status !== "translated") || translationInProgress} onClick={() => void translateAll()} className="inline-flex items-center gap-1 border border-cyan-500/30 bg-cyan-500/10 px-2 py-1 text-[10px] font-semibold text-cyan-200 hover:bg-cyan-500/20 disabled:opacity-40 cursor-pointer">{translationMode === "all" ? <LoaderCircle className="h-3 w-3 animate-spin" /> : <Languages className="h-3 w-3" />}<span className="hidden lg:inline">{translationMode === "all" ? "Đang dịch tất cả…" : `Dịch tất cả (${items.filter((item) => item.video && item.cues.length && item.status !== "translated").length})`}</span></button>
+          {selectedItem?.cues.length ? <>
+            <div className="w-px h-4 bg-slate-700 shrink-0" />
+            <button type="button" onClick={() => selectedItem && downloadSrt(selectedItem, false)} className="inline-flex items-center gap-1 border border-slate-700 px-2 py-1 text-[10px] font-semibold text-slate-300 hover:bg-slate-800 cursor-pointer"><Download className="h-3 w-3" />SRT</button>
+            <button type="button" disabled={!selectedItem.cues.every((cue) => cue.translatedText.trim())} onClick={() => selectedItem && downloadSrt(selectedItem, true)} className="inline-flex items-center gap-1 border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-[10px] font-semibold text-emerald-200 hover:bg-emerald-500/20 disabled:opacity-40 cursor-pointer"><Download className="h-3 w-3" />SRT Dịch</button>
+          </> : null}
+          {items.length > 0 && <button type="button" onClick={() => { setItems([]); setSelectedId(""); setBatchMessage(""); }} disabled={translationInProgress} className="inline-flex items-center gap-1 border border-rose-500/30 px-2 py-1 text-[10px] font-semibold text-rose-200 hover:bg-rose-500/10 disabled:opacity-40 cursor-pointer"><Trash2 className="h-3 w-3" /></button>}
+        </div>
+      </div>
+
+      {/* Translation progress banner */}
+      {translationProgress && (
+        <div className="px-3 py-2 shrink-0 border-b border-violet-500/25 bg-violet-500/5 flex flex-wrap items-center gap-3">
+          <LoaderCircle className="h-3.5 w-3.5 shrink-0 animate-spin text-violet-300" />
+          <span className="truncate text-[11px] font-semibold text-violet-100 min-w-0 flex-1">{translationProgress.message} · {translationProgress.currentVideo}</span>
+          <span className="shrink-0 font-mono text-[10px] font-bold text-violet-200">
+            {translationProgress.total ? `${Math.floor(translationProgress.completed * 100 / translationProgress.total)}%` : "…"}
+          </span>
+          <div role="progressbar" aria-valuemin={0} aria-valuemax={translationProgress.total || 1} aria-valuenow={translationProgress.completed} className="w-full h-1 bg-slate-800">
+            <div className="h-full bg-gradient-to-r from-violet-500 to-cyan-400 transition-[width] duration-300" style={{ width: `${translationProgress.total ? Math.floor(translationProgress.completed * 100 / translationProgress.total) : 0}%` }} />
           </div>
-          <div
-            role="progressbar"
-            aria-valuemin={0}
-            aria-valuemax={translationProgress.total || 1}
-            aria-valuenow={translationProgress.completed}
-            className="mt-2 h-2 overflow-hidden rounded-full bg-slate-800"
-          >
-            <div
-              className="h-full rounded-full bg-gradient-to-r from-violet-500 to-cyan-400 transition-[width] duration-300"
-              style={{ width: `${translationProgress.total ? Math.floor(translationProgress.completed * 100 / translationProgress.total) : 0}%` }}
-            />
-          </div>
-          <p className="mt-1.5 text-[10px] text-slate-400">
-            {translationProgress.message}
-            {translationProgress.completed === 0 && " Engine có thể đang khởi động; lần dịch đầu thường cần chờ lâu hơn."}
-          </p>
-        </section>
+          <button type="button" onClick={cancelTranslation} className="shrink-0 inline-flex items-center gap-1 border border-rose-500/30 bg-rose-500/10 px-2 py-0.5 text-[9px] font-semibold text-rose-200 hover:bg-rose-500/20 cursor-pointer"><X className="h-2.5 w-2.5" />Dừng</button>
+        </div>
+      )}
+
+      {/* Status/batch message strip */}
+      {batchMessage && (
+        <div role="status" className={`px-3 py-1.5 shrink-0 text-[10px] border-b ${batchMessage.includes("cần thử lại") || batchMessage.includes("không thể") ? "border-amber-500/20 bg-amber-500/5 text-amber-200" : "border-slate-800 bg-slate-900/60 text-slate-300"}`}>
+          {batchMessage}
+        </div>
       )}
 
       <input ref={fileInputRef} type="file" multiple accept="video/*,.srt" className="hidden" onChange={(event) => {
         if (event.target.files) void addFiles(event.target.files);
         event.target.value = "";
       }} />
-      {batchMessage && <div role="status" className={`rounded-xl border px-3 py-2 text-xs ${batchMessage.includes("cần thử lại") || batchMessage.includes("không thể") ? "border-amber-500/30 bg-amber-500/5 text-amber-200" : "border-slate-700 bg-slate-900 text-slate-300"}`}>{batchMessage}</div>}
 
       {promptDialogOpen && (
         <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm">
-          <section role="dialog" aria-modal="true" aria-labelledby="subtitle-prompt-title" className="flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-slate-700 bg-slate-900 shadow-2xl">
+          <section role="dialog" aria-modal="true" aria-labelledby="subtitle-prompt-title" className="flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden border border-slate-700 bg-slate-900 shadow-2xl">
             <header className="flex items-center justify-between gap-3 border-b border-slate-800 px-5 py-4">
               <div><h2 id="subtitle-prompt-title" className="text-sm font-bold text-white">Prompt dịch riêng</h2><p className="mt-1 text-[11px] text-slate-400">Mặc định nạp prompt từ Setup. Thay đổi ở đây chỉ áp dụng trong trang này, không sửa cấu hình Setup.</p></div>
-              <button type="button" onClick={() => setPromptDialogOpen(false)} aria-label="Đóng prompt" className="rounded-lg p-2 text-slate-400 hover:bg-slate-800 hover:text-white"><X className="h-4 w-4" /></button>
+              <button type="button" onClick={() => setPromptDialogOpen(false)} aria-label="Đóng prompt" className="p-2 text-slate-400 hover:bg-slate-800 hover:text-white cursor-pointer"><X className="h-4 w-4" /></button>
             </header>
             <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-5">
-              {promptError && <p role="alert" className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">{promptError}</p>}
-              <textarea
-                value={promptDraft}
-                onChange={(event) => setPromptDraft(event.target.value)}
-                disabled={promptLoading}
-                maxLength={12_000}
-                rows={18}
-                placeholder={promptLoading ? "Đang tải prompt từ Setup…" : "Nhập prompt dịch…"}
-                className="w-full resize-y rounded-xl border border-slate-700 bg-slate-950 p-3 font-mono text-xs leading-relaxed text-slate-100 outline-none placeholder:text-slate-600 focus:border-violet-400 disabled:opacity-50"
-              />
+              {promptError && <p role="alert" className="border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">{promptError}</p>}
+              <textarea value={promptDraft} onChange={(event) => setPromptDraft(event.target.value)} disabled={promptLoading} maxLength={12_000} rows={18} placeholder={promptLoading ? "Đang tải prompt từ Setup…" : "Nhập prompt dịch…"} className="w-full resize-y border border-slate-700 bg-slate-950 p-3 font-mono text-xs leading-relaxed text-slate-100 outline-none placeholder:text-slate-600 focus:border-violet-400 disabled:opacity-50" />
               <div className="flex flex-wrap items-center justify-between gap-2 text-[10px] text-slate-500">
                 <span>Giữ yêu cầu trả JSON `translations` với `id` và `translation` để hệ thống ghép đúng câu.</span>
                 <span>{promptDraft.length.toLocaleString()}/12.000</span>
               </div>
             </div>
             <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-800 px-5 py-3">
-              <button type="button" disabled={promptLoading || !promptDefault} onClick={() => { setPromptDraft(promptDefault); setCustomPrompt(null); }} className="rounded-lg border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-300 hover:bg-slate-800 disabled:opacity-40">Dùng lại prompt Setup</button>
+              <button type="button" disabled={promptLoading || !promptDefault} onClick={() => { setPromptDraft(promptDefault); setCustomPrompt(null); }} className="border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-300 hover:bg-slate-800 disabled:opacity-40 cursor-pointer">Dùng lại prompt Setup</button>
               <div className="flex items-center gap-2">
-                <button type="button" onClick={() => setPromptDialogOpen(false)} className="rounded-lg border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-300 hover:bg-slate-800">Hủy</button>
-                <button type="button" disabled={promptLoading || !promptDraft.trim() || promptDraft.length > 12_000} onClick={() => { setCustomPrompt(promptDraft.trim()); setPromptDialogOpen(false); }} className="rounded-lg bg-violet-500 px-4 py-2 text-xs font-bold text-white hover:bg-violet-400 disabled:opacity-40">Dùng prompt này</button>
+                <button type="button" onClick={() => setPromptDialogOpen(false)} className="border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-300 hover:bg-slate-800 cursor-pointer">Hủy</button>
+                <button type="button" disabled={promptLoading || !promptDraft.trim() || promptDraft.length > 12_000} onClick={() => { setCustomPrompt(promptDraft.trim()); setPromptDialogOpen(false); }} className="bg-violet-500 px-4 py-2 text-xs font-bold text-white hover:bg-violet-400 disabled:opacity-40 cursor-pointer">Dùng prompt này</button>
               </div>
             </footer>
           </section>
         </div>
       )}
 
-      <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-2">
-        <section className="flex h-[75vh] min-h-[360px] max-h-[900px] flex-col overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/90 shadow-xl">
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 px-4 py-3">
-            <div><h2 className="text-sm font-bold text-white">Danh sách phụ đề · video preview</h2><p className="mt-0.5 text-[11px] text-slate-500">Chọn video để sửa; nhấn câu để tua đến thời điểm bắt đầu.</p></div>
-            <div className="flex items-center gap-2">
-              <button type="button" disabled={!selectedItem?.cues.length} onClick={() => selectedItem && downloadSrt(selectedItem, false)} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 px-2.5 py-1.5 text-[10px] font-semibold text-slate-300 hover:bg-slate-800 disabled:opacity-40"><Download className="h-3 w-3" />SRT gốc</button>
-              <button type="button" disabled={!selectedItem?.cues.length || !selectedItem.cues.every((cue) => cue.translatedText.trim())} onClick={() => selectedItem && downloadSrt(selectedItem, true)} className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1.5 text-[10px] font-semibold text-emerald-200 hover:bg-emerald-500/20 disabled:opacity-40"><Download className="h-3 w-3" />SRT đã dịch</button>
-              {items.length > 0 && <button type="button" onClick={() => { setItems([]); setSelectedId(""); setBatchMessage(""); }} disabled={translationInProgress} className="inline-flex items-center gap-1 rounded-lg border border-rose-500/30 px-2 py-1.5 text-[10px] font-semibold text-rose-200 hover:bg-rose-500/10 disabled:opacity-40"><Trash2 className="h-3 w-3" />Dọn</button>}
-            </div>
-          </div>
-          <div className="flex border-b border-slate-800 bg-slate-950/40">
-            <button type="button" role="tab" aria-selected={leftPanelTab === "videos"} onClick={() => setLeftPanelTab("videos")} className={`flex-1 border-b-2 px-4 py-2.5 text-xs font-semibold transition-colors ${leftPanelTab === "videos" ? "border-violet-400 text-violet-200" : "border-transparent text-slate-400 hover:text-white"}`}>Videos <span className="ml-1 font-mono text-[10px] text-slate-500">{items.filter((item) => item.video).length}</span></button>
-            <button type="button" role="tab" aria-selected={leftPanelTab === "subtitles"} onClick={() => setLeftPanelTab("subtitles")} disabled={!selectedItem} className={`flex-1 border-b-2 px-4 py-2.5 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${leftPanelTab === "subtitles" ? "border-violet-400 text-violet-200" : "border-transparent text-slate-400 hover:text-white"}`}>Phụ đề{selectedItem ? ` · ${selectedItem.video?.name || selectedItem.subtitleFile?.name}` : ""}</button>
-            <button type="button" role="tab" aria-selected={leftPanelTab === "raw"} onClick={() => setLeftPanelTab("raw")} disabled={!selectedItem} className={`flex-1 border-b-2 px-4 py-2.5 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${leftPanelTab === "raw" ? "border-violet-400 text-violet-200" : "border-transparent text-slate-400 hover:text-white"}`}>Phụ đề Raw</button>
-          </div>
-          {leftPanelTab === "videos" ? (
-            <div
-              role="tabpanel"
-              onDragEnter={(event) => { event.preventDefault(); setDragging(true); }}
-              onDragOver={(event) => { event.preventDefault(); setDragging(true); }}
-              onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false); }}
-              onDrop={handleDrop}
-              className="min-h-0 flex-1 overflow-y-auto"
-            >
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                className={`mx-3 mt-3 block w-[calc(100%-1.5rem)] rounded-xl border border-dashed px-3 py-3 text-center text-[11px] transition-colors ${dragging ? "border-violet-400 bg-violet-500/10 text-violet-100" : "border-slate-700 bg-slate-950/40 text-slate-400 hover:border-violet-400/50 hover:text-violet-200"}`}
-              >
-                <Upload className="mr-1.5 inline h-3.5 w-3.5" />Thả video/SRT vào đây hoặc bấm để thêm
-                <span className="mt-1 block text-[9px] text-slate-500">Tự ghép theo tên file</span>
-              </button>
-              <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-800 bg-slate-900/95 px-4 py-2 backdrop-blur"><h3 className="text-[11px] font-bold text-slate-300">Video trong hàng đợi</h3><span className="font-mono text-[10px] text-slate-500">{readyVideoCount}/{items.filter((item) => item.video).length} video có phụ đề</span></div>
-              <div className="divide-y divide-slate-800/70">
-                {items.length ? items.map((item) => (
-                  <div key={item.id} title={item.error || undefined} className={`flex items-center gap-2 px-3 py-2 ${selectedId === item.id ? "bg-violet-500/10" : ""}`}>
-                    <button type="button" onClick={() => { setSelectedId(item.id); setActiveCueIndex(-1); setLeftPanelTab("subtitles"); }} aria-pressed={selectedId === item.id} className="flex min-w-0 flex-1 items-center gap-2 rounded text-left">
-                      <FileVideo2 className={`h-4 w-4 shrink-0 ${selectedId === item.id ? "text-violet-300" : "text-slate-500"}`} />
-                      <span className="min-w-0 flex-1"><span className="block truncate text-[11px] font-medium text-slate-200">{item.video?.name || item.subtitleFile?.name}</span><span className={`mt-0.5 block text-[10px] ${statusColor(item.status)}`}>{item.status === "translating" ? <><LoaderCircle className="mr-1 inline h-3 w-3 animate-spin" />{statusLabel(item.status)}</> : item.status === "translated" ? <><CheckCircle2 className="mr-1 inline h-3 w-3" />{statusLabel(item.status)}</> : item.status === "error" ? <><AlertCircle className="mr-1 inline h-3 w-3" />{statusLabel(item.status)} · {item.error}</> : statusLabel(item.status)}{item.cues.length ? ` · ${item.cues.length} câu` : ""}</span></span>
-                    </button>
-                    <button type="button" onClick={() => removeItem(item.id)} disabled={translationInProgress} title="Xóa khỏi danh sách" aria-label={`Xóa ${item.video?.name || item.subtitleFile?.name}`} className="rounded p-1 text-slate-500 hover:bg-slate-800 hover:text-rose-300 disabled:opacity-30"><X className="h-3.5 w-3.5" /></button>
-                  </div>
-                )) : <button type="button" onClick={() => fileInputRef.current?.click()} className="flex w-full items-center justify-center gap-2 px-4 py-5 text-[11px] text-slate-500 hover:text-violet-200"><Upload className="h-4 w-4" />Thêm video và tệp SRT</button>}
+      {rawDialogOpen && selectedItem && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm">
+          <section role="dialog" aria-modal="true" aria-labelledby="subtitle-raw-title" className="flex h-[80vh] w-full max-w-4xl flex-col overflow-hidden border border-slate-700 bg-slate-900 shadow-2xl">
+            <header className="flex items-center justify-between gap-3 border-b border-slate-800 px-4 py-3 shrink-0">
+              <div className="min-w-0">
+                <h2 id="subtitle-raw-title" className="text-sm font-bold text-white flex items-center gap-2">
+                  <Subtitles className="h-4 w-4 text-violet-300" />
+                  <span>Phụ đề Raw (SRT)</span>
+                  <span className="font-mono text-xs text-slate-400 font-normal truncate">· {selectedItem.video?.name || selectedItem.subtitleFile?.name}</span>
+                </h2>
+                <p className="mt-0.5 text-[10px] text-slate-400">Xem, sao chép hoặc dán nội dung SRT thô cho phụ đề gốc và bản dịch.</p>
               </div>
+              <button type="button" onClick={() => setRawDialogOpen(false)} aria-label="Đóng bảng Raw" className="p-1.5 text-slate-400 hover:bg-slate-800 hover:text-white cursor-pointer"><X className="h-4 w-4" /></button>
+            </header>
+            <div className="min-h-0 flex-1 p-3 grid grid-cols-1 md:grid-cols-2 gap-3 overflow-hidden">
+              <RawSubtitleColumn
+                title="SRT gốc"
+                translated={false}
+                cues={selectedItem.cues}
+                disabled={translationInProgress}
+                onApply={applyRawSubtitles}
+              />
+              <RawSubtitleColumn
+                title="SRT bản dịch"
+                translated
+                cues={selectedItem.cues}
+                disabled={translationInProgress}
+                onApply={applyRawSubtitles}
+              />
             </div>
-          ) : leftPanelTab === "subtitles" ? (
-            <div ref={subtitleListRef} role="tabpanel" className="min-h-0 flex-1 overflow-y-auto">
-              <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-800 bg-slate-900/95 px-4 py-2.5 backdrop-blur">
-                <span className="truncate text-xs font-bold text-white">{selectedItem?.video?.name || selectedItem?.subtitleFile?.name || "Chưa chọn video"}</span>
-                <div className="ml-2 flex shrink-0 items-center gap-2"><span className="font-mono text-[10px] text-slate-500">{selectedItem?.cues.length || 0} câu</span><button type="button" onClick={() => setShowTranslation((current) => !current)} className={`rounded-md border px-2 py-1 text-[10px] font-semibold ${showTranslation ? "border-violet-500/30 text-violet-200" : "border-slate-700 text-slate-400"}`}>{showTranslation ? "Preview: dịch" : "Preview: gốc"}</button></div>
-              </div>
-              {selectedItem?.cues.length ? <div className="divide-y divide-slate-800/80">
-                {selectedItem.cues.map((cue, index) => (
-                  <article
-                    key={`${selectedItem.id}-${index}`}
-                    ref={(element) => {
-                      if (element) subtitleCueElementsRef.current.set(index, element);
-                      else subtitleCueElementsRef.current.delete(index);
-                    }}
-                    className={`p-3 transition-colors ${activeCue === cue ? "bg-violet-500/5" : ""}`}
-                  >
-                    <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                      <button type="button" onClick={() => selectCue(index)} className="font-mono text-[10px] text-cyan-300 hover:text-cyan-100">#{index + 1} · {cueTime(cue.startTime)} → {cueTime(cue.endTime)}</button>
-                      <div className="flex items-center gap-1.5">
-                        <label className="flex items-center gap-1 text-[9px] text-slate-500">Bắt đầu<input aria-label={`Thời gian bắt đầu câu ${index + 1}`} type="number" min="0" step="0.01" value={cue.startTime} disabled={translationInProgress} onChange={(event) => updateCue(selectedItem.id, index, { startTime: Math.max(0, Number(event.target.value) || 0) })} className="w-16 rounded border border-slate-700 bg-slate-950 px-1 py-1 font-mono text-[10px] text-slate-300 outline-none focus:border-cyan-500" /></label>
-                        <label className="flex items-center gap-1 text-[9px] text-slate-500">Kết thúc<input aria-label={`Thời gian kết thúc câu ${index + 1}`} type="number" min="0" step="0.01" value={cue.endTime} disabled={translationInProgress} onChange={(event) => updateCue(selectedItem.id, index, { endTime: Math.max(cue.startTime + 0.01, Number(event.target.value) || cue.startTime + 0.01) })} className="w-16 rounded border border-slate-700 bg-slate-950 px-1 py-1 font-mono text-[10px] text-slate-300 outline-none focus:border-cyan-500" /></label>
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
-                      <label className="min-w-0 text-[9px] font-semibold uppercase tracking-wide text-slate-500">Gốc<textarea aria-label={`Nội dung gốc câu ${index + 1}`} value={cue.text} disabled={translationInProgress} onChange={(event) => updateCue(selectedItem.id, index, { text: event.target.value })} rows={Math.min(4, Math.max(2, cue.text.split("\n").length))} className="mt-1 w-full resize-y rounded-lg border border-slate-700/80 bg-slate-950/70 px-2.5 py-1.5 text-[11px] font-normal leading-[15px] normal-case tracking-normal text-slate-100 outline-none focus:border-cyan-500/60 disabled:opacity-60" /></label>
-                      <label className="min-w-0 text-[9px] font-semibold uppercase tracking-wide text-violet-300">Bản dịch<textarea aria-label={`Bản dịch câu ${index + 1}`} value={cue.translatedText} disabled={translationInProgress} onChange={(event) => updateCue(selectedItem.id, index, { translatedText: event.target.value })} rows={Math.min(4, Math.max(2, cue.translatedText.split("\n").length))} placeholder="Nhập hoặc sửa bản dịch…" className="mt-1 w-full resize-y rounded-lg border border-violet-500/20 bg-violet-950/10 px-2.5 py-1.5 text-[11px] font-normal leading-[15px] normal-case tracking-normal text-violet-100 outline-none placeholder:text-slate-600 focus:border-violet-400/60 disabled:opacity-60" /></label>
-                    </div>
-                  </article>
-                ))}
-              </div> : <div className="flex min-h-56 flex-col items-center justify-center px-6 text-center"><Captions className="h-8 w-8 text-slate-600" /><p className="mt-3 text-xs font-medium text-slate-300">{selectedItem ? selectedItem.status === "missing-subtitle" ? "Video chưa có tệp SRT ghép cặp" : "Tệp SRT chưa được ghép với video" : "Chưa có video hoặc phụ đề"}</p><p className="mt-1 text-[11px] text-slate-500">Thêm video và SRT cùng lúc, hoặc bổ sung tệp còn thiếu sau.</p></div>}
-            </div>
-          ) : (
-            <div role="tabpanel" className="flex min-h-0 flex-1 flex-col overflow-hidden">
-              <div className="flex items-center justify-between border-b border-slate-800 bg-slate-900/95 px-4 py-2.5">
-                <span className="truncate text-xs font-bold text-white">{selectedItem?.video?.name || selectedItem?.subtitleFile?.name || "Chưa chọn video"}</span>
-                <span className="ml-2 shrink-0 font-mono text-[10px] text-slate-500">{selectedItem?.cues.length || 0} câu</span>
-              </div>
-              <div className="grid min-h-0 flex-1 grid-cols-1 gap-2 overflow-y-auto p-2 lg:grid-cols-2">
-                <RawSubtitleColumn
-                  title="SRT gốc"
-                  translated={false}
-                  cues={selectedItem?.cues || []}
-                  disabled={translationInProgress}
-                  onApply={applyRawSubtitles}
-                />
-                <RawSubtitleColumn
-                  title="SRT bản dịch"
-                  translated
-                  cues={selectedItem?.cues || []}
-                  disabled={translationInProgress}
-                  onApply={applyRawSubtitles}
-                />
-              </div>
-            </div>
-          )}
-        </section>
+            <footer className="flex items-center justify-between border-t border-slate-800 px-4 py-2 shrink-0 bg-slate-950/40">
+              <span className="text-[10px] text-slate-500 font-mono">{selectedItem.cues.length} câu</span>
+              <button type="button" onClick={() => setRawDialogOpen(false)} className="border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-300 hover:bg-slate-800 cursor-pointer">Đóng</button>
+            </footer>
+          </section>
+        </div>
+      )}
 
-        <section className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/90 shadow-xl">
-          <div className="flex items-center justify-between gap-3 border-b border-slate-800 px-4 py-3">
-            <div><h2 className="text-sm font-bold text-white">Xem trước video</h2><p className="mt-0.5 max-w-[60vw] truncate text-[11px] text-slate-500">{selectedItem?.video?.name || "Chọn video từ danh sách"}</p></div>
-            <span className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold ${selectedItem ? `${statusColor(selectedItem.status)} border-slate-700` : "border-slate-700 text-slate-500"}`}>{selectedItem ? statusLabel(selectedItem.status) : "Chưa chọn"}</span>
+      {/* ── MAIN BODY: LEFT panel (video list + cue list) | RIGHT panel (video + subtitle list) ── */}
+      <div className="flex-1 min-h-0 w-full flex flex-row overflow-hidden">
+
+        {/* LEFT SIDEBAR: video list only */}
+        <aside className="w-[280px] lg:w-[320px] shrink-0 h-full border-r border-slate-800 bg-slate-900/50 flex flex-col overflow-hidden">
+          {/* Header */}
+          <div className="flex items-center justify-between border-b border-slate-800 bg-slate-950/40 px-3 py-2 shrink-0">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-300">Danh sách Video</span>
+            <span className="font-mono text-[9px] text-slate-500">{items.filter((item) => item.video).length} video</span>
           </div>
+
           <div
-            ref={previewFrameRef}
-            className={previewFullscreen
-              ? "fixed inset-0 z-[100] flex h-screen w-screen items-center justify-center bg-black"
-              : "relative flex aspect-video items-center justify-center bg-black"}
+            onDragEnter={(event) => { event.preventDefault(); setDragging(true); }}
+            onDragOver={(event) => { event.preventDefault(); setDragging(true); }}
+            onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false); }}
+            onDrop={handleDrop}
+            className="flex-1 min-h-0 overflow-y-auto scrollbar-thin"
           >
-            <div
-              className="relative flex aspect-video max-h-full max-w-full items-center justify-center bg-black"
-              style={previewFullscreen && videoUrl
-                ? { width: `min(100vw, ${videoAspectRatio * 100}vh)`, aspectRatio: String(videoAspectRatio) }
-                : { width: "100%" }}
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className={`m-2 block w-[calc(100%-1rem)] border border-dashed px-3 py-2 text-center text-[10px] transition-colors cursor-pointer ${dragging ? "border-violet-400 bg-violet-500/10 text-violet-100" : "border-slate-700 bg-slate-950/40 text-slate-400 hover:border-violet-400/50 hover:text-violet-200"}`}
             >
-              {videoUrl ? <video key={selectedId} ref={videoRef} src={videoUrl} onLoadedMetadata={(event) => {
-                const { videoWidth, videoHeight } = event.currentTarget;
-                setVideoDuration(event.currentTarget.duration || 0);
-                setVideoCurrentTime(event.currentTarget.currentTime);
-                setVideoPaused(event.currentTarget.paused);
-                if (videoWidth > 0 && videoHeight > 0) setVideoAspectRatio(videoWidth / videoHeight);
-              }} className="h-full w-full object-contain" /> : <div className="flex flex-col items-center gap-2 text-slate-600"><FileVideo2 className="h-10 w-10" /><span className="text-xs">Video chưa được ghép hoặc chưa được chọn</span></div>}
-              {videoUrl && displayedText && <div className="pointer-events-none absolute inset-x-0 bottom-[12%] flex justify-center px-6"><span className={`max-w-[90%] whitespace-pre-line rounded bg-black/70 px-3 py-1.5 text-center font-semibold text-white [text-shadow:0_1px_3px_#000] ${previewFullscreen ? "text-[clamp(1.5rem,3.5vw,3rem)] leading-tight" : "text-sm sm:text-base"}`}>{displayedText}</span></div>}
-              {videoUrl && <button type="button" onClick={() => void togglePreviewFullscreen()} aria-label={previewFullscreen ? "Thoát toàn màn hình" : "Xem video toàn màn hình"} title={previewFullscreen ? "Thoát toàn màn hình" : "Xem video toàn màn hình"} className="absolute right-3 top-3 z-10 rounded-lg border border-white/20 bg-black/60 p-2 text-white opacity-70 transition-opacity hover:opacity-100 focus:opacity-100">
-                {previewFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
-              </button>}
+              <Upload className="mr-1.5 inline h-3 w-3" />Thả video/SRT vào đây hoặc bấm để thêm
+              <span className="mt-0.5 block text-[9px] text-slate-500">Tự ghép theo tên file</span>
+            </button>
+            <div className="px-2 py-1 flex items-center justify-between border-b border-slate-800">
+              <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wide">Hàng đợi</span>
+              <span className="font-mono text-[9px] text-slate-500">{readyVideoCount}/{items.filter((item) => item.video).length} có SRT</span>
+            </div>
+            <div className="divide-y divide-slate-800/70">
+              {items.length ? items.map((item) => (
+                <div key={item.id} title={item.error || undefined} className={`flex items-center gap-1.5 px-2 py-2 ${selectedId === item.id ? "bg-violet-500/10" : "hover:bg-slate-900/60"}`}>
+                  <button type="button" onClick={() => { setSelectedId(item.id); setActiveCueIndex(-1); }} aria-pressed={selectedId === item.id} className="flex min-w-0 flex-1 items-center gap-1.5 text-left cursor-pointer">
+                    <FileVideo2 className={`h-3.5 w-3.5 shrink-0 ${selectedId === item.id ? "text-violet-300" : "text-slate-500"}`} />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-[10px] font-medium text-slate-200">{item.video?.name || item.subtitleFile?.name}</span>
+                      <span className={`mt-0.5 block text-[9px] font-mono ${statusColor(item.status)}`}>
+                        {item.status === "translating" ? <><LoaderCircle className="mr-1 inline h-2.5 w-2.5 animate-spin" />{statusLabel(item.status)}</> : item.status === "translated" ? <><CheckCircle2 className="mr-1 inline h-2.5 w-2.5" />{statusLabel(item.status)}</> : item.status === "error" ? <><AlertCircle className="mr-1 inline h-2.5 w-2.5" />{item.error}</> : statusLabel(item.status)}{item.cues.length ? ` · ${item.cues.length}` : ""}
+                      </span>
+                    </span>
+                  </button>
+                  <button type="button" onClick={() => removeItem(item.id)} disabled={translationInProgress} title="Xóa khỏi danh sách" aria-label={`Xóa ${item.video?.name || item.subtitleFile?.name}`} className="p-1 text-slate-500 hover:bg-slate-800 hover:text-rose-300 disabled:opacity-30 cursor-pointer"><X className="h-3 w-3" /></button>
+                </div>
+              )) : (
+                <button type="button" onClick={() => fileInputRef.current?.click()} className="flex w-full items-center justify-center gap-2 px-4 py-6 text-[10px] text-slate-500 hover:text-violet-200 cursor-pointer">
+                  <Upload className="h-3.5 w-3.5" />Thêm video và tệp SRT
+                </button>
+              )}
             </div>
           </div>
-          <div className="flex items-center gap-2 border-b border-slate-800 bg-slate-950/50 px-4 py-2">
-            <button type="button" onClick={() => void toggleVideoPlayback()} disabled={!videoUrl} aria-label={videoPaused ? "Phát video" : "Tạm dừng video"} title={videoPaused ? "Phát" : "Tạm dừng"} className="rounded-lg border border-cyan-500/30 bg-cyan-500/10 p-2 text-cyan-200 hover:bg-cyan-500/20 disabled:opacity-40">
-              {videoPaused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
-            </button>
-            <button type="button" onClick={stopVideo} disabled={!videoUrl} aria-label="Dừng video và tua về đầu" title="Dừng / về đầu" className="rounded-lg border border-slate-700 bg-slate-900 p-2 text-slate-300 hover:border-slate-500 disabled:opacity-40">
-              <Square className="h-4 w-4 fill-current" />
-            </button>
-            <span className="ml-1 font-mono text-[11px] text-slate-300">{cueTime(videoCurrentTime)} <span className="text-slate-600">/</span> {cueTime(videoDuration)}</span>
-            <span className="ml-auto text-[10px] text-slate-500">Ctrl + cuộn: zoom · Shift + cuộn: cuộn ngang</span>
+        </aside>
+
+        {/* RIGHT PANEL: video + subtitle preview side-by-side, timeline docked at bottom */}
+        <div className="flex-1 min-w-0 h-full flex flex-col overflow-hidden">
+
+          {/* MAIN VIEW: video (left) + subtitle list (right) */}
+          <div className="flex-1 min-h-0 flex flex-row overflow-hidden">
+
+            {/* VIDEO PREVIEW */}
+            <div className="flex-1 min-w-0 h-full flex flex-col overflow-hidden border-r border-slate-800 bg-black">
+              {/* Video viewport */}
+              <div
+                ref={previewFrameRef}
+                className={`flex-1 min-h-0 relative flex items-center justify-center overflow-hidden ${previewFullscreen ? "fixed inset-0 z-[100] bg-black" : "bg-black"}`}
+              >
+                <div
+                  className="relative flex max-h-full max-w-full items-center justify-center bg-black"
+                  style={previewFullscreen && videoUrl
+                    ? { width: `min(100vw, ${videoAspectRatio * 100}vh)`, aspectRatio: String(videoAspectRatio) }
+                    : { width: "100%", height: "100%" }}
+                >
+                  {videoUrl ? (
+                    <video
+                      key={selectedId}
+                      ref={videoRef}
+                      src={videoUrl}
+                      onLoadedMetadata={(event) => {
+                        const { videoWidth, videoHeight } = event.currentTarget;
+                        setVideoDuration(event.currentTarget.duration || 0);
+                        setVideoCurrentTime(event.currentTarget.currentTime);
+                        setVideoPaused(event.currentTarget.paused);
+                        if (videoWidth > 0 && videoHeight > 0) setVideoAspectRatio(videoWidth / videoHeight);
+                      }}
+                      className="max-h-full max-w-full object-contain"
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="flex h-full w-full flex-col items-center justify-center gap-2 text-slate-600 hover:text-violet-300 cursor-pointer transition-colors"
+                    >
+                      <FileVideo2 className="h-10 w-10" />
+                      <span className="text-xs">Chọn video từ danh sách hoặc thêm video mới</span>
+                    </button>
+                  )}
+                  {videoUrl && displayedText && (
+                    <div className="pointer-events-none absolute inset-x-0 bottom-[12%] flex justify-center px-6">
+                      <span className={`max-w-[90%] whitespace-pre-line bg-black/70 px-3 py-1.5 text-center font-semibold text-white [text-shadow:0_1px_3px_#000] ${previewFullscreen ? "text-[clamp(1.5rem,3.5vw,3rem)] leading-tight" : "text-sm"}`}>
+                        {displayedText}
+                      </span>
+                    </div>
+                  )}
+                  {videoUrl && (
+                    <button
+                      type="button"
+                      onClick={() => void togglePreviewFullscreen()}
+                      aria-label={previewFullscreen ? "Thoát toàn màn hình" : "Xem video toàn màn hình"}
+                      className="absolute right-2 top-2 z-10 border border-white/20 bg-black/60 p-1.5 text-white opacity-60 transition-opacity hover:opacity-100 cursor-pointer"
+                    >
+                      {previewFullscreen ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Video info strip */}
+              {selectedItem && (
+                <div className="h-6 px-2 shrink-0 border-t border-slate-800 bg-slate-900/80 flex items-center gap-2 text-[9px] text-slate-500 overflow-hidden">
+                  <span className="truncate">{selectedItem.video?.name || selectedItem.subtitleFile?.name || "—"}</span>
+                  {activeCue && (
+                    <span className="shrink-0 font-mono text-cyan-400">{cueTime(activeCue.startTime)} – {cueTime(activeCue.endTime)}</span>
+                  )}
+                  <span className="ml-auto shrink-0">{showTranslation ? "Ưu tiên bản dịch" : "Câu gốc"}</span>
+                </div>
+              )}
+            </div>
+
+            {/* UNIFIED SUBTITLE COLUMN: Combined preview & inline editor with side-by-side inputs */}
+            <div className="w-[48%] lg:w-[50%] min-w-[340px] max-w-[760px] h-full flex flex-col overflow-hidden bg-slate-950">
+              {/* Header */}
+              <div className="h-8 px-2.5 shrink-0 flex items-center justify-between border-b border-slate-800 bg-slate-900/80">
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <span className="text-[10px] font-bold text-white uppercase tracking-wide truncate">Danh sách phụ đề</span>
+                  {selectedItem && <span className="border border-slate-700 px-1 text-[9px] font-mono text-cyan-300">{selectedItem.cues.length}</span>}
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setRawDialogOpen(true)}
+                    disabled={!selectedItem}
+                    title="Mở bảng chỉnh sửa SRT Raw"
+                    className="border border-slate-700 bg-slate-800/80 px-2 py-0.5 text-[9px] font-semibold text-slate-300 hover:bg-slate-700 hover:text-white disabled:opacity-40 cursor-pointer flex items-center gap-1"
+                  >
+                    <Subtitles className="h-2.5 w-2.5 text-violet-300" />
+                    Raw
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowTranslation((c) => !c)}
+                    title="Xem trước video hiển thị câu Gốc hoặc Dịch"
+                    className={`border px-1.5 py-0.5 text-[9px] font-semibold cursor-pointer ${showTranslation ? "border-violet-500/30 text-violet-200" : "border-slate-700 text-slate-400"}`}
+                  >
+                    {showTranslation ? "Dịch" : "Gốc"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={addSubtitleCue}
+                    disabled={!selectedItem?.video}
+                    title="Thêm câu tại vị trí hiện tại"
+                    className="border border-cyan-500/30 bg-cyan-500/10 px-1.5 py-0.5 text-[9px] font-semibold text-cyan-200 hover:bg-cyan-500/20 disabled:opacity-40 cursor-pointer flex items-center gap-0.5"
+                  >
+                    <Plus className="h-2.5 w-2.5" />
+                    Thêm
+                  </button>
+                </div>
+              </div>
+
+              {/* Subtitle cue list with side-by-side inputs on the same row */}
+              {selectedItem?.cues.length ? (
+                <div ref={subtitleListRef} className="flex-1 min-h-0 overflow-y-auto scrollbar-thin divide-y divide-slate-800/80">
+                  {selectedItem.cues.map((cue, index) => (
+                    <article
+                      key={`${selectedItem.id}-${index}`}
+                      ref={(element) => {
+                        if (element) subtitleCueElementsRef.current.set(index, element);
+                        else subtitleCueElementsRef.current.delete(index);
+                      }}
+                      className={`p-2 transition-colors ${activeCue === cue ? "bg-violet-500/8 border-l-2 border-violet-400" : "hover:bg-slate-900/40"}`}
+                    >
+                      <div className="mb-1.5 flex flex-wrap items-center justify-between gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => selectCue(index)}
+                          className="font-mono text-[9px] text-cyan-300 hover:text-cyan-100 cursor-pointer"
+                        >
+                          #{index + 1} · {cueTime(cue.startTime)} → {cueTime(cue.endTime)}
+                          <span className="ml-1 text-[8px] text-slate-500 font-normal">({(cue.endTime - cue.startTime).toFixed(2)}s)</span>
+                        </button>
+                        <div className="flex items-center gap-1.5">
+                          <label className="flex items-center gap-0.5 text-[8px] text-slate-500">
+                            Start
+                            <input
+                              aria-label={`Thời gian bắt đầu câu ${index + 1}`}
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={cue.startTime}
+                              disabled={translationInProgress}
+                              onChange={(event) => updateCue(selectedItem.id, index, { startTime: Math.max(0, Number(event.target.value) || 0) })}
+                              className="w-14 border border-slate-700 bg-slate-950 px-1 py-0.5 font-mono text-[9px] text-slate-300 outline-none focus:border-cyan-500"
+                            />
+                          </label>
+                          <label className="flex items-center gap-0.5 text-[8px] text-slate-500">
+                            End
+                            <input
+                              aria-label={`Thời gian kết thúc câu ${index + 1}`}
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={cue.endTime}
+                              disabled={translationInProgress}
+                              onChange={(event) => updateCue(selectedItem.id, index, { endTime: Math.max(cue.startTime + 0.01, Number(event.target.value) || cue.startTime + 0.01) })}
+                              className="w-14 border border-slate-700 bg-slate-950 px-1 py-0.5 font-mono text-[9px] text-slate-300 outline-none focus:border-cyan-500"
+                            />
+                          </label>
+                        </div>
+                      </div>
+
+                      {/* Same-row inputs: Phụ đề gốc (left) & Bản dịch (right) */}
+                      <div className="grid grid-cols-2 gap-2">
+                        <label className="block">
+                          <span className="block text-[8px] font-semibold uppercase tracking-wide text-slate-400">Phụ đề gốc</span>
+                          <textarea
+                            aria-label={`Nội dung gốc câu ${index + 1}`}
+                            value={cue.text}
+                            disabled={translationInProgress}
+                            onChange={(event) => updateCue(selectedItem.id, index, { text: event.target.value })}
+                            rows={Math.min(3, Math.max(1, cue.text.split("\n").length))}
+                            className="mt-0.5 w-full resize-y border border-slate-700/80 bg-slate-950/70 px-2 py-1 text-[10px] font-normal leading-relaxed text-slate-100 outline-none focus:border-cyan-500/60 disabled:opacity-60"
+                          />
+                        </label>
+                        <label className="block">
+                          <span className="block text-[8px] font-semibold uppercase tracking-wide text-violet-300">Bản dịch</span>
+                          <textarea
+                            aria-label={`Bản dịch câu ${index + 1}`}
+                            value={cue.translatedText}
+                            disabled={translationInProgress}
+                            onChange={(event) => updateCue(selectedItem.id, index, { translatedText: event.target.value })}
+                            rows={Math.min(3, Math.max(1, cue.translatedText.split("\n").length))}
+                            placeholder="Nhập hoặc sửa…"
+                            className="mt-0.5 w-full resize-y border border-violet-500/20 bg-violet-950/10 px-2 py-1 text-[10px] font-normal leading-relaxed text-violet-100 outline-none placeholder:text-slate-600 focus:border-violet-400/60 disabled:opacity-60"
+                          />
+                        </label>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <div className="flex-1 flex items-center justify-center p-4">
+                  <div className="text-center">
+                    <Captions className="mx-auto h-7 w-7 text-slate-700" />
+                    <p className="mt-2 text-[10px] text-slate-500">{selectedItem ? (selectedItem.status === "missing-subtitle" ? "Video chưa có phụ đề SRT" : "Chưa có phụ đề") : "Chưa chọn video"}</p>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
-          <SubtitleTimeline
-            file={selectedItem?.video || null}
-            duration={videoDuration}
-            currentTime={videoCurrentTime}
-            cues={selectedItem?.cues || []}
-            selectedCueIndex={activeCueIndex}
-            disabled={translationInProgress || !selectedItem?.video}
-            onCueChange={(index, patch) => selectedItem && updateCue(selectedItem.id, index, patch)}
-            onCueSelect={selectCue}
-            onSeek={seekVideo}
-            onAddCue={addSubtitleCue}
-          />
-          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-800 bg-slate-950/40 px-4 py-3 text-[11px] text-slate-400">
-            <span>{activeCue ? `Câu đang phát · ${cueTime(activeCue.startTime)} – ${cueTime(activeCue.endTime)}` : "Phụ đề sẽ hiện theo thời gian phát video."}</span>
-            <span>{showTranslation ? "Ưu tiên bản dịch, tự dùng câu gốc nếu chưa dịch" : "Đang xem câu gốc"}</span>
+
+          {/* ── FULL-WIDTH TIMELINE / TRANSPORT ── */}
+          <div className="shrink-0 border-t border-slate-800 bg-slate-950">
+            {/* Transport bar */}
+            <div className="h-9 px-3 flex items-center gap-2.5 border-b border-slate-800 bg-slate-900/80 select-none">
+              <button type="button" onClick={() => void toggleVideoPlayback()} disabled={!videoUrl} aria-label={videoPaused ? "Phát video" : "Tạm dừng video"} className="inline-flex h-6 w-6 shrink-0 items-center justify-center border border-cyan-500/30 bg-cyan-500/10 text-cyan-200 hover:bg-cyan-500/20 disabled:opacity-40 cursor-pointer">
+                {videoPaused ? <Play className="h-3 w-3 ml-0.5" /> : <Pause className="h-3 w-3" />}
+              </button>
+              <button type="button" onClick={stopVideo} disabled={!videoUrl} aria-label="Dừng về đầu" className="inline-flex h-6 w-6 shrink-0 items-center justify-center border border-slate-700 bg-slate-900 text-slate-300 hover:border-slate-500 disabled:opacity-40 cursor-pointer">
+                <Square className="h-3 w-3 fill-current" />
+              </button>
+              <span className="font-mono text-[11px] text-slate-300 tabular-nums shrink-0">{cueTime(videoCurrentTime)}</span>
+              <span className="text-slate-600 shrink-0">/</span>
+              <span className="font-mono text-[11px] text-slate-500 tabular-nums shrink-0">{cueTime(videoDuration)}</span>
+              {activeCue && (
+                <>
+                  <div className="w-px h-3.5 bg-slate-700 shrink-0" />
+                  <span className="text-[9px] text-violet-300 font-mono shrink-0 hidden md:inline">
+                    câu #{activeCueIndex + 1} · {cueTime(activeCue.startTime)}–{cueTime(activeCue.endTime)}
+                  </span>
+                </>
+              )}
+              <span className="ml-auto text-[9px] text-slate-600 hidden lg:inline shrink-0">Ctrl+scroll: zoom · Shift+scroll: cuộn ngang</span>
+              <button type="button" onClick={addSubtitleCue} disabled={!selectedItem?.video} title="Thêm câu phụ đề tại thời điểm hiện tại" className="shrink-0 inline-flex items-center gap-1 border border-violet-500/30 bg-violet-500/10 px-2 py-0.5 text-[9px] font-semibold text-violet-200 hover:bg-violet-500/20 disabled:opacity-40 cursor-pointer">
+                <Plus className="h-2.5 w-2.5" />Thêm câu
+              </button>
+            </div>
+            {/* Timeline */}
+            <SubtitleTimeline
+              file={selectedItem?.video || null}
+              duration={videoDuration}
+              currentTime={videoCurrentTime}
+              cues={selectedItem?.cues || []}
+              selectedCueIndex={activeCueIndex}
+              disabled={translationInProgress || !selectedItem?.video}
+              onCueChange={(index, patch) => selectedItem && updateCue(selectedItem.id, index, patch)}
+              onCueSelect={selectCue}
+              onSeek={seekVideo}
+              onAddCue={addSubtitleCue}
+            />
           </div>
-        </section>
+        </div>
       </div>
     </div>
   );

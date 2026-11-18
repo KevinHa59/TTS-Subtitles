@@ -299,21 +299,21 @@ export default function SubtitleTimeline({
   };
 
   return (
-    <section className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/90 shadow-xl">
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 px-4 py-2.5">
+    <section className="overflow-hidden rounded-none border-t border-slate-800 bg-slate-900/40 shadow-none">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 px-3 py-2">
         <div className="flex items-center gap-2">
-          <Waves className="h-4 w-4 text-cyan-300" />
+          <Waves className="h-3.5 w-3.5 text-cyan-300" />
           <h2 className="text-xs font-bold text-white">Subtitle Timeline</h2>
           <span className="text-[10px] text-slate-500">{cues.length} câu · kéo playhead để tua, kéo khối hoặc mép để chỉnh thời gian</span>
         </div>
         <div className="flex items-center gap-1">
-          <button type="button" onClick={onAddCue} disabled={disabled} aria-label="Thêm phụ đề tại thời điểm hiện tại" title="Thêm phụ đề tại thời điểm hiện tại" className="mr-1 rounded-md border border-cyan-500/30 bg-cyan-500/10 p-1.5 text-cyan-200 hover:border-cyan-400 hover:bg-cyan-500/20 disabled:opacity-40"><CirclePlus className="h-4 w-4" /></button>
-          <button type="button" onClick={() => handleZoom(-8)} disabled={pixelsPerSecond <= 8} aria-label="Thu nhỏ timeline" className="rounded-md border border-slate-700 p-1.5 text-slate-300 hover:border-cyan-500/50 disabled:opacity-40"><Minus className="h-3 w-3" /></button>
+          <button type="button" onClick={onAddCue} disabled={disabled} aria-label="Thêm phụ đề tại thời điểm hiện tại" title="Thêm phụ đề tại thời điểm hiện tại" className="mr-1 rounded-none border border-cyan-500/30 bg-cyan-500/10 p-1 text-cyan-200 hover:border-cyan-400 hover:bg-cyan-500/20 disabled:opacity-40 cursor-pointer"><CirclePlus className="h-3.5 w-3.5" /></button>
+          <button type="button" onClick={() => handleZoom(-8)} disabled={pixelsPerSecond <= 8} aria-label="Thu nhỏ timeline" className="rounded-none border border-slate-700 p-1 text-slate-300 hover:border-cyan-500/50 disabled:opacity-40 cursor-pointer"><Minus className="h-3 w-3" /></button>
           <span className="min-w-12 text-center font-mono text-[10px] text-slate-400">{Math.round(pixelsPerSecond)} px/s</span>
-          <button type="button" onClick={() => handleZoom(8)} disabled={pixelsPerSecond >= 160} aria-label="Phóng to timeline" className="rounded-md border border-slate-700 p-1.5 text-slate-300 hover:border-cyan-500/50 disabled:opacity-40"><Plus className="h-3 w-3" /></button>
+          <button type="button" onClick={() => handleZoom(8)} disabled={pixelsPerSecond >= 160} aria-label="Phóng to timeline" className="rounded-none border border-slate-700 p-1 text-slate-300 hover:border-cyan-500/50 disabled:opacity-40 cursor-pointer"><Plus className="h-3 w-3" /></button>
         </div>
       </div>
-      <div ref={scrollRef} onScroll={updateScroll} className="overflow-x-auto overscroll-x-contain">
+      <div ref={scrollRef} onScroll={updateScroll} className="overflow-x-auto overscroll-x-contain scrollbar-thin">
         <div className="relative min-h-[148px] bg-slate-950/60" style={{ width: `${timelineWidth}px` }}>
           <div
             onPointerDown={handleSeekPointerDown}
@@ -365,7 +365,7 @@ export default function SubtitleTimeline({
                       onCueSelect(index);
                     }
                   }}
-                  className={`group absolute flex h-7 items-center overflow-hidden rounded border text-left text-[9px] select-none touch-none ${disabled ? "cursor-not-allowed opacity-60" : "cursor-grab active:cursor-grabbing"} ${selectedCueIndex === index ? "z-[2] border-cyan-300 bg-cyan-500/35 text-white shadow-[0_0_10px_rgba(34,211,238,0.2)]" : "border-violet-400/50 bg-violet-600/30 text-violet-100 hover:bg-violet-500/40"}`}
+                  className={`group absolute flex h-7 items-center overflow-hidden rounded-none border text-left text-[9px] select-none touch-none cursor-pointer ${disabled ? "cursor-not-allowed opacity-60" : "cursor-grab active:cursor-grabbing"} ${selectedCueIndex === index ? "z-[2] border-cyan-300 bg-cyan-500/35 text-white shadow-[0_0_10px_rgba(34,211,238,0.2)]" : "border-violet-400/50 bg-violet-600/30 text-violet-100 hover:bg-violet-500/40"}`}
                   style={{ left: `${left}px`, top: `${lane * 36 + 4}px`, width: `${width}px` }}
                   title={`${formatTimelineTime(cue.startTime)} → ${formatTimelineTime(cue.endTime)} · ${cue.text}`}
                 >

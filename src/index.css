@@ -1,28 +1,281 @@
 @import "tailwindcss";
 
+/* ------------------------------------------------------------- */
+/* THEME VARIABLES & DESKTOP COLOR SCHEMES                       */
+/* ------------------------------------------------------------- */
+:root {
+  --panel-radius: 0px;
+  --panel-gap: 0px;
+
+  /* Default Theme: Desktop Dark (Slate) */
+  --bg-app: #020617;        /* slate-950 */
+  --bg-header: #0f172a;     /* slate-900 */
+  --bg-panel: #0f172a;      /* slate-900 */
+  --bg-panel-subtle: #0b1329;
+  --bg-input: #020617;
+  --border-panel: #1e293b;  /* slate-800 */
+  --border-subtle: #334155;
+  --text-primary: #f8fafc;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --accent-amber: #f59e0b;
+}
+
+[data-theme="desktop-zinc"],
+.theme-zinc {
+  --bg-app: #09090b;        /* zinc-950 */
+  --bg-header: #18181b;     /* zinc-900 */
+  --bg-panel: #18181b;      /* zinc-900 */
+  --bg-panel-subtle: #121215;
+  --bg-input: #09090b;
+  --border-panel: #27272a;  /* zinc-800 */
+  --border-subtle: #3f3f46;
+  --text-primary: #f4f4f5;
+  --text-secondary: #a1a1aa;
+  --text-muted: #71717a;
+  --accent-amber: #eab308;
+}
+
+[data-theme="high-contrast"],
+.theme-high-contrast {
+  --bg-app: #000000;
+  --bg-header: #0a0a0a;
+  --bg-panel: #0a0a0a;
+  --bg-panel-subtle: #000000;
+  --bg-input: #000000;
+  --border-panel: #3f3f46;
+  --border-subtle: #52525b;
+  --text-primary: #ffffff;
+  --text-secondary: #e4e4e7;
+  --text-muted: #a1a1aa;
+  --accent-amber: #fbbf24;
+}
+
+[data-theme="desktop-light"],
+.theme-light {
+  --bg-app: #f1f5f9;        /* slate-100 */
+  --bg-header: #e2e8f0;     /* slate-200 */
+  --bg-panel: #ffffff;
+  --bg-panel-subtle: #f8fafc;
+  --bg-input: #ffffff;
+  --border-panel: #cbd5e1;  /* slate-300 */
+  --border-subtle: #94a3b8;
+  --text-primary: #0f172a;  /* slate-900 */
+  --text-secondary: #475569;
+  --text-muted: #64748b;
+  --accent-amber: #d97706;
+}
+
+/* Theme Overrides for Zinc (Adobe Premiere / DaVinci Resolve neutral cold dark) */
+.theme-zinc body,
+.theme-zinc #root,
+.theme-zinc .bg-slate-950 {
+  background-color: var(--bg-app) !important;
+}
+.theme-zinc .bg-slate-900,
+.theme-zinc .bg-slate-900\/95,
+.theme-zinc .bg-slate-900\/90,
+.theme-zinc .bg-slate-900\/80,
+.theme-zinc .bg-slate-900\/60,
+.theme-zinc .bg-slate-900\/50,
+.theme-zinc .bg-slate-900\/40,
+.theme-zinc .bg-slate-900\/30,
+.theme-zinc .bg-slate-900\/20 {
+  background-color: var(--bg-panel) !important;
+}
+.theme-zinc .border-slate-800,
+.theme-zinc .border-slate-700 {
+  border-color: var(--border-panel) !important;
+}
+.theme-zinc .divide-slate-800 > :not([hidden]) ~ :not([hidden]) {
+  border-color: var(--border-panel) !important;
+}
+
+/* Theme Overrides for High-Contrast OLED (Black/White) */
+.theme-high-contrast body,
+.theme-high-contrast #root,
+.theme-high-contrast .bg-slate-950 {
+  background-color: var(--bg-app) !important;
+}
+.theme-high-contrast .bg-slate-900,
+.theme-high-contrast .bg-slate-900\/95,
+.theme-high-contrast .bg-slate-900\/90,
+.theme-high-contrast .bg-slate-900\/80,
+.theme-high-contrast .bg-slate-900\/60,
+.theme-high-contrast .bg-slate-900\/50,
+.theme-high-contrast .bg-slate-900\/40,
+.theme-high-contrast .bg-slate-900\/30,
+.theme-high-contrast .bg-slate-900\/20 {
+  background-color: var(--bg-panel) !important;
+}
+.theme-high-contrast .border-slate-800,
+.theme-high-contrast .border-slate-700 {
+  border-color: var(--border-panel) !important;
+}
+.theme-high-contrast .divide-slate-800 > :not([hidden]) ~ :not([hidden]) {
+  border-color: var(--border-panel) !important;
+}
+
+/* Theme Overrides for Light Mode */
+.theme-light body,
+.theme-light #root,
+.theme-light .bg-slate-950,
+.theme-light .bg-slate-950\/90,
+.theme-light .bg-slate-950\/80,
+.theme-light .bg-slate-950\/70,
+.theme-light .bg-slate-950\/60,
+.theme-light .bg-slate-950\/50 {
+  background-color: var(--bg-app) !important;
+  color: var(--text-primary) !important;
+}
+
+.theme-light .bg-slate-900,
+.theme-light .bg-slate-900\/95,
+.theme-light .bg-slate-900\/90,
+.theme-light .bg-slate-900\/80,
+.theme-light .bg-slate-900\/60,
+.theme-light .bg-slate-900\/50,
+.theme-light .bg-slate-900\/40,
+.theme-light .bg-slate-900\/30,
+.theme-light .bg-slate-900\/20 {
+  background-color: var(--bg-panel) !important;
+  color: var(--text-primary) !important;
+}
+
+.theme-light .border-slate-800,
+.theme-light .border-slate-700,
+.theme-light .border-slate-800\/80,
+.theme-light .border-slate-700\/80 {
+  border-color: var(--border-panel) !important;
+}
+
+.theme-light .divide-slate-800 > :not([hidden]) ~ :not([hidden]) {
+  border-color: var(--border-panel) !important;
+}
+
+.theme-light .text-slate-100,
+.theme-light .text-white {
+  color: var(--text-primary) !important;
+}
+
+.theme-light .text-slate-200,
+.theme-light .text-slate-300,
+.theme-light .text-slate-400 {
+  color: var(--text-secondary) !important;
+}
+
+.theme-light input,
+.theme-light select,
+.theme-light textarea {
+  background-color: var(--bg-input) !important;
+  color: var(--text-primary) !important;
+  border-color: var(--border-panel) !important;
+}
+
+/* ------------------------------------------------------------- */
+/* DESKTOP APP WORKSPACE & WINDOW SHELL                          */
+/* ------------------------------------------------------------- */
+html,
+body,
+#root {
+  height: 100%;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  user-select: none;
+  background-color: var(--bg-app);
+}
+
+/* Allow text selection in editing areas, inputs, logs, and text */
+input,
+textarea,
+pre,
+code,
+select,
+[contenteditable="true"],
+.select-text {
+  user-select: text;
+}
+
+/* ------------------------------------------------------------- */
+/* FLAT SQUARE DESKTOP SCROLLBARS (ZERO RADIUS)                  */
+/* ------------------------------------------------------------- */
 * {
   scrollbar-width: thin;
-  scrollbar-color: rgb(71 85 105 / 0.9) rgb(15 23 42 / 0.75);
+  scrollbar-color: rgb(51 65 85 / 0.8) rgb(15 23 42 / 0.95);
 }
 
 *::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 7px;
+  height: 7px;
 }
 
 *::-webkit-scrollbar-track {
-  border-radius: 9999px;
-  background: rgb(15 23 42 / 0.75);
+  border-radius: 0 !important;
+  background: var(--bg-app);
 }
 
 *::-webkit-scrollbar-thumb {
-  border: 2px solid rgb(15 23 42 / 0.75);
-  border-radius: 9999px;
-  background: rgb(71 85 105 / 0.9);
+  border: 1px solid var(--border-panel);
+  border-radius: 0 !important;
+  background: var(--border-subtle);
 }
 
 *::-webkit-scrollbar-thumb:hover {
-  background: rgb(34 211 238 / 0.8);
+  background: var(--accent-amber);
+}
+
+/* ------------------------------------------------------------- */
+/* ZERO CORNER RADIUS: ALL PANELS, CONTAINERS, DOCKS, DIALOGS   */
+/* ------------------------------------------------------------- */
+/* Panels, cards, sidebars, workbenches, tables, headers, dialogs */
+aside,
+section,
+nav,
+header,
+main,
+footer,
+table,
+thead,
+tbody,
+tr,
+th,
+td,
+dialog,
+[role="region"],
+[role="dialog"] {
+  border-radius: 0 !important;
+}
+
+/* Enforce border-radius: 0 on all rounded utility classes */
+[class*="rounded"] {
+  border-radius: 0 !important;
+}
+
+/* Modal dialogs, dropdowns, and overlays */
+.modal,
+.dialog,
+.dropdown-menu,
+[role="menu"],
+[role="listbox"],
+[role="dialog"] {
+  border-radius: 0 !important;
+}
+
+/* Buttons and inputs inside desktop app panels */
+button,
+input,
+select,
+textarea {
+  border-radius: 0 !important;
+}
+
+/* Remove floating card drop shadows for clean flat docked desktop aesthetic */
+[class*="shadow-2xl"],
+[class*="shadow-xl"],
+[class*="shadow-lg"] {
+  box-shadow: none !important;
 }
 
 @keyframes subtitleFade {

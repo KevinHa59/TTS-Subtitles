@@ -5158,7 +5158,7 @@ export default function VideoDubbingTab() {
       ? jobHistory.find((item) => item.job.id === detailJobId)?.job || null
       : null);
   const previewVideoRow = (
-    event: ReactMouseEvent<HTMLTableRowElement>,
+    event: ReactMouseEvent<HTMLElement>,
     selectedJob?: VideoDubbingJob,
   ) => {
     if (
@@ -5253,15 +5253,15 @@ export default function VideoDubbingTab() {
       targetJob.videoExport?.status === "running" &&
       targetJob.videoExport.detail?.toLowerCase().includes("audio");
     return (
-      <div className="flex w-[216px] shrink-0 flex-col gap-1.5">
-        <div className="grid grid-cols-3 gap-1.5">
+      <div className="flex w-full flex-col gap-1.5">
+        <div className="grid grid-cols-3 gap-1">
         <button
           type="button"
           onClick={() => void (autoPipelineRunning ? cancelAutoPipeline() : startAutoPipeline())}
           disabled={allVideosRunning || !isCurrentJob || (!autoPipelineRunning && !canStartAutoPipeline)}
           title={autoPipelineRunning ? "Hủy Auto Pipeline" : "Tạo TTS Master cho video này"}
           aria-label={autoPipelineRunning ? "Hủy Auto Pipeline" : `TTS ${targetJob.fileName}`}
-          className="rounded-lg border border-indigo-400/35 px-1.5 py-1.5 text-[11px] font-semibold text-indigo-100 hover:bg-indigo-950/40 disabled:cursor-not-allowed disabled:opacity-40"
+          className="rounded-none border border-indigo-400/35 bg-indigo-950/20 px-1.5 py-1 text-xs font-semibold text-indigo-100 hover:bg-indigo-950/40 disabled:cursor-not-allowed disabled:opacity-40"
         >
           {autoPipelineRunning ? "Hủy TTS" : "TTS"}
         </button>
@@ -5285,7 +5285,7 @@ export default function VideoDubbingTab() {
                   : separationAvailability?.message || "Demucs chưa sẵn sàng"
             }
             aria-label={`Demucs ${targetJob.fileName}`}
-            className="rounded-lg border border-violet-400/35 px-1.5 py-1.5 text-[11px] font-semibold text-violet-100 hover:bg-violet-950/40 disabled:cursor-not-allowed disabled:opacity-40"
+            className="rounded-none border border-violet-400/35 bg-violet-950/20 px-1.5 py-1 text-xs font-semibold text-violet-100 hover:bg-violet-950/40 disabled:cursor-not-allowed disabled:opacity-40"
           >
             {targetJob.separation?.status === "processing" ? "Đang tách" : "Demucs"}
           </button>
@@ -5295,7 +5295,7 @@ export default function VideoDubbingTab() {
           disabled={allVideosRunning || !isCurrentJob || (!finalMixRunning && !canRenderFinalMix)}
           title={finalMixRunning ? "Hủy render final mix" : "Render final mix"}
           aria-label={finalMixRunning ? "Hủy render final mix" : `Mix Audio ${targetJob.fileName}`}
-          className="rounded-lg border border-cyan-400/35 px-1.5 py-1.5 text-[11px] font-semibold text-cyan-100 hover:bg-cyan-950/40 disabled:cursor-not-allowed disabled:opacity-40"
+          className="rounded-none border border-cyan-400/35 bg-cyan-950/20 px-1.5 py-1 text-xs font-semibold text-cyan-100 hover:bg-cyan-950/40 disabled:cursor-not-allowed disabled:opacity-40"
         >
           {finalMixRunning ? "Hủy Mix" : "Mix Audio"}
         </button>
@@ -5305,7 +5305,7 @@ export default function VideoDubbingTab() {
           disabled={allVideosRunning || !isCurrentJob || (!exportRunning && (!canExportVideo || logoUploading))}
           title={exportRunning ? "Hủy export" : "Export video"}
           aria-label={exportRunning ? "Hủy export" : `Render ${targetJob.fileName}`}
-          className="rounded-lg border border-sky-400/35 px-1.5 py-1.5 text-[11px] font-semibold text-sky-100 hover:bg-sky-950/40 disabled:cursor-not-allowed disabled:opacity-40"
+          className="rounded-none border border-sky-400/35 bg-sky-950/20 px-1.5 py-1 text-xs font-semibold text-sky-100 hover:bg-sky-950/40 disabled:cursor-not-allowed disabled:opacity-40"
         >
           {exportRunning ? "Hủy" : "Render"}
         </button>
@@ -5318,9 +5318,10 @@ export default function VideoDubbingTab() {
           disabled={!hasSrtToDownload}
           title={hasSrtToDownload ? "Tải phụ đề SRT đã chỉnh sửa" : "Video này chưa có phụ đề"}
           aria-label={`Tải SRT ${targetJob.fileName}`}
-          className="rounded-lg border border-emerald-500/35 px-1.5 py-1.5 text-[11px] font-semibold text-emerald-100 hover:bg-emerald-950/40 disabled:cursor-not-allowed disabled:opacity-40"
+          className="rounded-none border border-emerald-500/35 bg-emerald-950/20 px-1.5 py-1 text-xs font-semibold text-emerald-100 hover:bg-emerald-950/40 disabled:cursor-not-allowed disabled:opacity-40 flex items-center justify-center gap-1"
         >
-          Tải SRT
+          <FileText className="h-3 w-3" />
+          <span>Tải SRT</span>
         </button>
         {hasVideoToDownload ? (
           <a
@@ -5333,9 +5334,10 @@ export default function VideoDubbingTab() {
                 : "Tải video đã render"
             }
             aria-label={`Tải Video ${targetJob.fileName}`}
-            className="inline-flex items-center justify-center rounded-lg border border-emerald-500/35 p-1.5 text-emerald-100 hover:bg-emerald-950/40"
+            className="inline-flex items-center justify-center gap-1 rounded-none border border-emerald-500/35 bg-emerald-950/20 px-1.5 py-1 text-xs font-semibold text-emerald-100 hover:bg-emerald-950/40"
           >
-            <Download className="h-4 w-4" />
+            <Download className="h-3.5 w-3.5" />
+            <span>Tải MP4</span>
           </a>
         ) : (
           <button
@@ -5343,9 +5345,10 @@ export default function VideoDubbingTab() {
             disabled
             title="Render video trước khi tải"
             aria-label={`Tải Video ${targetJob.fileName} (chưa sẵn sàng)`}
-            className="inline-flex items-center justify-center rounded-lg border border-emerald-500/35 p-1.5 text-emerald-100 opacity-40"
+            className="inline-flex items-center justify-center gap-1 rounded-none border border-emerald-500/35 bg-emerald-950/10 px-1.5 py-1 text-xs font-semibold text-emerald-100 opacity-40 cursor-not-allowed"
           >
-            <Download className="h-4 w-4" />
+            <Download className="h-3.5 w-3.5" />
+            <span>Tải MP4</span>
           </button>
         )}
         <button
@@ -5366,12 +5369,12 @@ export default function VideoDubbingTab() {
               : "Thay audio MP4 bằng Final Mix mới, không mã hóa lại hình ảnh"
           }
           aria-label={`Cập nhật Audio MP4 ${targetJob.fileName}`}
-          className="col-span-3 inline-flex items-center justify-center gap-2 rounded-lg border border-fuchsia-400/35 px-2 py-1.5 text-[11px] font-semibold text-fuchsia-100 hover:bg-fuchsia-950/40 disabled:cursor-not-allowed disabled:opacity-40"
+          className="col-span-3 inline-flex items-center justify-center gap-1.5 rounded-none border border-fuchsia-400/35 bg-fuchsia-950/20 px-2 py-1.5 text-xs font-semibold text-fuchsia-100 hover:bg-fuchsia-950/40 disabled:cursor-not-allowed disabled:opacity-40"
         >
           {audioUpdateRunning && (
             <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
           )}
-          {audioUpdateRunning ? "Đang cập nhật Audio MP4…" : "Cập nhật Audio MP4"}
+          {audioUpdateRunning ? "Đang cập nhật Audio MP4…" : "⚡ Cập nhật Audio MP4"}
         </button>
         </div>
         {audioUpdateErrors[targetJob.id] && (
@@ -6919,7 +6922,7 @@ export default function VideoDubbingTab() {
     `/assets/subtitle/${encodeURIComponent(`${background}-${slice}.png`)}`;
 
   return (
-    <section className={`grid w-full max-w-none grid-cols-1 items-start gap-5 px-3 py-4 text-slate-200 sm:px-5 ${settingsCollapsed ? "xl:grid-cols-[52px_minmax(0,1fr)]" : "xl:grid-cols-[minmax(320px,0.8fr)_minmax(0,1.8fr)]"}`}>
+    <section className={`grid w-full h-full max-w-none grid-cols-1 grid-rows-[auto_auto_minmax(0,1fr)] items-stretch gap-0 p-0 text-slate-200 overflow-hidden ${settingsCollapsed ? "xl:grid-cols-[48px_minmax(0,1fr)]" : "xl:grid-cols-[minmax(390px,440px)_minmax(0,1fr)] 2xl:grid-cols-[minmax(420px,470px)_minmax(0,1fr)]"}`}>
       {subtitleBackgroundPickerOpen && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/75 p-3 sm:p-6" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setSubtitleBackgroundPickerOpen(false); }}>
           <section role="dialog" aria-modal="true" aria-labelledby="subtitle-background-picker-title" className="max-h-[88vh] w-full max-w-4xl space-y-4 overflow-y-auto rounded-2xl border border-slate-700 bg-slate-900 p-4 shadow-2xl sm:p-5">
@@ -6949,39 +6952,33 @@ export default function VideoDubbingTab() {
           </section>
         </div>
       )}
-      <header className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 xl:col-span-2">
-        <div className="flex items-center gap-3">
-          <div className="w-11 h-11 rounded-2xl bg-amber-500/15 text-amber-400 border border-amber-500/25 flex items-center justify-center">
-            <Film className="w-5 h-5" />
+      <header className="h-10 sm:h-11 px-3 shrink-0 flex items-center justify-between border-b border-slate-800 bg-slate-900/95 rounded-none xl:col-span-2 xl:row-start-1 select-none">
+        <div className="flex items-center gap-2.5">
+          <div className="w-6 h-6 rounded-none bg-amber-500/15 text-amber-400 border border-amber-500/25 flex items-center justify-center font-bold text-xs">
+            <Film className="w-3.5 h-3.5" />
           </div>
-          <div>
-            <h2 className="text-xl font-bold text-white">Video Dubbing</h2>
-            <p className="text-xs sm:text-sm text-slate-400">
-              Tạo TTS Master theo timestamp bằng pipeline Đồng Bộ Phụ Đề hiện
-              có.
-            </p>
+          <div className="flex items-center gap-2">
+            <h2 className="text-xs sm:text-sm font-bold text-white uppercase tracking-tight">Video Dubbing</h2>
+            <span className="text-[10px] text-slate-400 hidden sm:inline font-mono">
+              · Pipeline Đồng Bộ Phụ Đề
+            </span>
           </div>
-          <label className="flex items-start gap-3 rounded-xl border border-slate-800 bg-slate-950/60 p-3 text-xs">
+          <label className="flex items-center gap-2 ml-3 text-[11px] text-slate-300 cursor-pointer">
             <input
               type="checkbox"
               checked={autoPipelineTtsMasterEnabled}
               onChange={(event) =>
                 setAutoPipelineTtsMasterEnabled(event.target.checked)
               }
-              className="mt-0.5 accent-indigo-400"
+              className="accent-indigo-400"
             />
-            <span>
-              <span className="block font-semibold text-slate-200">
-                Tạo TTS Master trong Auto Pipeline
-              </span>
-              <span className="mt-1 block text-slate-400">
-                Bỏ chọn để chỉ chạy Demucs; có thể bật TTS Master, Demucs hoặc cả hai.
-              </span>
+            <span className="font-semibold text-slate-200">
+              Tạo TTS Master trong Auto Pipeline
             </span>
           </label>
         </div>
-        <span className="self-start sm:self-auto px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wide bg-slate-800 text-slate-300 border border-slate-700">
-          Video Dubbing · Piper & VieNeu Turbo · Demucs cục bộ
+        <span className="px-2 py-0.5 rounded-none text-[10px] font-bold uppercase tracking-wide bg-slate-800 text-slate-300 border border-slate-700">
+          Piper & VieNeu Turbo · Demucs
         </span>
       </header>
 
@@ -7335,7 +7332,7 @@ export default function VideoDubbingTab() {
         </div>
       )}
 
-      <section className="space-y-3 rounded-2xl border border-slate-800 bg-slate-900/90 p-3 sm:p-4 xl:col-span-2 xl:row-start-3">
+      <section className="px-3 py-2 shrink-0 border-b border-slate-800 bg-slate-900/60 rounded-none xl:col-span-2 xl:row-start-2 space-y-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-2">
           {queueRunning ? (
@@ -7927,16 +7924,16 @@ export default function VideoDubbingTab() {
         </div>
       )}
 
-      <div className={`space-y-5 xl:col-start-1 xl:row-start-4 ${settingsCollapsed ? "min-w-0" : ""}`}>
-      <button type="button" onClick={() => setSettingsCollapsed((value) => !value)} aria-expanded={!settingsCollapsed} className="flex w-full items-center justify-between gap-2 rounded-xl border border-slate-800 bg-slate-900/90 px-3 py-2 text-xs font-semibold text-slate-300 hover:border-cyan-500/40 hover:text-white" title={settingsCollapsed ? "Mở rộng cài đặt" : "Thu gọn cài đặt"}>
+      <div className={`h-full min-h-0 overflow-y-auto border-r border-slate-800 bg-slate-900/40 flex flex-col divide-y divide-slate-800 rounded-none scrollbar-thin xl:col-start-1 xl:row-start-3 ${settingsCollapsed ? "min-w-0" : ""}`}>
+      <button type="button" onClick={() => setSettingsCollapsed((value) => !value)} aria-expanded={!settingsCollapsed} className="flex shrink-0 w-full items-center justify-between gap-2 border-b border-slate-800 bg-slate-900/90 px-3 py-2 text-xs font-semibold text-slate-300 hover:border-cyan-500/40 hover:text-white rounded-none" title={settingsCollapsed ? "Mở rộng cài đặt" : "Thu gọn cài đặt"}>
         <span className={settingsCollapsed ? "xl:hidden" : ""}>{settingsCollapsed ? "Cài đặt" : "Thu gọn cột cài đặt"}</span>
         <ChevronDown className={`h-4 w-4 transition-transform ${settingsCollapsed ? "-rotate-90" : "rotate-90"}`} />
       </button>
-      <div role="tablist" aria-label="Nội dung cột bên trái" className={settingsCollapsed ? "hidden" : "flex gap-1 rounded-xl border border-slate-800 bg-slate-950/70 p-1"}>
-        <button type="button" role="tab" aria-selected={leftPanelTab === "settings"} onClick={() => setLeftPanelTab("settings")} className={`flex-1 rounded-lg px-3 py-2 text-xs font-semibold ${leftPanelTab === "settings" ? "bg-cyan-400 text-slate-950" : "text-slate-300 hover:bg-slate-800"}`}>Settings</button>
-        <button type="button" role="tab" aria-selected={leftPanelTab === "sources"} onClick={() => setLeftPanelTab("sources")} className={`flex-1 rounded-lg px-3 py-2 text-xs font-semibold ${leftPanelTab === "sources" ? "bg-cyan-400 text-slate-950" : "text-slate-300 hover:bg-slate-800"}`}>Danh sách video</button>
+      <div role="tablist" aria-label="Nội dung cột bên trái" className={settingsCollapsed ? "hidden" : "flex shrink-0 border-b border-slate-800 bg-slate-950/70 p-1 rounded-none gap-1"}>
+        <button type="button" role="tab" aria-selected={leftPanelTab === "settings"} onClick={() => setLeftPanelTab("settings")} className={`flex-1 rounded-none px-3 py-1.5 text-xs font-semibold ${leftPanelTab === "settings" ? "bg-cyan-400 text-slate-950" : "text-slate-300 hover:bg-slate-800"}`}>Settings</button>
+        <button type="button" role="tab" aria-selected={leftPanelTab === "sources"} onClick={() => setLeftPanelTab("sources")} className={`flex-1 rounded-none px-3 py-1.5 text-xs font-semibold ${leftPanelTab === "sources" ? "bg-cyan-400 text-slate-950" : "text-slate-300 hover:bg-slate-800"}`}>Danh sách video</button>
       </div>
-      <div className={leftPanelTab !== "settings" ? "hidden" : settingsCollapsed ? "space-y-5 xl:hidden" : "space-y-5"}>
+      <div className={leftPanelTab !== "settings" ? "hidden" : settingsCollapsed ? "space-y-3 xl:hidden p-3" : "space-y-3 p-3"}>
       {(job?.status === "completed" || queueRowCount > 0) && (
         <section className="overflow-hidden rounded-2xl border border-indigo-500/25 bg-slate-900/80">
           <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
@@ -8660,16 +8657,17 @@ export default function VideoDubbingTab() {
 
       {leftPanelTab === "sources" && !settingsCollapsed && (
       <section
-        className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900/80"
+        className="flex-1 min-h-0 flex flex-col overflow-hidden rounded-none border-0 bg-transparent"
         onDragOver={(event) => {
           event.preventDefault();
           event.dataTransfer.dropEffect = queueRunning ? "none" : "copy";
         }}
         onDrop={handleQueueDrop}
       >
-        <div className="border-b border-slate-800 p-3">
+        {/* Compact Dropzones (2 sleek buttons side-by-side) */}
+        <div className="border-b border-slate-800 p-2.5 bg-slate-950/60 shrink-0">
           <div
-            className="grid grid-cols-1 gap-2 rounded-xl border border-dashed border-slate-700 bg-slate-950/60 p-2 sm:grid-cols-2"
+            className="grid grid-cols-2 gap-2 p-1 border border-dashed border-slate-700/80 bg-slate-900/40 rounded-none"
             onDragEnter={(event) => {
               event.preventDefault();
               event.stopPropagation();
@@ -8685,45 +8683,57 @@ export default function VideoDubbingTab() {
               type="button"
               disabled={queueRunning}
               onClick={() => videoInputRef.current?.click()}
-              className="flex min-h-16 items-center justify-center gap-3 rounded-lg border border-slate-700/80 bg-slate-900/80 px-4 py-3 text-left transition-colors hover:border-amber-500/50 hover:bg-amber-950/20 disabled:cursor-not-allowed disabled:opacity-50"
+              className="flex items-center justify-center gap-2 p-2 border border-slate-800 bg-slate-950/70 hover:bg-amber-500/10 hover:border-amber-500/50 transition-colors text-left rounded-none disabled:opacity-40 cursor-pointer"
+              title="Click hoặc kéo thả tệp video (MP4, MKV, MOV...)"
             >
-              <Film className="h-5 w-5 shrink-0 text-amber-400" />
-              <span>
-                <span className="block text-sm font-semibold text-slate-100">Thả nhiều video</span>
-                <span className="mt-0.5 block text-[11px] text-slate-400">Hoặc click để chọn MP4, MKV, MOV…</span>
-              </span>
+              <Film className="h-4 w-4 shrink-0 text-amber-400" />
+              <div className="min-w-0">
+                <span className="block text-xs font-bold text-slate-200 truncate">Thêm Video</span>
+                <span className="block text-[10px] text-slate-500 truncate">MP4, MKV, MOV</span>
+              </div>
             </button>
             <button
               type="button"
               disabled={queueRunning}
               onClick={() => openSrtBrowser()}
-              className="flex min-h-16 items-center justify-center gap-3 rounded-lg border border-slate-700/80 bg-slate-900/80 px-4 py-3 text-left transition-colors hover:border-cyan-500/50 hover:bg-cyan-950/20 disabled:cursor-not-allowed disabled:opacity-50"
+              className="flex items-center justify-center gap-2 p-2 border border-slate-800 bg-slate-950/70 hover:bg-cyan-500/10 hover:border-cyan-500/50 transition-colors text-left rounded-none disabled:opacity-40 cursor-pointer"
+              title="Click hoặc kéo thả tệp phụ đề SRT"
             >
-              <FileText className="h-5 w-5 shrink-0 text-cyan-400" />
-              <span>
-                <span className="block text-sm font-semibold text-slate-100">Thả nhiều phụ đề SRT</span>
-                <span className="mt-0.5 block text-[11px] text-slate-400">Ghép theo tên file hoặc thứ tự danh sách</span>
-              </span>
+              <FileText className="h-4 w-4 shrink-0 text-cyan-400" />
+              <div className="min-w-0">
+                <span className="block text-xs font-bold text-slate-200 truncate">Thêm Phụ Đề</span>
+                <span className="block text-[10px] text-slate-500 truncate">Tệp .SRT</span>
+              </div>
             </button>
           </div>
         </div>
-        <div className="border-b border-slate-800 px-4 py-3">
-          <div className="space-y-3">
-            <div>
-              <h3 className="text-sm font-semibold text-white">Danh sách video nguồn</h3>
-              <p className="mt-1 text-xs text-slate-400">Video đã lưu trong job của project được liệt kê tại đây. Thả thêm video và SRT để ghép theo tên file.</p>
+
+        {/* All Videos Batch Actions Toolbar (2 neat rows, zero hidden buttons) */}
+        <div className="border-b border-slate-800 p-2.5 bg-slate-900/70 shrink-0 space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs font-bold text-white uppercase tracking-wider">
+                All Videos ({allVideosJobs.length || queueRowCount || 0})
+              </span>
+              {allVideosRunning && (
+                <span className="h-2 w-2 rounded-full bg-amber-400 animate-ping" />
+              )}
             </div>
-            <div className="flex min-w-0 items-center justify-between gap-3">
-              <span className="shrink-0 text-xs font-semibold text-slate-300">All Videos:</span>
-              <div className="flex min-w-0 flex-1 items-center justify-end gap-2 overflow-x-auto">
+            <span className="text-[10px] text-slate-400 font-mono">
+              Hàng loạt
+            </span>
+          </div>
+
+          <div className="space-y-1">
+            <div className="grid grid-cols-4 gap-1">
               <button
                 type="button"
                 onClick={() => void runAllVideosAction("tts")}
                 disabled={allVideosActionDisabled || !allVideosTtsReady}
                 title="Tạo riêng TTS Master cho tất cả video"
-                className="rounded-lg border border-indigo-400/35 px-3 py-2 text-xs font-semibold text-indigo-100 hover:bg-indigo-950/40 disabled:cursor-not-allowed disabled:opacity-40"
+                className="px-1.5 py-1.5 rounded-none border border-indigo-400/35 bg-indigo-950/20 text-indigo-100 hover:bg-indigo-950/50 text-[11px] font-semibold flex items-center justify-center gap-1 disabled:opacity-40 cursor-pointer"
               >
-                TTS
+                <span>TTS Tất Cả</span>
               </button>
               <button
                 type="button"
@@ -8751,36 +8761,40 @@ export default function VideoDubbingTab() {
                     ? "Tách vocals và instrumental cho tất cả video có audio"
                     : separationAvailability?.message || "Demucs chưa sẵn sàng"
                 }
-                className="rounded-lg border border-violet-400/35 px-3 py-2 text-xs font-semibold text-violet-100 hover:bg-violet-950/40 disabled:cursor-not-allowed disabled:opacity-40"
+                className="px-1.5 py-1.5 rounded-none border border-violet-400/35 bg-violet-950/20 text-violet-100 hover:bg-violet-950/50 text-[11px] font-semibold flex items-center justify-center gap-1 disabled:opacity-40 cursor-pointer"
               >
-                Demucs
+                <span>Demucs</span>
               </button>
               <button
                 type="button"
                 onClick={() => void runAllVideosAction("mix")}
                 disabled={allVideosActionDisabled}
                 title="Chỉ render final mix cho tất cả video"
-                className="rounded-lg border border-cyan-400/35 px-3 py-2 text-xs font-semibold text-cyan-100 hover:bg-cyan-950/40 disabled:cursor-not-allowed disabled:opacity-40"
+                className="px-1.5 py-1.5 rounded-none border border-cyan-400/35 bg-cyan-950/20 text-cyan-100 hover:bg-cyan-950/50 text-[11px] font-semibold flex items-center justify-center gap-1 disabled:opacity-40 cursor-pointer"
               >
-                Mix Audio
+                <span>Mix Audio</span>
               </button>
               <button
                 type="button"
                 onClick={() => void runAllVideosAction("render")}
                 disabled={allVideosActionDisabled}
                 title="Chỉ export tất cả video"
-                className="rounded-lg border border-sky-400/35 px-3 py-2 text-xs font-semibold text-sky-100 hover:bg-sky-950/40 disabled:cursor-not-allowed disabled:opacity-40"
+                className="px-1.5 py-1.5 rounded-none border border-sky-400/35 bg-sky-950/20 text-sky-100 hover:bg-sky-950/50 text-[11px] font-semibold flex items-center justify-center gap-1 disabled:opacity-40 cursor-pointer"
               >
-                Render
+                <span>Render All</span>
               </button>
+            </div>
+
+            <div className="grid grid-cols-3 gap-1">
               <button
                 type="button"
                 onClick={downloadAllSrts}
                 disabled={!allSrtDownloadTargets.length}
                 title="Tải phụ đề đã chỉnh sửa của tất cả video trong project"
-                className="rounded-lg border border-emerald-500/35 px-3 py-2 text-xs font-semibold text-emerald-100 hover:bg-emerald-950/40 disabled:cursor-not-allowed disabled:opacity-40"
+                className="px-1.5 py-1.5 rounded-none border border-emerald-500/35 bg-emerald-950/20 text-emerald-200 hover:bg-emerald-950/50 text-[11px] font-semibold flex items-center justify-center gap-1 disabled:opacity-40 cursor-pointer"
               >
-                Tải SRT
+                <FileText className="h-3 w-3" />
+                <span>Tải Tất Cả SRT</span>
               </button>
               <button
                 type="button"
@@ -8793,34 +8807,35 @@ export default function VideoDubbingTab() {
                 }
                 title="Tải tất cả MP4 đã export hoàn tất trong một file ZIP"
                 aria-label="Download tất cả video đã export"
-                className="rounded-lg border border-emerald-500/35 p-2 text-emerald-200 hover:bg-emerald-950/40 disabled:cursor-not-allowed disabled:opacity-40"
+                className="px-1.5 py-1.5 rounded-none border border-emerald-500/35 bg-emerald-950/20 text-emerald-200 hover:bg-emerald-950/50 text-[11px] font-semibold flex items-center justify-center gap-1 disabled:opacity-40 cursor-pointer"
               >
-                <Download className="h-4 w-4" />
+                <Download className="h-3 w-3" />
+                <span>Tải Zip Video</span>
               </button>
               <button
                 type="button"
                 onClick={() => void syncSettingsToAllVideos()}
                 disabled={settingsSyncRunning || queueRunning || allVideosRunning || videoFiles.some((item) => item.uploading) || !videoFiles.some((item) => item.job?.status === "completed")}
                 title="Lưu cài đặt preview vào tất cả job video trong danh sách, không bắt đầu xử lý"
-                className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg border border-cyan-400/30 bg-cyan-950/30 px-3 py-2 text-xs font-semibold text-cyan-100 hover:bg-cyan-900/40 disabled:cursor-not-allowed disabled:opacity-50"
+                className="px-1.5 py-1.5 rounded-none border border-cyan-400/30 bg-cyan-950/30 text-cyan-200 hover:bg-cyan-900/40 text-[11px] font-semibold flex items-center justify-center gap-1 disabled:opacity-40 cursor-pointer"
               >
-                <RefreshCw className={`h-3.5 w-3.5 ${settingsSyncRunning ? "animate-spin" : ""}`} />
-                {settingsSyncRunning ? "Đang đồng bộ…" : "Đồng Bộ"}
+                <RefreshCw className={`h-3 w-3 ${settingsSyncRunning ? "animate-spin" : ""}`} />
+                <span>{settingsSyncRunning ? "Đang lưu…" : "Đồng Bộ Cài Đặt"}</span>
               </button>
-                </div>
             </div>
           </div>
-          {settingsSyncMessage && <p className="mt-2 text-xs text-cyan-200" role="status">{settingsSyncMessage}</p>}
-          {srtDownloadMessage && <p className="mt-2 text-xs text-emerald-200" role="status">{srtDownloadMessage}</p>}
+
+          {settingsSyncMessage && <p className="text-[10px] text-cyan-200" role="status">{settingsSyncMessage}</p>}
+          {srtDownloadMessage && <p className="text-[10px] text-emerald-200" role="status">{srtDownloadMessage}</p>}
           {allVideosAction && (
-            <div className="mt-2 space-y-1" role="status" aria-live="polite">
-              <p className="text-xs text-slate-300">
+            <div className="space-y-0.5 text-[10px]" role="status" aria-live="polite">
+              <p className="text-slate-300">
                 {allVideosAction.status === "running"
-                          ? `Đang ${allVideosAction.action === "tts" ? "tạo TTS" : allVideosAction.action === "demucs" ? "tách Demucs" : allVideosAction.action === "mix" ? "render Mix Audio" : allVideosAction.action === "render" ? "export" : "tải"} ${allVideosAction.currentIndex}/${allVideosAction.total}${allVideosAction.currentFileName ? `: ${allVideosAction.currentFileName}` : "…"}`
-                          : `${allVideosAction.action === "tts" ? "TTS" : allVideosAction.action === "demucs" ? "Demucs" : allVideosAction.action === "mix" ? "Mix Audio" : allVideosAction.action === "render" ? "Render" : "Download"} hoàn tất: ${allVideosAction.completed}/${allVideosAction.total} video thành công.`}
+                  ? `Đang ${allVideosAction.action === "tts" ? "tạo TTS" : allVideosAction.action === "demucs" ? "tách Demucs" : allVideosAction.action === "mix" ? "render Mix Audio" : allVideosAction.action === "render" ? "export" : "tải"} ${allVideosAction.currentIndex}/${allVideosAction.total}${allVideosAction.currentFileName ? `: ${allVideosAction.currentFileName}` : "…"}`
+                  : `${allVideosAction.action === "tts" ? "TTS" : allVideosAction.action === "demucs" ? "Demucs" : allVideosAction.action === "mix" ? "Mix Audio" : allVideosAction.action === "render" ? "Render" : "Download"} hoàn tất: ${allVideosAction.completed}/${allVideosAction.total} video thành công.`}
               </p>
               {allVideosAction.errors.length > 0 && (
-                <p className="text-xs text-rose-300">
+                <p className="text-rose-300">
                   {allVideosAction.errors.slice(0, 3).join(" · ")}
                   {allVideosAction.errors.length > 3
                     ? ` · và ${allVideosAction.errors.length - 3} lỗi khác`
@@ -8830,217 +8845,260 @@ export default function VideoDubbingTab() {
             </div>
           )}
         </div>
-        <div className="max-h-[60vh] w-full min-w-0 overflow-auto overscroll-contain">
-          <table className="w-full min-w-0 table-fixed border-collapse text-left">
-            <thead className="sticky top-0 z-10 bg-slate-950/95">
-              <tr className="border-b border-slate-800 text-xs font-semibold uppercase tracking-wide text-slate-400">
-                <th scope="col" className="w-1/3 px-3 py-3">
-                  Video nguồn
-                </th>
-                <th scope="col" className="w-[1%] whitespace-nowrap px-2 py-3 text-center">
-                  Phụ đề SRT
-                </th>
-                <th scope="col" className="px-3 py-3 text-right">
-                  Thao tác
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-800/80">
-              {projectJobItems.map((item) => {
-                const cues = item.job.overlaySettings?.subtitles || [];
-                const srtName = activeProject?.activeJobId === item.job.id
-                  ? activeProject.srt?.fileName
-                  : undefined;
-                return (
-                  <tr key={`saved-${item.job.id}`} onClick={(event) => previewVideoRow(event, item.job)} aria-current={job?.id === item.job.id ? "true" : undefined} className={`cursor-pointer ${job?.id === item.job.id ? "bg-sky-900/30 ring-1 ring-inset ring-sky-400/35" : "bg-slate-950/20"}`}>
-                    <td className="min-w-0 p-2">
-                      <div className="flex min-w-0 items-center gap-1">
-                        {renderCoverEditorButton(item.job)}
+
+        {/* Video Items List: Responsive Cards (No cramped tables, no hidden buttons) */}
+        <div className="flex-1 min-h-0 w-full overflow-y-auto p-2 space-y-2.5 scrollbar-thin">
+          {/* Project Saved Jobs */}
+          {projectJobItems.map((item) => {
+            const cues = item.job.overlaySettings?.subtitles || [];
+            const srtName = activeProject?.activeJobId === item.job.id
+              ? activeProject.srt?.fileName
+              : undefined;
+            const isCurrentJob = job?.id === item.job.id;
+            return (
+              <div
+                key={`saved-${item.job.id}`}
+                onClick={(event) => previewVideoRow(event, item.job)}
+                aria-current={isCurrentJob ? "true" : undefined}
+                className={`p-2.5 border transition-all cursor-pointer rounded-none flex flex-col gap-2 ${
+                  isCurrentJob
+                    ? "bg-sky-950/40 border-sky-400/60 ring-1 ring-sky-400/30"
+                    : "bg-slate-900/50 border-slate-800 hover:bg-slate-900/80 hover:border-slate-700"
+                }`}
+              >
+                {/* Row 1: Cover + Video Name + Badges */}
+                <div className="flex items-center justify-between gap-2 min-w-0">
+                  <div className="flex items-center gap-2 min-w-0 flex-1">
+                    {renderCoverEditorButton(item.job)}
+                    <button
+                      type="button"
+                      onClick={() => void previewSourceVideo(item.job)}
+                      disabled={item.job.status !== "completed" || queueRunning || settingsSyncRunning}
+                      className="flex items-center gap-1.5 min-w-0 flex-1 text-left cursor-pointer disabled:opacity-50"
+                      title={item.job.fileName}
+                    >
+                      <Film className="h-4 w-4 shrink-0 text-amber-400" />
+                      <span className="truncate text-xs font-bold text-slate-100 hover:text-white hover:underline">
+                        {item.job.fileName}
+                      </span>
+                    </button>
+                  </div>
+
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {isCurrentJob && (
+                      <span className="px-1.5 py-0.5 text-[10px] font-bold bg-sky-500/20 text-sky-300 border border-sky-500/30 rounded-none">
+                        Đang preview
+                      </span>
+                    )}
+                    <span className="text-[10px] font-mono text-slate-400 bg-slate-950 px-1.5 py-0.5 border border-slate-800">
+                      {statusLabel(item.job)}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Row 2: Subtitle SRT info */}
+                <div className="flex items-center justify-between gap-2 px-2 py-1.5 bg-slate-950/70 border border-slate-800/80 rounded-none text-xs">
+                  <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                    <FileText className={`h-3.5 w-3.5 shrink-0 ${srtName || cues.length ? "text-cyan-400" : "text-slate-600"}`} />
+                    <span className="truncate text-[11px] text-slate-300" title={srtName || (cues.length ? `Phụ đề (${cues.length} câu)` : "Chưa có SRT")}>
+                      {srtName || (cues.length ? `Phụ đề (${cues.length} câu)` : "Chưa có file SRT")}
+                    </span>
+                  </div>
+                  {cues.length > 0 && (
+                    <span className="text-[10px] text-cyan-300 font-mono shrink-0 bg-cyan-950/40 px-1.5 py-0.2 border border-cyan-500/20">
+                      {cues.length} câu
+                    </span>
+                  )}
+                </div>
+
+                {/* Progress bar if running */}
+                {renderJobProcessingBar(item.job)}
+
+                {/* Row 3: Pipeline Action Buttons (TTS, Demucs, Mix, Render, Tải SRT, Tải MP4, Cập nhật) */}
+                <div className="pt-1 border-t border-slate-800/80">
+                  {renderVideoActions(item.job)}
+                </div>
+              </div>
+            );
+          })}
+
+          {/* Queue Rows */}
+          {Array.from(
+            { length: Math.max(queueRowCount, 1) },
+            (_, index) => {
+              const { video: file, subtitle } = queueRows[index] || {};
+              const rowState = queueStates[index];
+              const validVideo = Boolean(
+                file &&
+                ACCEPTED_VIDEO_EXTENSIONS.has(
+                  file.name.slice(file.name.lastIndexOf(".")).toLowerCase(),
+                ),
+              );
+              const isCurrentJob = file?.job?.id && job?.id === file.job.id;
+              return (
+                <div
+                  key={`${file?.id || "no-video"}-${file?.name || ""}-${file?.size || 0}-${file?.lastModified || 0}-${subtitle?.id || "no-srt"}-${index}`}
+                  onClick={(event) => previewVideoRow(event, file?.job)}
+                  aria-current={isCurrentJob ? "true" : undefined}
+                  className={`p-2.5 border transition-all rounded-none flex flex-col gap-2 ${
+                    isCurrentJob
+                      ? "bg-sky-950/40 border-sky-400/60 ring-1 ring-sky-400/30"
+                      : "bg-slate-900/50 border-slate-800 hover:bg-slate-900/80 hover:border-slate-700"
+                  }`}
+                >
+                  {/* Top: Video selector / dropzone + filename + status + info/delete */}
+                  <div className="flex items-center justify-between gap-2 min-w-0">
+                    <div className="flex items-center gap-2 min-w-0 flex-1">
+                      {file?.job && renderCoverEditorButton(file.job)}
+                      <div
+                        onDragEnter={(event) => { event.preventDefault(); event.stopPropagation(); }}
+                        onDragOver={(event) => { event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = "copy"; }}
+                        onDrop={(event) => handleQueueDrop(event, file?.job?.id)}
+                        className="flex items-center min-w-0 flex-1"
+                      >
+                        <button
+                          type="button"
+                          disabled={queueRunning || Boolean(file?.uploading)}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            videoInputRef.current?.click();
+                          }}
+                          className="flex items-center gap-1.5 min-w-0 flex-1 text-left cursor-pointer disabled:opacity-60"
+                          title={file?.name || "Chọn hoặc thả video"}
+                        >
+                          <Film className="h-4 w-4 shrink-0 text-amber-400" />
+                          <span className="truncate text-xs font-bold text-slate-200 hover:text-white">
+                            {file?.name || "Chọn hoặc thả tệp video..."}
+                          </span>
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-1 shrink-0">
+                      {isCurrentJob && (
+                        <span className="px-1.5 py-0.5 text-[10px] font-bold bg-sky-500/20 text-sky-300 border border-sky-500/30 rounded-none">
+                          Đang preview
+                        </span>
+                      )}
+                      {file?.uploading && <span className="text-[10px] text-amber-300 font-mono">Đang lưu…</span>}
+                      {file?.job && !file.uploading && <span className="text-[10px] text-emerald-300 font-mono">Đã lưu</span>}
+                      {file?.error && <span className="text-[10px] text-rose-300 font-mono">Lỗi lưu</span>}
+                      {file && !validVideo && <span className="text-[10px] text-rose-300 font-mono">Định dạng lỗi</span>}
+
+                      {/* Info button */}
                       <button
                         type="button"
-                        onClick={() => void previewSourceVideo(item.job)}
-                        disabled={item.job.status !== "completed" || queueRunning || settingsSyncRunning}
-                        className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1 py-2 text-left hover:bg-slate-800/70 disabled:cursor-not-allowed disabled:opacity-50"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setDetailRowIndex(index);
+                          setFileDetailsOpen(true);
+                        }}
+                        disabled={!file && !subtitle}
+                        title="Chi tiết video nguồn"
+                        aria-label="Chi tiết video nguồn"
+                        className="p-1 text-slate-300 hover:text-white hover:bg-slate-800 border border-slate-700 rounded-none cursor-pointer disabled:opacity-40"
                       >
-                        <Film className="h-4 w-4 shrink-0 text-sky-300" />
-                        <span className="min-w-0 flex-1 truncate text-sm text-slate-100">{item.job.fileName}</span>
-                        {job?.id === item.job.id && <span className="shrink-0 rounded-full bg-sky-400/15 px-2 py-0.5 text-[10px] font-semibold text-sky-200">Đang preview</span>}
+                        <Info className="h-3.5 w-3.5" />
                       </button>
-                      </div>
-                      {renderJobProcessingBar(item.job)}
-                    </td>
-                    <td className="whitespace-nowrap p-2 text-center"><span title={srtName || (cues.length ? "Phụ đề đã lưu trong job" : "Chưa có SRT lưu cho job này")}><FileText className={`mx-auto h-4 w-4 ${srtName || cues.length ? "text-cyan-300" : "text-slate-600"}`} /></span>{cues.length > 0 && <div className="mt-1 text-[10px] text-slate-500">{cues.length} câu</div>}</td>
-                    <td className="min-w-0 p-2"><div className="flex flex-wrap items-center justify-end gap-2"><span className="text-[11px] text-slate-400">{statusLabel(item.job)}</span>{renderVideoActions(item.job)}</div></td>
-                  </tr>
-                );
-              })}
-              {Array.from(
-                { length: Math.max(queueRowCount, 1) },
-                (_, index) => {
-                  const { video: file, subtitle } = queueRows[index] || {};
-                  const rowState = queueStates[index];
-                  const validVideo = Boolean(
-                    file &&
-                    ACCEPTED_VIDEO_EXTENSIONS.has(
-                      file.name.slice(file.name.lastIndexOf(".")).toLowerCase(),
-                    ),
-                  );
-                  return (
-                    <tr
-                      key={`${file?.id || "no-video"}-${file?.name || ""}-${file?.size || 0}-${file?.lastModified || 0}-${subtitle?.id || "no-srt"}-${index}`}
-                      onClick={(event) => previewVideoRow(event, file?.job)}
-                      aria-current={file?.job?.id && job?.id === file.job.id ? "true" : undefined}
-                      className={`${file?.job ? "cursor-pointer" : ""} ${file?.job?.id && job?.id === file.job.id ? "bg-sky-900/30 ring-1 ring-inset ring-sky-400/35" : ""}`}
+                      {/* Delete button */}
+                      {(file || subtitle) && (
+                        <button
+                          type="button"
+                          disabled={queueRunning || settingsSyncRunning}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void removeQueuedSource(file, subtitle);
+                            setQueueStates((current) =>
+                              Object.fromEntries(
+                                Object.entries(current)
+                                  .filter(([key]) => Number(key) !== index)
+                                  .map(([key, value]) => [
+                                    Number(key) > index
+                                      ? Number(key) - 1
+                                      : Number(key),
+                                    value,
+                                  ]),
+                              ),
+                            );
+                            setDetailRowIndex((current) =>
+                              current === index
+                                ? null
+                                : current !== null && current > index
+                                  ? current - 1
+                                  : current,
+                            );
+                          }}
+                          title="Xóa video nguồn"
+                          aria-label="Xóa video nguồn"
+                          className="p-1 text-rose-300 hover:text-white hover:bg-rose-950/60 border border-rose-500/30 rounded-none cursor-pointer disabled:opacity-40"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Row 2: Subtitle SRT Selector */}
+                  <div
+                    onDragEnter={(event) => { event.preventDefault(); event.stopPropagation(); }}
+                    onDragOver={(event) => { event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = "copy"; }}
+                    className="flex items-center justify-between gap-2 px-2 py-1.5 bg-slate-950/70 border border-slate-800/80 rounded-none text-xs"
+                  >
+                    <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                      <FileText className={`h-3.5 w-3.5 shrink-0 ${subtitle?.analysis && !subtitle.error ? "text-cyan-400" : "text-slate-500"}`} />
+                      <span className="truncate text-[11px] text-slate-300" title={subtitle?.fileName || "Chưa chọn phụ đề SRT"}>
+                        {subtitle?.fileName || "Chưa có file phụ đề SRT"}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={queueRunning || Boolean(file?.uploading)}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        openSrtBrowser(file?.job?.id);
+                      }}
+                      className="px-2 py-0.5 text-[10px] font-semibold bg-cyan-500/15 text-cyan-300 hover:bg-cyan-500/25 border border-cyan-500/30 rounded-none cursor-pointer shrink-0"
                     >
-                      <td className="min-w-0 p-2">
-                        <div
-                          onDragEnter={(event) => {
-                            event.preventDefault();
-                            event.stopPropagation();
-                          }}
-                          onDragOver={(event) => {
-                            event.preventDefault();
-                            event.stopPropagation();
-                            event.dataTransfer.dropEffect = "copy";
-                          }}
-                          onDrop={(event) => handleQueueDrop(event, file?.job?.id)}
-                          className={`flex min-h-14 rounded-lg border border-dashed border-slate-700 bg-slate-950/50 hover:border-amber-500/50 ${file?.job ? "cursor-pointer" : ""}`}
+                      {subtitle?.fileName ? "Đổi SRT" : "Chọn SRT"}
+                    </button>
+                  </div>
+
+                  {/* Progress bar if running */}
+                  {file?.job && renderJobProcessingBar(file.job)}
+
+                  {/* Row state info */}
+                  {rowState && (
+                    <div className="flex items-center justify-between text-[10px] font-mono text-slate-400 px-1">
+                      <span className={rowState.status === "failed" ? "text-rose-300" : rowState.status === "completed" ? "text-emerald-300" : "text-slate-400"}>
+                        {rowState.status === "completed" ? "Hoàn tất" : rowState.status === "failed" ? rowState.error || "Thất bại" : rowState.status === "cancelled" ? "Đã hủy" : rowState.status === "queued" ? "Trong hàng đợi" : rowState.phase || "Đang xử lý"}
+                        {rowState.status === "processing" && rowState.progressPercent !== undefined && ` · ${Math.round(rowState.progressPercent)}%`}
+                      </span>
+                      {rowState?.status === "completed" && rowState.jobId && (
+                        <a
+                          href={`/api/video-dubbing/jobs/${rowState.jobId}/download`}
+                          download
+                          title="Tải video đã export"
+                          className="inline-flex items-center gap-1 text-[10px] text-emerald-300 font-bold hover:underline"
                         >
-                          {file?.job && renderCoverEditorButton(file.job)}
-                          <button
-                            type="button"
-                            disabled={queueRunning || Boolean(file?.uploading)}
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              videoInputRef.current?.click();
-                            }}
-                            aria-label={file ? `Chọn video khác thay cho ${file.name}` : "Chọn video nguồn"}
-                            className="flex min-h-14 min-w-0 flex-1 items-center gap-2 rounded-lg px-3 py-2 text-left disabled:cursor-wait disabled:opacity-60"
-                          >
-                            <Film className="h-4 w-4 shrink-0 text-amber-400" />
-                            <span className="min-w-0 flex-1 truncate text-sm text-slate-200">
-                              {file?.name || "Chọn hoặc thả video"}
-                            </span>
-                            {file?.job?.id === job?.id && <span className="shrink-0 rounded-full bg-sky-400/15 px-2 py-0.5 text-[10px] font-semibold text-sky-200">Đang preview</span>}
-                            {file && !validVideo && (
-                              <span className="text-[11px] text-rose-300">
-                                Định dạng không hỗ trợ
-                              </span>
-                            )}
-                            {file?.uploading && <span className="shrink-0 text-[11px] text-amber-300">Đang lưu vào project…</span>}
-                            {file?.job && !file.uploading && <span className="shrink-0 text-[11px] text-emerald-300">Đã lưu</span>}
-                            {file?.error && <span title={file.error} role="alert" className="shrink-0 text-[11px] text-rose-300">Lỗi lưu</span>}
-                            {rowState?.status === "uploading" && (
-                              <span className="shrink-0 text-[11px] text-amber-300">
-                                {rowState.progressPercent === undefined
-                                  ? rowState.phase
-                                  : `${Math.round(rowState.progressPercent)}%`}
-                              </span>
-                            )}
-                          </button>
-                        </div>
-                        {file?.job && renderJobProcessingBar(file.job)}
-                      </td>
-                      <td className="whitespace-nowrap p-2">
-                        <div
-                          onDragEnter={(event) => {
-                            event.preventDefault();
-                            event.stopPropagation();
-                          }}
-                          onDragOver={(event) => {
-                            event.preventDefault();
-                            event.stopPropagation();
-                            event.dataTransfer.dropEffect = "copy";
-                          }}
-                          className="flex min-h-14 items-center justify-center"
-                        >
-                          <button
-                            type="button"
-                            disabled={queueRunning || Boolean(file?.uploading)}
-                            onClick={() => openSrtBrowser(file?.job?.id)}
-                            title={subtitle?.error || (subtitle?.fileName ? `SRT: ${subtitle.fileName}` : "Chọn phụ đề SRT")}
-                            aria-label={subtitle?.fileName ? `Thay đổi phụ đề SRT ${subtitle.fileName}` : "Chọn phụ đề SRT"}
-                            className={`rounded-lg border p-2.5 transition-colors disabled:cursor-wait disabled:opacity-60 ${subtitle?.analysis && !subtitle.error ? "border-cyan-400/40 bg-cyan-400/10 text-cyan-300 hover:bg-cyan-400/20" : subtitle?.error ? "border-rose-500/30 bg-rose-950/20 text-rose-300" : "border-slate-700 bg-slate-950/50 text-slate-500 hover:border-slate-500 hover:text-slate-300"}`}
-                          >
-                            <FileText className="h-5 w-5" />
-                          </button>
-                        </div>
-                      </td>
-                      <td className="min-w-0 p-2">
-                        <div className="flex min-w-0 items-center justify-end gap-2">
-                          <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2">
-                            {rowState && <span className={`text-[11px] ${rowState.status === "failed" ? "text-rose-300" : rowState.status === "completed" ? "text-emerald-300" : "text-slate-400"}`}>{rowState.status === "completed" ? "Hoàn tất" : rowState.status === "failed" ? rowState.error || "Thất bại" : rowState.status === "cancelled" ? "Đã hủy" : rowState.status === "queued" ? "Trong hàng đợi" : rowState.phase || "Đang xử lý"}{rowState.status === "processing" && rowState.progressPercent !== undefined && ` · ${Math.round(rowState.progressPercent)}%`}</span>}
-                            {file?.job && renderVideoActions(file.job)}
-                            {rowState?.status === "completed" &&
-                              rowState.jobId && (
-                              <a
-                                href={`/api/video-dubbing/jobs/${rowState.jobId}/download`}
-                                download
-                                title="Tải video đã export"
-                                aria-label="Tải video đã export"
-                                className="rounded-lg border border-emerald-500/30 bg-emerald-950/20 p-2 text-emerald-200 hover:bg-emerald-950/40"
-                              >
-                                <Download className="h-4 w-4" />
-                              </a>
-                            )}
-                          </div>
-                          <div className="flex shrink-0 flex-col gap-1">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setDetailRowIndex(index);
-                                setFileDetailsOpen(true);
-                              }}
-                              disabled={!file && !subtitle}
-                              title="Chi tiết video nguồn"
-                              aria-label="Chi tiết video nguồn"
-                              className="rounded-lg border border-slate-700 bg-slate-950/70 p-1.5 text-slate-200 hover:border-amber-500/40 disabled:cursor-not-allowed disabled:opacity-40"
-                            >
-                              <Info className="h-4 w-4" />
-                            </button>
-                          {(file || subtitle) && (
-                            <button
-                              type="button"
-                              disabled={queueRunning || settingsSyncRunning}
-                              onClick={() => {
-                                void removeQueuedSource(file, subtitle);
-                                setQueueStates((current) =>
-                                  Object.fromEntries(
-                                    Object.entries(current)
-                                      .filter(([key]) => Number(key) !== index)
-                                      .map(([key, value]) => [
-                                        Number(key) > index
-                                          ? Number(key) - 1
-                                          : Number(key),
-                                        value,
-                                      ]),
-                                  ),
-                                );
-                                setDetailRowIndex((current) =>
-                                  current === index
-                                    ? null
-                                    : current !== null && current > index
-                                      ? current - 1
-                                      : current,
-                                );
-                              }}
-                                title="Xóa video nguồn"
-                                aria-label="Xóa video nguồn"
-                                className="rounded-lg border border-rose-500/25 bg-rose-950/20 p-1.5 text-rose-200 hover:border-rose-400/50 disabled:cursor-not-allowed disabled:opacity-40"
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </button>
-                          )}
-                          </div>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                },
-              )}
-            </tbody>
-          </table>
+                          <Download className="h-3 w-3" />
+                          <span>Tải MP4</span>
+                        </a>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Pipeline actions */}
+                  {file?.job && (
+                    <div className="pt-1 border-t border-slate-800/80">
+                      {renderVideoActions(file.job)}
+                    </div>
+                  )}
+                </div>
+              );
+            },
+          )}
         </div>
+
         <input
           ref={videoInputRef}
           type="file"
@@ -9059,14 +9117,12 @@ export default function VideoDubbingTab() {
           className="hidden"
           aria-label="Chọn một hoặc nhiều phụ đề SRT"
         />
-        <div className="flex flex-col gap-3 border-t border-slate-800 p-3 sm:flex-row sm:items-center sm:justify-between">
-          <p className="text-xs text-slate-400">
-            Ghép video và SRT theo cùng số thứ tự của hàng. Hàng đợi chạy tuần
-            tự.
+        <div className="shrink-0 border-t border-slate-800 p-2 bg-slate-950/70">
+          <p className="text-[11px] text-slate-400 leading-tight">
+            Ghép video và SRT theo thứ tự hàng. Hàng đợi chạy tự động.
             {videoFiles.length !== subtitleFiles.length && (
-              <span className="ml-1 text-amber-300">
-                Cần số lượng video và SRT bằng nhau ({videoFiles.length} video,{" "}
-                {subtitleFiles.length} SRT).
+              <span className="block mt-0.5 text-amber-300">
+                ⚠ Cần số lượng video và SRT bằng nhau ({videoFiles.length} video, {subtitleFiles.length} SRT).
               </span>
             )}
           </p>
@@ -9074,7 +9130,7 @@ export default function VideoDubbingTab() {
       </section>
       )}
       </div>
-      <div className="space-y-5 min-w-0 xl:col-start-2 xl:row-start-4">
+      <div className="h-full min-h-0 overflow-y-auto flex flex-col gap-0 divide-y divide-slate-800 min-w-0 bg-slate-950 rounded-none scrollbar-thin xl:col-start-2 xl:row-start-3">
       {job?.status === "completed" ? (
         <section className="space-y-4 rounded-2xl border border-cyan-500/25 bg-slate-900/80 p-4 sm:p-5">
           <button

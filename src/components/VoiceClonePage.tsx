@@ -865,66 +865,61 @@ export default function VoiceClonePage({ onVoiceInstalled, onOpenSetup }: VoiceC
   };
 
   return (
-    <div className="w-full max-w-[1680px] mx-auto px-3 sm:px-6 py-6 space-y-6">
+    <div className="w-full h-full flex flex-col gap-0 overflow-hidden bg-slate-950">
       {/* Page Header */}
-      <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 p-6 rounded-3xl bg-slate-900/90 border border-slate-800 shadow-xl">
-        <div className="flex items-center gap-4">
-          <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-amber-500 via-orange-500 to-rose-600 flex items-center justify-center text-slate-950 font-black shadow-lg shadow-amber-500/25 shrink-0">
-            <Sparkles className="w-6 h-6 text-slate-950 fill-current" />
+      <div className="h-10 sm:h-11 px-3 shrink-0 flex items-center justify-between border-b border-slate-800 bg-slate-900/90 rounded-none select-none">
+        <div className="flex items-center gap-2.5">
+          <div className="w-6 h-6 rounded-none bg-gradient-to-br from-amber-500 via-orange-500 to-rose-600 flex items-center justify-center text-slate-950 font-black text-xs shrink-0">
+            <Sparkles className="w-3.5 h-3.5 text-slate-950 fill-current" />
           </div>
-          <div>
-            <div className="flex items-center gap-2.5 flex-wrap">
-              <h2 className="text-xl sm:text-2xl font-black text-white tracking-tight">
-                Huấn Luyện & Clone Giọng Nói
-              </h2>
-              <span className="text-xs font-bold px-2.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
-                Whisper.cpp Offline + Colab GPU
-              </span>
-            </div>
-            <p className="text-xs sm:text-sm text-slate-400 mt-1 leading-relaxed">
-              Xử lý âm thanh và chỉnh sửa văn bản offline 100% tại chỗ ➔ Huấn luyện VITS trên Colab trong vài phút ➔ Nạp file ONNX
-            </p>
+          <div className="flex items-center gap-2">
+            <h2 className="text-xs sm:text-sm font-bold text-white uppercase tracking-tight">
+              Huấn Luyện & Clone Giọng Nói
+            </h2>
+            <span className="text-[10px] text-emerald-400 font-mono hidden sm:inline px-1.5 py-0.2 bg-emerald-500/10 border border-emerald-500/20">
+              Whisper.cpp Offline + Colab GPU
+            </span>
           </div>
         </div>
 
-        <div className="flex items-center gap-2 self-stretch md:self-auto shrink-0">
+        <div className="flex items-center gap-2">
           <a
             href="https://colab.research.google.com/#create=true"
             target="_blank"
             rel="noopener noreferrer"
-            className="flex-1 md:flex-initial inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition-colors"
+            className="inline-flex items-center justify-center gap-1.5 px-2.5 py-1 rounded-none bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition-colors"
           >
-            <ExternalLink className="w-4 h-4 text-amber-400" />
+            <ExternalLink className="w-3.5 h-3.5 text-amber-400" />
             <span>Mở Google Colab</span>
           </a>
         </div>
       </div>
 
       {/* Tab Navigation */}
-      <div className="flex items-center px-2 border-b border-slate-800 bg-slate-950/40 rounded-2xl p-1 gap-1 overflow-x-auto">
+      <div className="h-9 px-2 shrink-0 flex items-center border-b border-slate-800 bg-slate-950 gap-0 overflow-x-auto select-none rounded-none">
         <button
           type="button"
           onClick={() => setActiveTab("dataset")}
-          className={`py-2.5 px-4 rounded-xl text-xs font-bold flex items-center gap-2 whitespace-nowrap transition-all cursor-pointer ${
+          className={`h-full px-3 text-xs font-bold flex items-center gap-1.5 whitespace-nowrap transition-colors cursor-pointer rounded-none border-r border-slate-800 ${
             activeTab === "dataset"
-              ? "bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20"
+              ? "bg-amber-500 text-slate-950"
               : "text-slate-400 hover:text-white hover:bg-slate-900/60"
           }`}
         >
-          <Scissors className="w-4 h-4" />
+          <Scissors className="w-3.5 h-3.5" />
           <span>1. Chuẩn Bị Dữ Liệu Offline</span>
         </button>
 
         <button
           type="button"
           onClick={() => setActiveTab("join-audio")}
-          className={`py-2.5 px-4 rounded-xl text-xs font-bold flex items-center gap-2 whitespace-nowrap transition-all cursor-pointer ${
+          className={`h-full px-3 text-xs font-bold flex items-center gap-1.5 whitespace-nowrap transition-colors cursor-pointer rounded-none border-r border-slate-800 ${
             activeTab === "join-audio"
-              ? "bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20"
+              ? "bg-amber-500 text-slate-950"
               : "text-slate-400 hover:text-white hover:bg-slate-900/60"
           }`}
         >
-          <Music className="w-4 h-4" />
+          <Music className="w-3.5 h-3.5" />
           <span>Join Audio</span>
         </button>
 
@@ -934,18 +929,18 @@ export default function VoiceClonePage({ onVoiceInstalled, onOpenSetup }: VoiceC
             setActiveTab("tools");
             fetchSystemToolsStatus();
           }}
-          className={`py-2.5 px-4 rounded-xl text-xs font-bold flex items-center gap-2 whitespace-nowrap transition-all cursor-pointer ${
+          className={`h-full px-3 text-xs font-bold flex items-center gap-1.5 whitespace-nowrap transition-colors cursor-pointer rounded-none border-r border-slate-800 ${
             activeTab === "tools"
-              ? "bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20"
+              ? "bg-amber-500 text-slate-950"
               : "text-slate-400 hover:text-white hover:bg-slate-900/60"
           }`}
         >
-          <Settings className="w-4 h-4" />
-          <span>Quản Lý Công Cụ & Models (Hệ Thống)</span>
+          <Settings className="w-3.5 h-3.5" />
+          <span>Công Cụ & Models</span>
           {systemStatus?.activeJob?.status === "running" ? (
             <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
           ) : systemStatus && (!systemStatus.isWhisperInstalled || !systemStatus.models.some((m) => m.isDownloaded)) ? (
-            <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-400 border border-amber-500/30">
+            <span className="text-[10px] px-1.5 py-0.2 bg-amber-500/20 text-amber-400 border border-amber-500/30">
               Init
             </span>
           ) : null}
@@ -954,26 +949,26 @@ export default function VoiceClonePage({ onVoiceInstalled, onOpenSetup }: VoiceC
         <button
           type="button"
           onClick={() => setActiveTab("guide")}
-          className={`py-2.5 px-4 rounded-xl text-xs font-bold flex items-center gap-2 whitespace-nowrap transition-all cursor-pointer ${
+          className={`h-full px-3 text-xs font-bold flex items-center gap-1.5 whitespace-nowrap transition-colors cursor-pointer rounded-none border-r border-slate-800 ${
             activeTab === "guide"
-              ? "bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20"
+              ? "bg-amber-500 text-slate-950"
               : "text-slate-400 hover:text-white hover:bg-slate-900/60"
           }`}
         >
-          <Cpu className="w-4 h-4" />
-          <span>2. Huấn Luyện (Google Colab 1-Click)</span>
+          <Cpu className="w-3.5 h-3.5" />
+          <span>2. Huấn Luyện (Colab 1-Click)</span>
         </button>
 
         <button
           type="button"
           onClick={() => setActiveTab("upload")}
-          className={`py-2.5 px-4 rounded-xl text-xs font-bold flex items-center gap-2 whitespace-nowrap transition-all cursor-pointer ${
+          className={`h-full px-3 text-xs font-bold flex items-center gap-1.5 whitespace-nowrap transition-colors cursor-pointer rounded-none border-r border-slate-800 ${
             activeTab === "upload"
-              ? "bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20"
+              ? "bg-amber-500 text-slate-950"
               : "text-slate-400 hover:text-white hover:bg-slate-900/60"
           }`}
         >
-          <UploadCloud className="w-4 h-4" />
+          <UploadCloud className="w-3.5 h-3.5" />
           <span>3. Nạp Giọng Vào Hệ Thống (.onnx)</span>
         </button>
 
@@ -983,16 +978,19 @@ export default function VoiceClonePage({ onVoiceInstalled, onOpenSetup }: VoiceC
             setActiveTab("manage");
             fetchCustomVoices();
           }}
-          className={`py-2.5 px-4 rounded-xl text-xs font-bold flex items-center gap-2 whitespace-nowrap transition-all cursor-pointer ${
+          className={`h-full px-3 text-xs font-bold flex items-center gap-1.5 whitespace-nowrap transition-colors cursor-pointer rounded-none border-r border-slate-800 ${
             activeTab === "manage"
-              ? "bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20"
+              ? "bg-amber-500 text-slate-950"
               : "text-slate-400 hover:text-white hover:bg-slate-900/60"
           }`}
         >
-          <Layers className="w-4 h-4" />
+          <Layers className="w-3.5 h-3.5" />
           <span>4. Giọng Đã Cài ({customVoices.length})</span>
         </button>
       </div>
+
+      {/* Main Tab Content Body */}
+      <div className="flex-1 min-h-0 w-full overflow-y-auto p-3 sm:p-4 space-y-4 scrollbar-thin">
 
       {/* Universal Active Job Progress Card (Visible in all tabs) */}
       {systemStatus?.activeJob && systemStatus.activeJob.status !== "idle" && (
@@ -2691,6 +2689,7 @@ export default function VoiceClonePage({ onVoiceInstalled, onOpenSetup }: VoiceC
           )}
         </div>
       )}
+      </div>
     </div>
   );
 }

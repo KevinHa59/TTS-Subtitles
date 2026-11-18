@@ -102,6 +102,7 @@ import JoinSplitVideoPage from "./components/JoinSplitVideoPage";
 import SubtitleTranslationSetupModal from "./components/SubtitleTranslationSetupModal";
 import FileTransferPage from "./components/FileTransferPage";
 import { copyAudioToClipboard } from "./utils/clipboardAudio";
+import { useTheme } from "./context/ThemeContext";
 
 const VoiceEffectsPage = React.lazy(() => import("./components/VoiceEffectsPage"));
 
@@ -198,8 +199,10 @@ export default function App() {
     return "subtitles";
   };
 
+  const { theme, setTheme, themes } = useTheme();
   const [activeTab, setActiveTab] = useState<AppTab>(getInitialTab);
   const [showAudioCleanupModal, setShowAudioCleanupModal] = useState<boolean>(false);
+  const [showThemeModal, setShowThemeModal] = useState<boolean>(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState<boolean>(false);
   const [moreMenuOpen, setMoreMenuOpen] = useState<boolean>(false);
   const headerRef = useRef<HTMLElement>(null);
@@ -1696,7 +1699,7 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-amber-500/30 selection:text-amber-200">
+    <div className="h-screen w-screen overflow-hidden bg-slate-950 text-slate-100 flex flex-col font-sans select-none selection:bg-amber-500/30 selection:text-amber-200">
       {/* Hidden Audio Elements */}
       <audio
         ref={masterAudioRef}
@@ -1737,141 +1740,156 @@ export default function App() {
       />
       <audio ref={singleAudioRef} />
 
-      {/* Header */}
-      <header ref={headerRef} className="relative border-b border-slate-800/80 bg-slate-900/80 backdrop-blur sticky top-0 z-40 w-full max-w-full">
-        <div className="w-full px-3 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-2 sm:gap-4 max-w-full">
-          {/* Logo & Brand */}
-          <div className="flex items-center gap-2.5 sm:gap-3 shrink-0">
-            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-br from-amber-500 via-orange-500 to-rose-600 flex items-center justify-center shadow-lg shadow-amber-500/20 text-white font-black text-xs sm:text-sm tracking-tighter shrink-0">
-              TTS
-            </div>
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <h1 className="font-semibold text-sm sm:text-lg text-white tracking-tight truncate">
-                  Piper TTS Studio
-                </h1>
-                <span className="text-xs text-amber-400 font-mono font-medium hidden sm:inline">
-                  Multi-Voice & SRT
-                </span>
-                {/* Active mode indicator badge on mobile view */}
-                <span className="lg:hidden text-[10px] font-medium px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400 border border-amber-500/30 truncate max-w-[125px] sm:max-w-none">
-                  {activeTab === "subtitles" && "Đồng Bộ SRT"}
-                  {activeTab === "single" && "Đọc Đoạn Văn"}
-                  {activeTab === "story" && "Kể Truyện"}
-                  {activeTab === "bgm" && "Tạo Nhạc Nền"}
-                  {activeTab === "voice-clone" && "Clone Giọng"}
-                  {activeTab === "video-dubbing" && "Video Dubbing"}
-                  {activeTab === "subtitle-ocr" && "OCR Phụ Đề"}
-                  {activeTab === "subtitle-editor" && "Dịch & Sửa SRT"}
-                  {activeTab === "join-split-video" && "Join / Split Video"}
-                  {activeTab === "voice-effects" && "Voice Effects"}
-                  {activeTab === "file-transfer" && "Transfer"}
-                </span>
-              </div>
-              <p className="text-xs text-slate-400 hidden xl:block">
-                Studio tổng hợp giọng nói & đồng bộ phụ đề đa giọng đọc tiếng Việt 100% Offline
-              </p>
-            </div>
+      {/* Header - Desktop App Menu / Title Bar */}
+      <header ref={headerRef} className="relative z-40 w-full shrink-0 select-none">
+        <div className="h-10 sm:h-11 border-b border-slate-800 bg-slate-900 flex items-stretch justify-between px-3 rounded-none w-full">
+        {/* Logo & Brand */}
+        <div className="flex items-center gap-2.5 shrink-0 pr-3">
+          <div className="w-6 h-6 rounded-none bg-gradient-to-br from-amber-500 via-orange-500 to-rose-600 flex items-center justify-center text-slate-950 font-black text-xs tracking-tighter shrink-0">
+            TTS
           </div>
-
-          {/* Desktop Navigation (>= lg screens: 100% full-width row, no wrapping) */}
-          <div className="hidden lg:flex items-center gap-2 shrink-0 flex-nowrap">
-            {/* Mode Tabs */}
-            <nav className="flex items-center p-1 bg-slate-950/80 rounded-xl border border-slate-800 text-xs shrink-0 flex-nowrap">
-              <button
-                type="button"
-                onClick={() => handleNavigateTab("subtitles")}
-                className={`px-3 py-1.5 rounded-lg font-medium transition-all whitespace-nowrap cursor-pointer ${
-                  activeTab === "subtitles"
-                    ? "bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/20"
-                    : "text-slate-400 hover:text-white"
-                }`}
-              >
-                Đồng Bộ Phụ Đề (SRT)
-              </button>
-              <button
-                type="button"
-                onClick={() => handleNavigateTab("video-dubbing")}
-                className={`px-3 py-1.5 rounded-lg font-medium transition-all flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
-                  activeTab === "video-dubbing"
-                    ? "bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/20"
-                    : "text-slate-400 hover:text-white"
-                }`}
-              >
-                <Film className="w-3.5 h-3.5" />
-                <span>Video Dubbing</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => handleNavigateTab("subtitle-ocr")}
-                className={`px-3 py-1.5 rounded-lg font-medium transition-all flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
-                  activeTab === "subtitle-ocr"
-                    ? "bg-cyan-400 text-slate-950 font-bold shadow-md shadow-cyan-500/20"
-                    : "text-slate-400 hover:text-white"
-                }`}
-              >
-                <Captions className="w-3.5 h-3.5" />
-                <span>OCR Phụ Đề</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => handleNavigateTab("voice-clone")}
-                className={`px-3 py-1.5 rounded-lg font-semibold transition-all flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
-                  activeTab === "voice-clone"
-                    ? "bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/20"
-                    : "text-amber-400 hover:text-amber-200 hover:bg-amber-500/10"
-                }`}
-                title="Trang huấn luyện và Clone giọng nói tiếng Việt bằng Google Colab (/voice-clone)"
-              >
-                <Sparkles className="w-3.5 h-3.5" />
-                <span>Clone Giọng (Colab)</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setMoreMenuOpen((open) => !open)}
-                aria-expanded={moreMenuOpen}
-                aria-haspopup="menu"
-                className={`px-3 py-1.5 rounded-lg font-medium transition-all flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
-                  moreMenuOpen ||
-                  activeTab === "subtitle-editor" ||
-                  activeTab === "single" ||
-                  activeTab === "story" ||
-                  activeTab === "bgm" ||
-                  activeTab === "voice-effects" ||
-                  activeTab === "srt-from-text" ||
-                  activeTab === "join-split-video" ||
-                  activeTab === "file-transfer"
-                    ? "bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/20"
-                    : "text-slate-400 hover:text-white"
-                }`}
-              >
-                <span>More...</span>
-                <ChevronDown className={`h-3.5 w-3.5 transition-transform ${moreMenuOpen ? "rotate-180" : ""}`} />
-              </button>
-            </nav>
-
-          </div>
-
-          {/* Mobile Hamburger Controls (< lg screens) */}
-          <div className="flex items-center gap-2 lg:hidden shrink-0">
-            <button
-              type="button"
-              onClick={() => setMobileMenuOpen((prev) => !prev)}
-              aria-label="Mở menu chuyển tab và tính năng"
-              className={`p-2 rounded-xl border transition-colors flex items-center justify-center ${
-                mobileMenuOpen
-                  ? "bg-amber-500/20 border-amber-500/40 text-amber-400"
-                  : "bg-slate-800/80 border-slate-700/70 text-slate-300 hover:text-white hover:bg-slate-700/80"
-              }`}
-            >
-              {mobileMenuOpen ? (
-                <X className="w-5 h-5 text-amber-400" />
-              ) : (
-                <Menu className="w-5 h-5 text-slate-200" />
-              )}
-            </button>
+          <div className="flex items-center gap-2">
+            <h1 className="font-bold text-xs sm:text-sm text-white tracking-tight uppercase whitespace-nowrap">
+              Piper TTS Studio
+            </h1>
+            <span className="text-[10px] text-amber-400 font-mono font-medium hidden md:inline px-1.5 py-0.2 bg-amber-500/10 border border-amber-500/20 rounded-none">
+              Desktop
+            </span>
+            {/* Active mode indicator badge on mobile view */}
+            <span className="lg:hidden text-[10px] font-medium px-2 py-0.5 rounded-none bg-amber-500/15 text-amber-400 border border-amber-500/30 truncate max-w-[125px] sm:max-w-none">
+              {activeTab === "subtitles" && "Đồng Bộ SRT"}
+              {activeTab === "single" && "Đọc Đoạn Văn"}
+              {activeTab === "story" && "Kể Truyện"}
+              {activeTab === "bgm" && "Tạo Nhạc Nền"}
+              {activeTab === "voice-clone" && "Clone Giọng"}
+              {activeTab === "video-dubbing" && "Video Dubbing"}
+              {activeTab === "subtitle-ocr" && "OCR Phụ Đề"}
+              {activeTab === "subtitle-editor" && "Dịch & Sửa SRT"}
+              {activeTab === "join-split-video" && "Join / Split Video"}
+              {activeTab === "voice-effects" && "Voice Effects"}
+              {activeTab === "file-transfer" && "Transfer"}
+            </span>
           </div>
         </div>
+
+        {/* Desktop Navigation (>= lg screens: docked desktop tab bar) */}
+        <div className="hidden lg:flex items-stretch h-full shrink-0 flex-nowrap">
+          <nav className="flex items-stretch h-full border-l border-slate-800 text-xs shrink-0 flex-nowrap">
+            <button
+              type="button"
+              onClick={() => handleNavigateTab("subtitles")}
+              className={`px-3.5 h-full border-r border-slate-800 font-semibold transition-colors flex items-center gap-1.5 whitespace-nowrap cursor-pointer rounded-none text-xs ${
+                activeTab === "subtitles"
+                  ? "bg-slate-800 text-amber-400 border-b-2 border-b-amber-500 font-bold"
+                  : "text-slate-400 hover:text-white hover:bg-slate-800/50"
+              }`}
+            >
+              <FileText className="w-3.5 h-3.5 text-amber-400" />
+              <span>Đồng Bộ Phụ Đề (SRT)</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleNavigateTab("video-dubbing")}
+              className={`px-3.5 h-full border-r border-slate-800 font-semibold transition-colors flex items-center gap-1.5 whitespace-nowrap cursor-pointer rounded-none text-xs ${
+                activeTab === "video-dubbing"
+                  ? "bg-slate-800 text-amber-400 border-b-2 border-b-amber-500 font-bold"
+                  : "text-slate-400 hover:text-white hover:bg-slate-800/50"
+              }`}
+            >
+              <Film className="w-3.5 h-3.5" />
+              <span>Video Dubbing</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleNavigateTab("subtitle-ocr")}
+              className={`px-3.5 h-full border-r border-slate-800 font-semibold transition-colors flex items-center gap-1.5 whitespace-nowrap cursor-pointer rounded-none text-xs ${
+                activeTab === "subtitle-ocr"
+                  ? "bg-slate-800 text-cyan-400 border-b-2 border-b-cyan-500 font-bold"
+                  : "text-slate-400 hover:text-white hover:bg-slate-800/50"
+              }`}
+            >
+              <Captions className="w-3.5 h-3.5" />
+              <span>OCR Phụ Đề</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleNavigateTab("voice-clone")}
+              className={`px-3.5 h-full border-r border-slate-800 font-semibold transition-colors flex items-center gap-1.5 whitespace-nowrap cursor-pointer rounded-none text-xs ${
+                activeTab === "voice-clone"
+                  ? "bg-slate-800 text-amber-400 border-b-2 border-b-amber-500 font-bold"
+                  : "text-amber-400 hover:text-amber-200 hover:bg-slate-800/50"
+              }`}
+              title="Trang huấn luyện và Clone giọng nói tiếng Việt bằng Google Colab (/voice-clone)"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>Clone Giọng</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setMoreMenuOpen((open) => !open)}
+              aria-expanded={moreMenuOpen}
+              aria-haspopup="menu"
+              className={`px-3.5 h-full border-r border-slate-800 font-semibold transition-colors flex items-center gap-1.5 whitespace-nowrap cursor-pointer rounded-none text-xs ${
+                moreMenuOpen ||
+                activeTab === "subtitle-editor" ||
+                activeTab === "single" ||
+                activeTab === "story" ||
+                activeTab === "bgm" ||
+                activeTab === "voice-effects" ||
+                activeTab === "srt-from-text" ||
+                activeTab === "join-split-video" ||
+                activeTab === "file-transfer"
+                  ? "bg-slate-800 text-amber-400 border-b-2 border-b-amber-500 font-bold"
+                  : "text-slate-400 hover:text-white hover:bg-slate-800/50"
+              }`}
+            >
+              <span>Thêm Công Cụ...</span>
+              <ChevronDown className={`h-3 w-3 transition-transform ${moreMenuOpen ? "rotate-180" : ""}`} />
+            </button>
+          </nav>
+        </div>
+
+        {/* Desktop Quick Header Actions & Mobile Hamburger */}
+        <div className="flex items-center gap-1 shrink-0">
+          <button
+            type="button"
+            onClick={() => setShowThemeModal(true)}
+            className="p-1.5 text-amber-400 hover:text-amber-300 hover:bg-slate-800 rounded-none transition-colors flex items-center gap-1 text-xs font-semibold cursor-pointer"
+            title="Đổi giao diện / Theme (Desktop Dark, Zinc, Light, OLED High Contrast)"
+          >
+            <Sliders className="w-3.5 h-3.5" />
+            <span className="hidden xl:inline text-[11px]">Theme</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowSetupModal(true)}
+            className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-none transition-colors hidden sm:inline-flex cursor-pointer"
+            title="Cài đặt hệ thống (Setup)"
+          >
+            <Settings className="w-4 h-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowAudioCleanupModal(true)}
+            className="p-1.5 text-rose-400/80 hover:text-rose-300 hover:bg-slate-800 rounded-none transition-colors hidden sm:inline-flex cursor-pointer"
+            title="Dọn dẹp audio rác"
+          >
+            <Trash2 className="w-4 h-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => setMobileMenuOpen((prev) => !prev)}
+            aria-label="Mở menu chuyển tab và tính năng"
+            className="p-1.5 text-slate-300 hover:text-white hover:bg-slate-800 lg:hidden rounded-none transition-colors"
+          >
+            {mobileMenuOpen ? (
+              <X className="w-5 h-5 text-amber-400" />
+            ) : (
+              <Menu className="w-5 h-5 text-slate-200" />
+            )}
+          </button>
+        </div>
+      </div>
 
         {/* Mobile Dropdown Menu: Chứa toàn bộ menu chức năng khi ở mobile view */}
         {mobileMenuOpen && (
@@ -2315,6 +2333,23 @@ export default function App() {
               type="button"
               role="menuitem"
               onClick={() => {
+                setShowThemeModal(true);
+                setMoreMenuOpen(false);
+              }}
+              className="flex w-full items-center gap-3 rounded-none px-3 py-2.5 text-left text-sm font-medium text-amber-300 transition-colors hover:bg-slate-800 hover:text-amber-200"
+            >
+              <Sliders className="h-4 w-4 text-amber-400" />
+              <span>
+                Cài Đặt Theme
+                <span className="mt-0.5 block text-xs text-slate-400">
+                  {themes.find((t) => t.id === theme)?.name || "Đổi theme"}
+                </span>
+              </span>
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
                 setShowAudioCleanupModal(true);
                 setMoreMenuOpen(false);
               }}
@@ -2351,38 +2386,31 @@ export default function App() {
         )}
       </header>
 
-      {/* Main Container */}
-      <main className={`w-full mx-auto ${activeTab === "voice-effects" || activeTab === "join-split-video" ? "flex-none h-[calc(100dvh-4.1rem)] min-h-0 overflow-hidden py-0 pb-0 space-y-0 max-w-none px-0" : `flex-1 py-6 pb-36 sm:pb-44 space-y-6 ${activeTab === "video-dubbing" || activeTab === "subtitle-ocr" || activeTab === "subtitle-editor" ? "max-w-none px-0" : "max-w-[1680px] px-3 sm:px-6"}`}`}>
+      {/* Main Container - Full docked desktop workstation shell */}
+      <main className="flex-1 min-h-0 w-full overflow-hidden flex flex-col p-0 m-0 max-w-none">
         {/* ========================================================= */}
         {/* TAB 1: SUBTITLE TIMELINE SYNCHRONIZATION STUDIO */}
         {/* ========================================================= */}
         {activeTab === "subtitles" && (
-          <div className="flex flex-col lg:flex-row items-start gap-6">
+          <div className="flex-1 min-h-0 w-full h-full flex flex-col lg:flex-row gap-0 overflow-hidden">
             {/* ========================================================= */}
             {/* CỘT BÊN TRÁI: TOÀN BỘ SETTINGS & DỮ LIỆU ĐẦU VÀO          */}
             {/* Có thể Expand hoặc Hide (Requirement 3)                  */}
             {/* ========================================================= */}
             {isLeftPanelExpanded ? (
-              <aside className="w-full lg:w-[380px] xl:w-[410px] 2xl:w-[430px] shrink-0 space-y-4">
+              <aside className="w-full lg:w-[360px] xl:w-[390px] 2xl:w-[420px] shrink-0 h-full overflow-y-auto border-r border-slate-800 bg-slate-900/40 flex flex-col divide-y divide-slate-800 rounded-none scrollbar-thin select-none">
                 {/* Panel Header & Hide Button */}
-                <div className="flex items-center justify-between bg-slate-900/95 border border-slate-800 rounded-2xl p-4 shadow-xl">
-                  <div className="flex items-center gap-2.5">
-                    <div className="w-8 h-8 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20 flex items-center justify-center font-bold">
-                      <Sliders className="w-4 h-4" />
-                    </div>
-                    <div>
-                      <h2 className="text-sm font-bold text-white tracking-tight">
-                        Cột Cài Đặt (Settings)
-                      </h2>
-                      <p className="text-[11px] text-slate-400">
-                        Giọng đọc, phụ đề & tham số
-                      </p>
-                    </div>
+                <div className="h-9 px-3 shrink-0 flex items-center justify-between bg-slate-950/80 border-b border-slate-800 rounded-none">
+                  <div className="flex items-center gap-2">
+                    <Sliders className="w-3.5 h-3.5 text-amber-400" />
+                    <h2 className="text-xs font-bold text-white tracking-wide uppercase">
+                      Cài Đặt & Dữ Liệu
+                    </h2>
                   </div>
                   <button
                     type="button"
                     onClick={() => setIsLeftPanelExpanded(false)}
-                    className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 text-xs font-medium transition-colors cursor-pointer"
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-none bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 text-[11px] font-medium transition-colors cursor-pointer"
                     title="Ẩn cột cài đặt để mở rộng không gian bên phải"
                   >
                     <PanelLeftClose className="w-3.5 h-3.5 text-amber-400" />
@@ -2391,7 +2419,7 @@ export default function App() {
                 </div>
 
                 {/* 0. Project Settings Card (Lưu & Nạp Cấu Hình Dự Án - Requirement 2) */}
-                <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 shadow-xl space-y-3">
+                <div className="p-3 bg-slate-900/20 space-y-2.5 rounded-none">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
                       <Bookmark className="w-4 h-4 text-amber-400" />
@@ -2527,7 +2555,7 @@ export default function App() {
                 </div>
 
                 {/* 1. Voice Selection Card (Mở Panel Bảng Chọn Giọng Đọc) */}
-                <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 shadow-xl space-y-3.5">
+                <div className="p-3 bg-slate-900/20 space-y-3 rounded-none">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
                       <Radio className="w-4 h-4 text-amber-400" />
@@ -2650,7 +2678,7 @@ export default function App() {
                 </div>
 
                 {/* 2. Upload Subtitle & Presets Card (Requirement 1: Kéo thả phụ đề) */}
-                <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 shadow-xl space-y-3">
+                <div className="p-3 bg-slate-900/20 space-y-3 rounded-none">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
                       <FileText className="w-4 h-4 text-amber-400" />
@@ -2815,7 +2843,7 @@ export default function App() {
                 </div>
 
                 {/* 3. Processing Parameters Card */}
-                <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 shadow-xl space-y-4 text-xs">
+                <div className="p-3 bg-slate-900/20 space-y-3 text-xs rounded-none">
                   <div className="flex items-center justify-between">
                     <span className="font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
                       <Settings className="w-4 h-4 text-amber-400" />
@@ -3126,7 +3154,7 @@ export default function App() {
                 </div>
 
                 {/* 4. Pronunciation & Text Normalizer Card (Requirement 1) */}
-                <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 shadow-xl space-y-3 text-xs">
+                <div className="p-3 bg-slate-900/20 space-y-3 text-xs rounded-none">
                   <div className="flex items-center justify-between">
                     <span className="font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
                       <BookOpen className="w-4 h-4 text-amber-400" />
@@ -3173,8 +3201,8 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* 5. Notification Sound & Panel Card (Requirement 3) */}
-                <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 shadow-xl space-y-3 text-xs">
+                {/* 5. Notification Sound & Panel Card */}
+                <div className="bg-slate-900/30 p-3.5 space-y-3 text-xs rounded-none">
                   <div className="flex items-center justify-between">
                     <span className="font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
                       <BellRing className="w-4 h-4 text-amber-400" />
@@ -3192,7 +3220,7 @@ export default function App() {
                   </div>
 
                   <div className="space-y-2">
-                    <label className="flex items-center justify-between p-2.5 bg-slate-950/80 rounded-xl border border-slate-800 cursor-pointer hover:border-slate-700 transition-colors">
+                    <label className="flex items-center justify-between p-2.5 bg-slate-950/80 rounded-none border border-slate-800 cursor-pointer hover:border-slate-700 transition-colors">
                       <span className="text-slate-300 font-medium text-[11px]">
                         Phát chuông khi xử lý xong phụ đề
                       </span>
@@ -3202,12 +3230,12 @@ export default function App() {
                         onChange={(e) =>
                           setSoundNotificationEnabled(e.target.checked)
                         }
-                        className="rounded border-slate-700 text-amber-500 focus:ring-amber-500 accent-amber-500"
+                        className="rounded-none border-slate-700 text-amber-500 focus:ring-amber-500 accent-amber-500"
                       />
                     </label>
 
                     {soundNotificationEnabled && (
-                      <label className="flex items-center justify-between p-2.5 bg-slate-950/60 rounded-xl border border-slate-800/80 cursor-pointer hover:border-slate-700 transition-colors">
+                      <label className="flex items-center justify-between p-2.5 bg-slate-950/60 rounded-none border border-slate-800/80 cursor-pointer hover:border-slate-700 transition-colors">
                         <div className="space-y-0.5">
                           <span className="text-slate-300 font-medium block text-[11px]">
                             Chỉ phát khi không focus (ở tab khác)
@@ -3222,7 +3250,7 @@ export default function App() {
                           onChange={(e) =>
                             setSoundOnlyWhenUnfocused(e.target.checked)
                           }
-                          className="rounded border-slate-700 text-amber-500 focus:ring-amber-500 accent-amber-500"
+                          className="rounded-none border-slate-700 text-amber-500 focus:ring-amber-500 accent-amber-500"
                         />
                       </label>
                     )}
@@ -3231,7 +3259,7 @@ export default function App() {
 
                 {/* Subtitle Warnings list if any */}
                 {parseWarnings.length > 0 && (
-                  <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3 text-xs text-amber-300 space-y-1">
+                  <div className="bg-amber-500/10 border-t border-amber-500/30 p-3 text-xs text-amber-300 space-y-1 rounded-none">
                     <div className="flex items-center gap-1.5 font-semibold text-amber-400">
                       <AlertTriangle className="w-4 h-4" />
                       <span>{parseWarnings.length} cảnh báo về timestamp:</span>
@@ -3246,16 +3274,16 @@ export default function App() {
               </aside>
             ) : (
               /* Collapsed Rail Toggle Button for Desktop */
-              <div className="hidden lg:flex flex-col items-center shrink-0">
+              <div className="hidden lg:flex flex-col items-center shrink-0 w-9 h-full border-r border-slate-800 bg-slate-900/90 py-2">
                 <button
                   type="button"
                   onClick={() => setIsLeftPanelExpanded(true)}
-                  className="sticky top-20 p-3 bg-slate-900 hover:bg-slate-800 text-amber-400 border border-slate-800 rounded-2xl flex flex-col items-center gap-2 shadow-xl hover:border-amber-500/40 transition-all cursor-pointer group"
+                  className="w-full py-3 flex flex-col items-center gap-2 text-slate-400 hover:text-amber-400 transition-colors cursor-pointer rounded-none"
                   title="Mở rộng Cột Cài Đặt (Settings)"
                 >
-                  <PanelLeftOpen className="w-5 h-5 text-amber-400 group-hover:scale-110 transition-transform" />
-                  <span className="text-[11px] font-bold [writing-mode:vertical-lr] tracking-wider uppercase text-slate-300 group-hover:text-amber-300 py-1">
-                    Mở Cài Đặt (Settings)
+                  <PanelLeftOpen className="w-4 h-4 text-amber-400" />
+                  <span className="text-[10px] font-bold [writing-mode:vertical-lr] tracking-wider uppercase py-2">
+                    Cài Đặt
                   </span>
                 </button>
               </div>
@@ -3263,19 +3291,15 @@ export default function App() {
 
             {/* ========================================================= */}
             {/* CỘT BÊN PHẢI: WORKSTATION & RESULTS                       */}
-            {/* 1. Tiến độ xử lý tổng thể                                 */}
-            {/* 2. File Audio Hoàn Chỉnh Đồng Bộ Timeline                 */}
-            {/* 3. Bảng Phân Tích Phụ Đề & Trạng Thái Từng Câu (Scroll)   */}
-            {/* 4. Live Logs (Có thể Expand hoặc Close)                   */}
             {/* ========================================================= */}
-            <section className="flex-1 min-w-0 w-full space-y-6">
-              {/* Workspace Top Toolbar with Left Panel Toggle */}
-              <div className="flex items-center justify-between gap-3 bg-slate-900/60 border border-slate-800/80 rounded-2xl px-4 py-2.5 shadow-md">
+            <section className="flex-1 min-w-0 h-full flex flex-col gap-0 overflow-hidden bg-slate-950 rounded-none">
+              {/* Workspace Top Toolbar */}
+              <div className="h-9 px-3 shrink-0 flex items-center justify-between border-b border-slate-800 bg-slate-900/90 rounded-none">
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
                     onClick={() => setIsLeftPanelExpanded(!isLeftPanelExpanded)}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700 text-xs font-semibold transition-colors cursor-pointer"
+                    className="inline-flex items-center gap-1.5 px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700 text-xs font-semibold transition-colors cursor-pointer rounded-none"
                     title={
                       isLeftPanelExpanded
                         ? "Ẩn cột cài đặt bên trái"
@@ -3285,22 +3309,22 @@ export default function App() {
                     {isLeftPanelExpanded ? (
                       <>
                         <PanelLeftClose className="w-3.5 h-3.5 text-amber-400" />
-                        <span>Ẩn Cột Cài Đặt</span>
+                        <span className="text-[11px]">Ẩn Cài Đặt</span>
                       </>
                     ) : (
                       <>
                         <PanelLeftOpen className="w-3.5 h-3.5 text-amber-400" />
-                        <span>Hiện Cài Đặt (Settings & Phụ Đề)</span>
+                        <span className="text-[11px]">Hiện Cài Đặt</span>
                       </>
                     )}
                   </button>
-                  <span className="text-xs text-slate-400 hidden sm:inline">
-                    Không gian làm việc đồng bộ Timeline
+                  <span className="text-xs text-slate-400 font-medium hidden sm:inline border-l border-slate-800 pl-2">
+                    Workstation Đồng Bộ Timeline
                   </span>
                 </div>
 
                 <div className="flex items-center gap-2 text-xs font-mono text-slate-400">
-                  <span className="bg-slate-950 px-2.5 py-1 rounded-lg border border-slate-800">
+                  <span className="bg-slate-950 px-2 py-0.5 border border-slate-800 rounded-none text-[11px]">
                     Phụ đề:{" "}
                     <strong className="text-amber-400">
                       {subtitles.length}
@@ -3310,14 +3334,14 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => setShowVoiceModal(true)}
-                    className="bg-slate-950 hover:bg-slate-800 px-2.5 py-1 rounded-lg border border-slate-800 hover:border-amber-500/40 hidden sm:inline-flex items-center gap-1.5 transition-colors cursor-pointer group"
+                    className="bg-slate-950 hover:bg-slate-800 px-2 py-0.5 border border-slate-800 hover:border-amber-500/40 hidden sm:inline-flex items-center gap-1.5 transition-colors cursor-pointer rounded-none text-[11px]"
                     title="Bấm để mở bảng chọn giọng đọc"
                   >
                     <span className="text-slate-400">Giọng:</span>
-                    <strong className="text-slate-200 group-hover:text-amber-300 transition-colors">
+                    <strong className="text-slate-200">
                       {selectedVoice.name}
                     </strong>
-                    <span className="text-[10px] text-amber-400 bg-amber-500/15 px-1.5 py-0.2 rounded border border-amber-500/30">
+                    <span className="text-[10px] text-amber-400 bg-amber-500/15 px-1 py-0.2 border border-amber-500/30">
                       Đổi
                     </span>
                   </button>
@@ -3328,7 +3352,7 @@ export default function App() {
               {/* 1. CHI TIẾT TIẾN TRÌNH XỬ LÝ & 9 GIAI ĐOẠN              */}
               {/* (Tiến độ tổng thể, % và nút xử lý đã tách vào thanh dock đáy) */}
               {/* ------------------------------------------------------- */}
-              <div className="bg-slate-900/95 border border-slate-800 rounded-2xl p-5 shadow-2xl space-y-4">
+              <div className="shrink-0 border-b border-slate-800 bg-slate-900/40 p-3 space-y-3 rounded-none">
                 <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-slate-800/80 pb-3">
                   <div>
                     <div className="flex items-center gap-2">
@@ -3569,7 +3593,7 @@ export default function App() {
               {/* 2. FILE AUDIO HOÀN CHỈNH ĐỒNG BỘ TIMELINE (MASTER AUDIO)*/}
               {/* ------------------------------------------------------- */}
               {activeJob?.masterAudio && (
-                <div className="bg-gradient-to-r from-slate-900 via-slate-900 to-amber-950/30 border-2 border-amber-500/40 rounded-2xl p-5 sm:p-6 shadow-2xl space-y-4">
+                <div className="shrink-0 border-b border-slate-800 bg-slate-900/60 p-3 space-y-3 rounded-none">
                   <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
                     <div className="flex items-center gap-3">
                       <div className="w-12 h-12 rounded-2xl bg-amber-500 text-slate-950 flex items-center justify-center font-bold shadow-lg shadow-amber-500/30">
@@ -3853,27 +3877,21 @@ export default function App() {
 
               {/* ------------------------------------------------------- */}
               {/* 3. BẢNG PHÂN TÍCH PHỤ ĐỀ & TRẠNG THÁI TỪNG CÂU          */}
-              {/* Scroll view + Nghe thử từng câu (Requirement 1 & 2)     */}
+              {/* Scroll view + Nghe thử từng câu                         */}
               {/* ------------------------------------------------------- */}
-              <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
-                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h3 className="text-sm font-semibold text-white">
-                        Bảng Phân Tích Phụ Đề & Trạng Thái Từng Câu
-                      </h3>
-                      <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-amber-400/10 text-amber-400 border border-amber-400/20">
-                        Scroll View
-                      </span>
-                    </div>
-                    <p className="text-xs text-slate-400">
-                      Theo dõi thời lượng gốc, điều chỉnh tốc độ riêng và nghe
-                      thử từng câu sau khi hoàn thành (Cuộn để xem tất cả câu)
-                    </p>
+              <div className="flex-1 min-h-0 flex flex-col bg-slate-950 rounded-none overflow-hidden">
+                <div className="h-8 px-3 shrink-0 flex items-center justify-between border-b border-slate-800 bg-slate-900/80 rounded-none text-xs">
+                  <div className="flex items-center gap-2">
+                    <h3 className="font-bold text-white uppercase tracking-wider text-[11px]">
+                      Bảng Phân Tích Phụ Đề & Trạng Thái Từng Câu
+                    </h3>
+                    <span className="px-1.5 py-0.2 rounded-none text-[10px] font-medium bg-amber-400/10 text-amber-400 border border-amber-400/20">
+                      Timeline Table
+                    </span>
                   </div>
                   <div className="flex items-center gap-2">
-                    <span className="text-xs text-slate-300 font-mono bg-slate-950 px-2.5 py-1 rounded-lg border border-slate-800">
-                      Tổng số:{" "}
+                    <span className="text-xs text-slate-300 font-mono bg-slate-950 px-2 py-0.5 border border-slate-800 rounded-none text-[11px]">
+                      Tổng:{" "}
                       <strong className="text-amber-400">
                         {activeJob?.items
                           ? activeJob.items.length
@@ -3884,8 +3902,8 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Subtitles Table with Scroll View (Requirement 1 & 2) */}
-                <div className="overflow-x-auto overflow-y-auto max-h-[480px] rounded-xl border border-slate-800 scrollbar-thin shadow-inner bg-slate-950/40">
+                {/* Subtitles Table with Scroll View */}
+                <div className="flex-1 min-h-0 overflow-auto scrollbar-thin rounded-none bg-slate-950">
                   <table className="w-full text-left text-xs border-collapse">
                     <thead className="sticky top-0 z-20 bg-slate-950 shadow-md">
                       <tr className="bg-slate-950 text-slate-400 border-b border-slate-800 text-[11px] font-mono">
@@ -4127,11 +4145,10 @@ export default function App() {
 
               {/* ------------------------------------------------------- */}
               {/* 4. LIVE LOGS (Có thể Expand hoặc Close)                 */}
-              {/* Requirement 3 & 4                                       */}
               {/* ------------------------------------------------------- */}
-              <div className="bg-slate-950 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden font-mono text-xs">
+              <div className="shrink-0 border-t border-slate-800 bg-slate-950 rounded-none overflow-hidden font-mono text-xs">
                 {/* Logs Header */}
-                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-4 bg-slate-900/50 border-b border-slate-800/80">
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 px-3 py-1.5 bg-slate-900/80 border-b border-slate-800/80 rounded-none">
                   <div className="flex items-center gap-2.5 flex-wrap">
                     <Terminal className="w-4 h-4 text-amber-400" />
                     <span className="font-semibold text-white">Live Logs</span>
@@ -4314,25 +4331,25 @@ export default function App() {
         )}
 
         {/* ========================================================= */}
-        {/* TAB 2: SINGLE TEXT TTS STUDIO (Preserves previous feature) */}
+        {/* TAB 2: SINGLE TEXT TTS STUDIO                             */}
         {/* ========================================================= */}
         {activeTab === "single" && (
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-            <div className="lg:col-span-8 bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4 shadow-xl">
-              <div className="flex items-center justify-between">
-                <h2 className="text-sm font-semibold text-white">
+          <div className="flex-1 min-h-0 w-full flex flex-col lg:flex-row items-stretch gap-0 overflow-hidden">
+            <div className="flex-1 h-full overflow-y-auto p-4 border-r border-slate-800 bg-slate-900/30 space-y-4 rounded-none scrollbar-thin">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                <h2 className="text-sm font-bold text-white uppercase tracking-wider">
                   Chuyển văn bản nhanh (Single TTS)
                 </h2>
-                <span className="text-xs text-slate-400">
+                <span className="text-xs text-slate-400 font-mono">
                   {singleText.length} ký tự
                 </span>
               </div>
 
               {/* Voice & Project Settings in Tab 2 */}
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 bg-slate-950/80 rounded-xl border border-slate-800 text-xs">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 bg-slate-950/80 rounded-none border border-slate-800 text-xs">
                 <div className="flex items-center gap-2.5">
                   <div
-                    className={`w-7 h-7 rounded-lg flex items-center justify-center font-bold text-[11px] shrink-0 ${
+                    className={`w-7 h-7 rounded-none flex items-center justify-center font-bold text-[11px] shrink-0 ${
                       selectedVoice.gender === "female"
                         ? "bg-rose-500/15 text-rose-300 border border-rose-500/30"
                         : "bg-sky-500/15 text-sky-300 border border-sky-500/30"
@@ -4345,7 +4362,7 @@ export default function App() {
                       <span className="font-bold text-white">
                         {selectedVoice.name}
                       </span>
-                      <span className="text-[10px] text-emerald-400 bg-emerald-500/15 px-1.5 py-0.2 rounded border border-emerald-500/30 font-medium">
+                      <span className="text-[10px] text-emerald-400 bg-emerald-500/15 px-1.5 py-0.2 rounded-none border border-emerald-500/30 font-medium">
                         Offline 100%
                       </span>
                     </div>
@@ -4356,7 +4373,7 @@ export default function App() {
                 </div>
 
                 <div className="flex items-center gap-2 flex-wrap">
-                  <div className="flex items-center gap-1.5 bg-slate-900 px-2 py-1 rounded-lg border border-slate-800">
+                  <div className="flex items-center gap-1.5 bg-slate-900 px-2 py-1 rounded-none border border-slate-800">
                     <Bookmark className="w-3.5 h-3.5 text-amber-400 shrink-0" />
                     <select
                       value={selectedPresetId}
@@ -4378,7 +4395,7 @@ export default function App() {
                     <button
                       type="button"
                       onClick={() => setShowPresetManagerModal(true)}
-                      className="p-1 hover:bg-slate-800 text-slate-400 hover:text-amber-400 rounded transition-colors cursor-pointer"
+                      className="p-1 hover:bg-slate-800 text-slate-400 hover:text-amber-400 rounded-none transition-colors cursor-pointer"
                       title="Quản lý cấu hình (Đổi tên, Xóa, Xuất/Nhập JSON)"
                     >
                       <Edit3 className="w-3 h-3" />
@@ -4388,7 +4405,7 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => setShowVoiceModal(true)}
-                    className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-amber-400 font-semibold rounded-lg border border-slate-700 hover:border-amber-500/40 transition-colors flex items-center gap-1.5 self-start sm:self-auto cursor-pointer"
+                    className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-amber-400 font-semibold rounded-none border border-slate-700 hover:border-amber-500/40 transition-colors flex items-center gap-1.5 self-start sm:self-auto cursor-pointer"
                   >
                     <UserCheck className="w-3.5 h-3.5" />
                     <span>Đổi giọng đọc ({voices.length})</span>
@@ -4401,7 +4418,7 @@ export default function App() {
                 onChange={(e) => setSingleText(e.target.value)}
                 rows={5}
                 placeholder="Nhập văn bản tiếng Việt..."
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl p-4 text-sm text-slate-100 placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-amber-500/50 leading-relaxed"
+                className="w-full bg-slate-950 border border-slate-800 rounded-none p-4 text-sm text-slate-100 placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-amber-500 leading-relaxed font-sans"
               />
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
@@ -4419,7 +4436,7 @@ export default function App() {
                     step="0.05"
                     value={singleSpeed}
                     onChange={(e) => setSingleSpeed(parseFloat(e.target.value))}
-                    className="w-full accent-amber-500 h-1.5 bg-slate-800 rounded cursor-pointer"
+                    className="w-full accent-amber-500 h-1.5 bg-slate-800 rounded-none cursor-pointer"
                   />
                 </div>
 
@@ -4439,7 +4456,7 @@ export default function App() {
                     onChange={(e) =>
                       setSingleSilence(parseFloat(e.target.value))
                     }
-                    className="w-full accent-amber-500 h-1.5 bg-slate-800 rounded cursor-pointer"
+                    className="w-full accent-amber-500 h-1.5 bg-slate-800 rounded-none cursor-pointer"
                   />
                 </div>
               </div>
@@ -4448,7 +4465,7 @@ export default function App() {
                 type="button"
                 disabled={singleIsLoading || !singleText.trim()}
                 onClick={handleSingleSynthesize}
-                className="w-full py-3 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-xl text-xs flex items-center justify-center gap-2 shadow-lg shadow-amber-500/20 disabled:opacity-50 cursor-pointer"
+                className="w-full py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-none text-xs flex items-center justify-center gap-2 disabled:opacity-50 cursor-pointer transition-colors"
               >
                 {singleIsLoading ? (
                   <>
@@ -4467,13 +4484,13 @@ export default function App() {
               </button>
 
               {singleAudioUrl && (
-                <div className="p-4 bg-slate-950 rounded-xl border border-slate-800 flex flex-wrap items-center justify-between gap-3">
+                <div className="p-3 bg-slate-950 rounded-none border border-slate-800 flex flex-wrap items-center justify-between gap-3">
                   <audio controls src={singleAudioUrl} className="h-8 w-64" />
                   <div className="flex items-center gap-2">
                     <button
                       type="button"
                       onClick={handleCopySingleAudio}
-                      className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white font-semibold rounded-lg text-xs flex items-center gap-1.5 border border-slate-700 cursor-pointer transition-colors"
+                      className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white font-semibold rounded-none text-xs flex items-center gap-1.5 border border-slate-700 cursor-pointer transition-colors"
                       title="Sao chép file audio vào clipboard"
                     >
                       {copiedSingleAudio ? (
@@ -4491,7 +4508,7 @@ export default function App() {
                     <a
                       href={singleAudioUrl}
                       download={`hoaimy-${Date.now()}.${singleFormat}`}
-                      className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold rounded-lg text-xs flex items-center gap-1"
+                      className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold rounded-none text-xs flex items-center gap-1"
                     >
                       <Download className="w-3.5 h-3.5" />
                       <span>Tải {singleFormat.toUpperCase()}</span>
@@ -4501,17 +4518,17 @@ export default function App() {
               )}
             </div>
 
-            <div className="lg:col-span-4 bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-3 text-xs text-slate-400">
+            <div className="w-full lg:w-96 shrink-0 h-full overflow-y-auto p-4 bg-slate-900/60 border-l border-slate-800 space-y-3 text-xs text-slate-400 rounded-none scrollbar-thin">
               <h3 className="text-sm font-semibold text-white flex items-center justify-between">
                 <span>Về Piper TTS Studio:</span>
-                <span className="text-[11px] font-mono text-amber-400 font-semibold px-2 py-0.5 rounded bg-amber-500/10 border border-amber-500/20">
+                <span className="text-[11px] font-mono text-amber-400 font-semibold px-2 py-0.5 rounded-none bg-amber-500/10 border border-amber-500/20">
                   {selectedVoice.name}
                 </span>
               </h3>
               <p className="leading-relaxed">
                 Piper TTS Studio chạy <span className="text-amber-300 font-semibold">100% Offline</span> với mô hình ONNX nội suy âm thanh chất lượng cao. Đang kích hoạt giọng <strong className="text-white">{selectedVoice.name}</strong> ({selectedVoice.gender === "female" ? "Nữ" : "Nam"}, {selectedVoice.tag || "Tiếng Việt"}).
               </p>
-              <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 text-[11px] space-y-1">
+              <div className="p-3 bg-slate-950 rounded-none border border-slate-800 text-[11px] space-y-1">
                 <div className="text-slate-300 font-medium">
                   Khả năng tự động đồng bộ:
                 </div>
@@ -4526,41 +4543,63 @@ export default function App() {
         )}
 
         {/* ========================================================= */}
-        {/* TAB 3: STORYTELLING TTS (KỂ TRUYỆN ĐA NHÂN VẬT)           */}
+        {/* OTHER TABS (DOCKED WORKSPACE FULL HEIGHT)                 */}
         {/* ========================================================= */}
         {activeTab === "story" && (
-          <StorytellingTab
-            voices={voices}
-            onOpenCleanupModal={() => setShowAudioCleanupModal(true)}
-          />
+          <div className="flex-1 min-h-0 w-full overflow-y-auto">
+            <StorytellingTab
+              voices={voices}
+              onOpenCleanupModal={() => setShowAudioCleanupModal(true)}
+            />
+          </div>
         )}
 
-        {/* ========================================================= */}
-        {/* TAB 4: BGM GENERATOR (TẠO NHẠC NỀN & LOOP AUDIO OFFLINE) */}
-        {/* ========================================================= */}
         {activeTab === "bgm" && (
-          <BgmGeneratorTab voices={voices} onOpenSetup={() => setShowSetupModal(true)} />
+          <div className="flex-1 min-h-0 w-full overflow-y-auto">
+            <BgmGeneratorTab voices={voices} onOpenSetup={() => setShowSetupModal(true)} />
+          </div>
         )}
 
-        {/* ========================================================= */}
-        {/* TAB 5: VOICE CLONE PAGE (HUẤN LUYỆN & CLONE GIỌNG COLAB)  */}
-        {/* ========================================================= */}
         {activeTab === "voice-clone" && (
-          <VoiceClonePage onVoiceInstalled={() => loadVoices()} onOpenSetup={() => setShowSetupModal(true)} />
+          <div className="flex-1 min-h-0 w-full overflow-hidden flex flex-col">
+            <VoiceClonePage onVoiceInstalled={() => loadVoices()} onOpenSetup={() => setShowSetupModal(true)} />
+          </div>
         )}
-        {activeTab === "subtitle-ocr" && <SubtitleOcrPage onOpenSetup={() => setShowSetupModal(true)} />}
-        {activeTab === "subtitle-editor" && <SubtitleEditorPage onOpenSetup={() => setShowSetupModal(true)} />}
-        {activeTab === "srt-from-text" && <SrtFromTextPage />}
-        {activeTab === "file-transfer" && <FileTransferPage />}
-        {activeTab === "join-split-video" && <JoinSplitVideoPage />}
+        {activeTab === "subtitle-ocr" && (
+          <div className="flex-1 min-h-0 w-full overflow-hidden flex flex-col">
+            <SubtitleOcrPage onOpenSetup={() => setShowSetupModal(true)} />
+          </div>
+        )}
+        {activeTab === "subtitle-editor" && (
+          <div className="flex-1 min-h-0 w-full overflow-hidden flex flex-col">
+            <SubtitleEditorPage onOpenSetup={() => setShowSetupModal(true)} />
+          </div>
+        )}
+        {activeTab === "srt-from-text" && (
+          <div className="flex-1 min-h-0 w-full overflow-y-auto">
+            <SrtFromTextPage />
+          </div>
+        )}
+        {activeTab === "file-transfer" && (
+          <div className="flex-1 min-h-0 w-full overflow-y-auto">
+            <FileTransferPage />
+          </div>
+        )}
+        {activeTab === "join-split-video" && (
+          <div className="flex-1 min-h-0 w-full overflow-hidden flex flex-col">
+            <JoinSplitVideoPage />
+          </div>
+        )}
         {activeTab === "voice-effects" && (
-          <React.Suspense
-            fallback={<div className="p-8 text-center text-sm text-slate-400">Đang tải trang Voice Effects...</div>}
-          >
-            <VoiceEffectsPage />
-          </React.Suspense>
+          <div className="flex-1 min-h-0 w-full overflow-hidden flex flex-col">
+            <React.Suspense
+              fallback={<div className="p-8 text-center text-sm text-slate-400">Đang tải trang Voice Effects...</div>}
+            >
+              <VoiceEffectsPage />
+            </React.Suspense>
+          </div>
         )}
-        <div className={activeTab === "video-dubbing" ? "" : "hidden"}>
+        <div className={activeTab === "video-dubbing" ? "flex-1 min-h-0 w-full overflow-hidden flex flex-col" : "hidden"}>
           <VideoDubbingTab />
         </div>
       </main>
@@ -5737,24 +5776,8 @@ const { audio, sampleRate } = await tts.synthesize("Xin chào! Đây là Piper T
         </div>
       )}
 
-      {/* Footer */}
-      <footer className={`${activeTab === "voice-effects" ? "hidden" : "border-t border-slate-900 py-6 mt-12 mb-20 bg-slate-950/80 text-xs text-slate-400"}`}>
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 flex flex-col sm:flex-row items-center justify-between gap-4">
-          <div className="flex items-center gap-2">
-            <span>Piper TTS Studio</span>
-            <span>·</span>
-            <span>Đa giọng đọc tiếng Việt</span>
-            <span>·</span>
-            <span>Đồng bộ phụ đề Timeline SRT</span>
-            <span>·</span>
-            <span>Xuất MP3 & WAV hoàn chỉnh</span>
-          </div>
-          <div>
-            Hỗ trợ tiếng Việt tự nhiên với chuẩn ngữ âm espeak-ng & FFmpeg
-            atempo
-          </div>
-        </div>
-      </footer>
+      {/* Footer (hidden for desktop app layout) */}
+      <footer className="hidden" />
 
       {/* ========================================================= */}
       {/* FULL-SCREEN DRAG & DROP OVERLAY (Requirement 1)            */}
@@ -5782,7 +5805,7 @@ const { audio, sampleRate } = await tts.synthesize("Xin chào! Đây là Piper T
           }}
           className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-md border-4 border-dashed border-amber-400 flex flex-col items-center justify-center gap-4 animate-in fade-in duration-150 p-6 select-none"
         >
-          <div className="w-20 h-20 rounded-3xl bg-amber-500 text-slate-950 flex items-center justify-center shadow-2xl shadow-amber-500/50 scale-110 animate-bounce">
+          <div className="w-20 h-20 rounded-none bg-amber-500 text-slate-950 flex items-center justify-center shadow-2xl shadow-amber-500/50 scale-110 animate-bounce">
             <UploadCloud className="w-10 h-10" />
           </div>
           <div className="text-center space-y-1.5">
@@ -5808,10 +5831,9 @@ const { audio, sampleRate } = await tts.synthesize("Xin chào! Đây là Piper T
         <div
           role="region"
           aria-label="Thanh điều khiển tiến độ và xử lý phụ đề"
-          className="fixed bottom-0 left-0 right-0 z-40 bg-slate-950/95 backdrop-blur-xl border-t border-slate-800 shadow-[0_-12px_40px_rgba(0,0,0,0.85)]"
+          className="h-14 sm:h-16 shrink-0 border-t border-slate-800 bg-slate-900/95 px-3 flex items-center justify-between w-full z-30 select-none rounded-none"
         >
-          <div className="max-w-[1680px] mx-auto px-3 sm:px-6 py-2.5 sm:py-3.5">
-            <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 sm:gap-4">
+          <div className="w-full flex flex-col md:flex-row items-stretch md:items-center justify-between gap-2 sm:gap-4">
               {/* Vùng Trái: Thông tin Giọng đọc & Phụ đề & Trạng thái */}
               <div className="flex items-center justify-between md:justify-start gap-3 shrink-0">
                 <div className="flex items-center gap-2.5">
@@ -6038,7 +6060,6 @@ const { audio, sampleRate } = await tts.synthesize("Xin chào! Đây là Piper T
               </div>
             </div>
           </div>
-        </div>
       )}
 
       {/* Audio Cleanup Modal (Requirement: Dọn Dẹp Audio) */}
@@ -6059,6 +6080,81 @@ const { audio, sampleRate } = await tts.synthesize("Xin chào! Đây là Piper T
           }
         }}
       />
+
+      {/* Theme Selector Modal */}
+      {showThemeModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-none w-full max-w-md shadow-2xl overflow-hidden flex flex-col">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800 bg-slate-950/80">
+              <div className="flex items-center gap-2">
+                <Sliders className="w-4 h-4 text-amber-400" />
+                <h3 className="text-sm font-bold text-white uppercase tracking-wider">
+                  Cài Đặt Giao Diện (Theme)
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowThemeModal(false)}
+                className="text-slate-400 hover:text-white p-1 rounded-none cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-4 space-y-2.5">
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Chọn phong cách giao diện Desktop phù hợp với không gian làm việc của bạn:
+              </p>
+              <div className="space-y-1.5 pt-1">
+                {themes.map((t) => (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => {
+                      setTheme(t.id);
+                      setShowThemeModal(false);
+                    }}
+                    className={`w-full p-3 rounded-none border text-left flex items-start justify-between gap-3 transition-colors cursor-pointer ${
+                      theme === t.id
+                        ? "bg-amber-500/10 border-amber-500/50 text-white"
+                        : "bg-slate-950/60 border-slate-800 text-slate-300 hover:bg-slate-800/60 hover:text-white"
+                    }`}
+                  >
+                    <div className="flex items-start gap-3">
+                      <div
+                        className="w-5 h-5 rounded-none border border-slate-700 shrink-0 mt-0.5"
+                        style={{ backgroundColor: t.colorPreview }}
+                      />
+                      <div>
+                        <div className="text-xs font-bold text-white flex items-center gap-1.5">
+                          <span>{t.name}</span>
+                          {theme === t.id && (
+                            <span className="text-[10px] text-amber-400 font-mono bg-amber-500/20 px-1 rounded-none">
+                              Đang dùng
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-[11px] text-slate-400 mt-0.5 leading-snug">
+                          {t.description}
+                        </p>
+                      </div>
+                    </div>
+                    {theme === t.id && <Check className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="px-4 py-2.5 border-t border-slate-800 bg-slate-950/50 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setShowThemeModal(false)}
+                className="px-4 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-none border border-slate-700 cursor-pointer"
+              >
+                Đóng
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
