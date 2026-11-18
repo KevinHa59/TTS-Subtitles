@@ -57,12 +57,10 @@ export const LOCAL_MODEL_FILES: Record<string, string | string[]> = {
   ],
   "local:ngo_khong_voice_1792842474657": "ngo_khong_voice_1792842474657.onnx",
   "local:uslt_ngo_khong_1792855293763": "uslt_ngo_khong_1792855293763.onnx",
-  "local:news-flash-tr47_1793850370993": "news-flash-tr47_1793850370993.onnx",
   "local:news-flash-tr52_1794223720081": "news-flash-tr52_1794223720081.onnx",
   "local:news-flash-tr56_1794327616307": "news-flash-tr56_1794327616307.onnx",
   "local:news-flash-tr57_1794394913177": "news-flash-tr57_1794394913177.onnx",
-  "local:news-flash-tr58_1794395110942": "news-flash-tr58_1794395110942.onnx",
-  "local:news-flash-tr60_1794686492150": "news-flash-tr60_1794686492150.onnx",
+  "local:kevinha-10_1794954036123": "kevinha-10_1794954036123.onnx",
   [CSA_VOICE_MODEL_ID]: "vi_VN-csa-voice-piper-v3-medium.onnx",
 };
 
@@ -217,17 +215,6 @@ export const AVAILABLE_MODELS: VoiceDefinition[] = [
     recommended: false,
   },
   {
-    id: "local:news-flash-tr47_1793850370993",
-    modelId: "local:news-flash-tr47_1793850370993",
-    name: "News Flash v47",
-    tag: "Nam · Miền Nam · Giọng tùy chỉnh (Offline)",
-    gender: "male",
-    description: "Giọng nam News Flash được huấn luyện riêng.",
-    sampleText:
-      "Ta là tông chủ Thanh Vân Tiên Tông, Phong Thanh Dương. Cẩn tuân tông chủ chi lệnh.",
-    recommended: false,
-  },
-  {
     id: "local:news-flash-tr52_1794223720081",
     modelId: "local:news-flash-tr52_1794223720081",
     name: "News Flash v52",
@@ -261,23 +248,12 @@ export const AVAILABLE_MODELS: VoiceDefinition[] = [
     recommended: false,
   },
   {
-    id: "local:news-flash-tr58_1794395110942",
-    modelId: "local:news-flash-tr58_1794395110942",
-    name: "News Flash v58",
+    id: "local:kevinha-10_1794954036123",
+    modelId: "local:kevinha-10_1794954036123",
+    name: "Kevin Hà",
     tag: "Nam · Miền Nam · Giọng tùy chỉnh (Offline)",
     gender: "male",
-    description: "Giọng nam News Flash được huấn luyện riêng.",
-    sampleText:
-      "Ta là tông chủ Thanh Vân Tiên Tông, Phong Thanh Dương. Cẩn tuân tông chủ chi lệnh.",
-    recommended: false,
-  },
-  {
-    id: "local:news-flash-tr60_1794686492150",
-    modelId: "local:news-flash-tr60_1794686492150",
-    name: "News Flash v60",
-    tag: "Nam · Miền Nam · Giọng tùy chỉnh (Offline)",
-    gender: "male",
-    description: "Giọng nam News Flash được huấn luyện riêng.",
+    description: "Giọng nam tùy chỉnh của Kevin Hà.",
     sampleText:
       "Ta là tông chủ Thanh Vân Tiên Tông, Phong Thanh Dương. Cẩn tuân tông chủ chi lệnh.",
     recommended: false,

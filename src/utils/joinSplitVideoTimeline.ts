@@ -71,6 +71,53 @@ export function getJoinSplitTimelineSegments(
   return segments;
 }
 
+export function getJoinSplitTimelinePartitionSegments(
+  splitTimes: readonly number[],
+  clips: readonly JoinSplitTimelineClip[],
+): JoinSplitVideoSegment[][] {
+  const timelineEnd = clips.at(-1)?.end || 0;
+  if (!Number.isFinite(timelineEnd) || timelineEnd <= 0) return [];
+
+  const boundaries = [
+    0,
+    ...new Set(
+      splitTimes
+        .filter((time) => Number.isFinite(time) && time > 0 && time < timelineEnd)
+        .sort((left, right) => left - right),
+    ),
+    timelineEnd,
+  ];
+
+  return boundaries.slice(1).map((endTime, index) => {
+    const startTime = boundaries[index];
+    const segments: JoinSplitVideoSegment[] = [];
+
+    for (const clip of clips) {
+      if (clip.end <= startTime || clip.start >= endTime || clip.frameRate <= 0) continue;
+
+      const intersectionStart = Math.max(startTime, clip.start);
+      const intersectionEnd = Math.min(endTime, clip.end);
+      const firstFrameIndex = Math.max(
+        0,
+        Math.ceil((intersectionStart - clip.start) * clip.frameRate - 1e-7),
+      );
+      const endFrameExclusive = Math.min(
+        clip.frameCount,
+        Math.ceil((intersectionEnd - clip.start) * clip.frameRate - 1e-7),
+      );
+      if (endFrameExclusive > firstFrameIndex) {
+        segments.push({
+          sourceId: clip.sourceId,
+          startFrame: firstFrameIndex + 1,
+          endFrame: endFrameExclusive,
+        });
+      }
+    }
+
+    return segments;
+  });
+}
+
 export function getJoinSplitRangeSegments(range: {
   sourceId: string;
   startFrame: number;

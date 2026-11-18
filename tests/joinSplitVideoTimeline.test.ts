@@ -3,6 +3,7 @@ import { test } from "node:test";
 import {
   getJoinSplitRangeSegments,
   getJoinSplitRangeTimelineBounds,
+  getJoinSplitTimelinePartitionSegments,
   getJoinSplitTimelineSegments,
   snapCutTimeToKeyframe,
   snapJoinSplitTimelineTime,
@@ -69,6 +70,44 @@ test("maps a timeline range across adjacent videos to source frame segments", ()
     [
       { sourceId: "first", startFrame: 25, endFrame: 48 },
       { sourceId: "second", startFrame: 1, endFrame: 16 },
+    ],
+  );
+});
+
+test("partitions the full timeline at marked times without overlapping or skipping frames", () => {
+  const partitioned = getJoinSplitTimelinePartitionSegments([4, 8], [
+    { sourceId: "first", start: 0, end: 6, frameRate: 2, frameCount: 12 },
+    { sourceId: "second", start: 6, end: 10, frameRate: 1, frameCount: 4 },
+  ]);
+  assert.deepEqual(partitioned, [
+    [{ sourceId: "first", startFrame: 1, endFrame: 8 }],
+    [
+      { sourceId: "first", startFrame: 9, endFrame: 12 },
+      { sourceId: "second", startFrame: 1, endFrame: 2 },
+    ],
+    [{ sourceId: "second", startFrame: 3, endFrame: 4 }],
+  ]);
+});
+
+test("creates three queues for markers at minutes four and eight of a ten-minute video", () => {
+  const partitioned = getJoinSplitTimelinePartitionSegments([240, 480], [
+    { sourceId: "video", start: 0, end: 600, frameRate: 24, frameCount: 14400 },
+  ]);
+  assert.deepEqual(partitioned, [
+    [{ sourceId: "video", startFrame: 1, endFrame: 5760 }],
+    [{ sourceId: "video", startFrame: 5761, endFrame: 11520 }],
+    [{ sourceId: "video", startFrame: 11521, endFrame: 14400 }],
+  ]);
+});
+
+test("ignores duplicate and out-of-timeline split markers", () => {
+  assert.deepEqual(
+    getJoinSplitTimelinePartitionSegments([2, 2, 0, 4, 8, Number.NaN], [
+      { sourceId: "first", start: 0, end: 4, frameRate: 1, frameCount: 4 },
+    ]),
+    [
+      [{ sourceId: "first", startFrame: 1, endFrame: 2 }],
+      [{ sourceId: "first", startFrame: 3, endFrame: 4 }],
     ],
   );
 });

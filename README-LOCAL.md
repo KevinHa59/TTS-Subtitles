@@ -26,7 +26,7 @@ Các model lớn không cần được tải cùng lúc. Whisper và OCR có th�
 | **Nhạc nền AI — AudioLDM Soundscape** | Python, PyTorch, Diffusers và `requirements-bgm.txt`; toàn bộ pipeline AudioLDM S-Full-v2 (~1.57 GiB). | Tải theo yêu cầu vào `models/music/audioldm-soundscape`. |
 | **Tách giọng/nhạc trong Video Dubbing — Demucs** | Python, PyTorch, Demucs 4.1.0 và model `htdemucs` trong cache Hugging Face/Demucs. | Cài dependencies trong môi trường Python riêng; chạy lần đầu cần có model cache. Có thể chạy CPU hoặc CUDA. |
 | **Tách giọng/nhạc — MDX DirectML (tùy chọn)** | `audio-separator==0.48.0`, `onnxruntime-directml==1.23.0`, Demucs 4.1.0 làm fallback; model `UVR-MDX-NET-Inst_HQ_3.onnx`. | Cài `requirements-video-dubbing-mdx.txt`, tải model riêng và cấu hình `VIDEO_DUBBING_MDX_MODEL_PATH`. Xem mục Video Dubbing bên dưới. |
-| **Huấn luyện Piper Voice Clone** | Notebook Colab tải/cài training engine và base checkpoint riêng; cần dataset ZIP do ứng dụng tạo. | Không cần các training weights trong gói core. Đưa file `.onnx` và `.onnx.json` đã export về `models/` để dùng trong ứng dụng. |
+| **Huấn luyện Piper Voice Clone** | Google Colab với GPU runtime; cần dataset giọng nói dạng ZIP. | Mở notebook [Piper_Voice_Clone_Colab.ipynb](./Piper_Voice_Clone_Colab.ipynb), tải ZIP được xuất từ trang Clone Giọng, huấn luyện và tải model `.onnx` cùng `.onnx.json` về `models/`. |
 
 **Model không được gói kèm.** Giấy phép và quyền sử dụng model/weights do nhà phát hành model quy định; hãy kiểm tra điều khoản trước khi sử dụng hoặc phân phối, nhất là cho mục đích thương mại.
 

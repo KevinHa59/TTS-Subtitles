@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { createPortal } from "react-dom";
 import {
   Download,
+  Flag,
   Film,
   FolderOpen,
   LoaderCircle,
@@ -25,6 +26,7 @@ import type {
 import {
   getJoinSplitRangeSegments,
   getJoinSplitRangeTimelineBounds,
+  getJoinSplitTimelinePartitionSegments,
   getJoinSplitTimelineSegments,
   snapCutTimeToKeyframe,
   snapJoinSplitTimelineTime,
@@ -71,6 +73,7 @@ interface SavedWorkspace {
   cutFromTime: number | null;
   cutToTime: number | null;
   queue: JoinSplitVideoRange[];
+  splitMarkers: number[];
   selectedQueueId: string | null;
   queueExportState: Record<string, {
     status: "pending" | "exporting" | "done" | "error" | "cancelled";
@@ -132,6 +135,8 @@ export default function JoinSplitVideoPage() {
   const [playhead, setPlayhead] = useState(0);
   const [cutFromTime, setCutFromTime] = useState<number | null>(null);
   const [cutToTime, setCutToTime] = useState<number | null>(null);
+  const [splitMarkers, setSplitMarkers] = useState<number[]>([]);
+  const [selectedSplitMarker, setSelectedSplitMarker] = useState<number | null>(null);
   const [queue, setQueue] = useState<JoinSplitVideoRange[]>([]);
   const [selectedQueueId, setSelectedQueueId] = useState<string | null>(null);
   const [queueExportState, setQueueExportState] = useState<Record<string, {
@@ -268,6 +273,11 @@ export default function JoinSplitVideoPage() {
         setCutToTime(typeof saved.cutToTime === "number" && Number.isFinite(saved.cutToTime)
           ? saved.cutToTime
           : null);
+        setSplitMarkers(
+          Array.isArray(saved.splitMarkers)
+            ? [...new Set(saved.splitMarkers.filter((time) => Number.isFinite(time)))].sort((a, b) => a - b)
+            : [],
+        );
         setQueue(savedQueue);
         setSelectedQueueId(
           typeof saved.selectedQueueId === "string" && savedQueue.some((range) => range.id === saved.selectedQueueId)
@@ -319,6 +329,7 @@ export default function JoinSplitVideoPage() {
       playhead,
       cutFromTime,
       cutToTime,
+      splitMarkers,
       queue,
       selectedQueueId,
       queueExportState,
@@ -355,6 +366,7 @@ export default function JoinSplitVideoPage() {
     referenceSourceId,
     selectedQueueId,
     selectedSourceIds,
+    splitMarkers,
     snapDistancePx,
     timelineJoinOutput,
     timelineSourceIds,
@@ -777,6 +789,77 @@ export default function JoinSplitVideoPage() {
     seekGlobal(timelineDuration);
   };
 
+  const addSplitMarker = () => {
+    if (!timelineClips.length) return;
+    const marker = snapPlayheadTime(playhead);
+    if (marker <= 0 || marker >= timelineDuration) {
+      setNotice("Mốc split phải nằm bên trong timeline, không ở đầu/cuối.");
+      return;
+    }
+    if (splitMarkers.some((time) => Math.abs(time - marker) < 1e-6)) {
+      setSelectedSplitMarker(marker);
+      setSelectedQueueId(null);
+      setNotice(`Đã có mốc split tại ${formatTime(marker)}.`);
+      return;
+    }
+    setSplitMarkers((current) => [...current, marker].sort((a, b) => a - b));
+    setSelectedSplitMarker(marker);
+    setSelectedQueueId(null);
+    setError(null);
+    setNotice(`Đã đánh dấu split tại ${formatTime(marker)}.`);
+  };
+
+  const removeLastSplitMarker = () => {
+    if (splitMarkers.at(-1) === selectedSplitMarker) setSelectedSplitMarker(null);
+    setSplitMarkers((current) => current.slice(0, -1));
+  };
+
+  const splitTimelineToQueues = () => {
+    const validMarkers = splitMarkers.filter((time) => time > 0 && time < timelineDuration);
+    if (!validMarkers.length) {
+      setError("Hãy đánh dấu ít nhất một mốc split trên timeline.");
+      return;
+    }
+    if (
+      queue.length > 0 &&
+      !window.confirm("Tạo queue từ các mốc split và thay thế toàn bộ queue hiện tại?")
+    ) {
+      return;
+    }
+    const partitions = getJoinSplitTimelinePartitionSegments(
+      validMarkers,
+      timelineClips.map((clip) => ({
+        sourceId: clip.sourceId,
+        start: clip.start,
+        end: clip.end,
+        frameRate: clip.source.frameRate,
+        frameCount: clip.source.frameCount,
+      })),
+    );
+    const nextQueue = partitions.flatMap((segments) => {
+      const first = segments[0];
+      const last = segments.at(-1);
+      if (!first || !last) return [];
+      return [{
+        id: crypto.randomUUID(),
+        sourceId: first.sourceId,
+        startFrame: first.startFrame,
+        endFrame: last.endFrame,
+        ...(segments.length > 1 ? { segments } : {}),
+      }];
+    });
+    if (nextQueue.length !== partitions.length) {
+      setError("Không thể tạo queue cho một hoặc nhiều đoạn. Kiểm tra timeline và mốc split.");
+      return;
+    }
+    setQueue(nextQueue);
+    setQueueExportState({});
+    setSelectedQueueId(nextQueue[0]?.id || null);
+    setQueueJoinOutput(null);
+    setError(null);
+    setNotice(`Đã tạo ${nextQueue.length} queue theo ${validMarkers.length} mốc split.`);
+  };
+
   const addRangeToQueue = (segments: JoinSplitVideoRange["segments"]) => {
     if (!segments?.length) {
       setError("Khoảng frame không hợp lệ. Hãy kiểm tra điểm đầu và điểm cuối.");
@@ -1084,6 +1167,8 @@ export default function JoinSplitVideoPage() {
       setPlayhead(0);
       setCutFromTime(null);
       setCutToTime(null);
+      setSplitMarkers([]);
+      setSelectedSplitMarker(null);
       setQueue([]);
       setSelectedQueueId(null);
       setQueueExportState({});
@@ -1214,12 +1299,33 @@ export default function JoinSplitVideoPage() {
   }, []);
 
   useEffect(() => {
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element) || !target.closest("[data-split-marker]")) {
+        setSelectedSplitMarker(null);
+      }
+    };
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => document.removeEventListener("pointerdown", handlePointerDown);
+  }, []);
+
+  useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       const target = event.target;
+      const isSplitMarkerButton = target instanceof HTMLElement &&
+        target.closest("[data-split-marker]") !== null;
       if (
         target instanceof HTMLElement &&
-        (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT", "BUTTON"].includes(target.tagName))
+        (target.isContentEditable ||
+          (["INPUT", "TEXTAREA", "SELECT", "BUTTON"].includes(target.tagName) && !isSplitMarkerButton))
       ) return;
+      if ((event.key === "Delete" || event.key === "Backspace") && selectedSplitMarker !== null) {
+        event.preventDefault();
+        setSplitMarkers((current) => current.filter((time) => Math.abs(time - selectedSplitMarker) >= 1e-6));
+        setSelectedSplitMarker(null);
+        setNotice(`Đã xóa mốc split tại ${formatTime(selectedSplitMarker)}.`);
+        return;
+      }
       if (event.key === "Delete" && selectedQueueId) {
         event.preventDefault();
         deleteQueueRange(selectedQueueId);
@@ -1261,7 +1367,7 @@ export default function JoinSplitVideoPage() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [activeSourceId, currentFrame, deleteQueueRange, fitTimeline, minimumZoom, removeTimelineSource, selectedQueueId, selectedSource, seekFrame, timelineClips.length, timelineSourceIds]);
+  }, [activeSourceId, currentFrame, deleteQueueRange, fitTimeline, minimumZoom, removeTimelineSource, selectedQueueId, selectedSource, selectedSplitMarker, seekFrame, timelineClips.length, timelineSourceIds]);
 
   useEffect(() => {
     const onPointerMove = (event: PointerEvent) => {
@@ -1827,6 +1933,42 @@ export default function JoinSplitVideoPage() {
               <button type="button" onClick={seekTimelineEnd} disabled={!timelineClips.length} title="Đưa playhead tới frame cuối của toàn timeline" className="rounded border border-slate-700 px-2 py-1 text-[11px] hover:border-slate-500 disabled:opacity-40">End Frame</button>
               <button type="button" onClick={setCutFrom} disabled={!timelineClips.length} title="Đặt frame hiện tại trên timeline làm đầu range" className="rounded border border-amber-400/40 px-2 py-1 text-[11px] text-amber-200 hover:bg-amber-400/10 disabled:opacity-40">Cut From Frame</button>
               <button type="button" onClick={setCutTo} disabled={!timelineClips.length} title="Đặt frame hiện tại trên timeline làm cuối range" className="rounded border border-amber-400/40 px-2 py-1 text-[11px] text-amber-200 hover:bg-amber-400/10 disabled:opacity-40">Cut To Frame</button>
+              <button
+                type="button"
+                onClick={addSplitMarker}
+                disabled={!timelineClips.length}
+                title={`Đánh dấu split tại playhead ${formatTime(playhead)}`}
+                className="rounded border border-cyan-400/50 px-2 py-1 text-[11px] text-cyan-200 hover:bg-cyan-400/10 disabled:opacity-40"
+              >
+                Mark to split
+              </button>
+              <button
+                type="button"
+                onClick={removeLastSplitMarker}
+                disabled={!splitMarkers.length}
+                title="Xóa mốc split được thêm gần đây nhất"
+                className="rounded border border-cyan-400/30 px-2 py-1 text-[11px] text-cyan-200 hover:bg-cyan-400/10 disabled:opacity-40"
+              >
+                Undo mark
+              </button>
+              <button
+                type="button"
+                onClick={() => setSplitMarkers([])}
+                disabled={!splitMarkers.length}
+                title="Xóa toàn bộ mốc split"
+                className="rounded border border-slate-700 px-2 py-1 text-[11px] text-slate-300 hover:border-slate-500 disabled:opacity-40"
+              >
+                Clear marks
+              </button>
+              <button
+                type="button"
+                onClick={splitTimelineToQueues}
+                disabled={!splitMarkers.some((time) => time > 0 && time < timelineDuration)}
+                title="Chia toàn bộ timeline từ đầu đến cuối thành các queue theo mốc đã đánh dấu"
+                className="rounded bg-cyan-400 px-2.5 py-1 text-[11px] font-bold text-slate-950 hover:bg-cyan-300 disabled:opacity-40"
+              >
+                Split to queues
+              </button>
               <label
                 className="inline-flex items-center gap-1 text-[10px] text-slate-300"
                 title="Cut From lùi về keyframe trước đó; Cut To kết thúc ngay trước keyframe tiếp theo để tăng khả năng stream-copy."
@@ -1996,6 +2138,41 @@ export default function JoinSplitVideoPage() {
                         </div>
                       );
                     })}
+                    {splitMarkers
+                      .filter((marker) => marker > 0 && marker < timelineDuration)
+                      .map((marker, index) => (
+                        <div
+                          key={`split-marker-${marker}`}
+                          className="pointer-events-none absolute top-0 z-30 h-24"
+                          style={{ left: `${marker * zoom}px` }}
+                        >
+                          <div
+                            className={`absolute left-0 top-6 h-[4.5rem] border-l-2 ${
+                              selectedSplitMarker === marker ? "border-cyan-100" : "border-cyan-300"
+                            }`}
+                          />
+                          <button
+                            type="button"
+                            data-split-marker
+                            aria-label={`Chọn mốc split S${index + 1} tại ${formatTime(marker)}`}
+                            aria-pressed={selectedSplitMarker === marker}
+                            title={`Mốc split S${index + 1} · ${formatTime(marker)} · chọn rồi nhấn Delete để xóa`}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setSelectedSplitMarker(marker);
+                              setSelectedQueueId(null);
+                              seekGlobal(marker);
+                            }}
+                            className={`pointer-events-auto absolute -left-2 -top-1 flex h-5 w-5 items-center justify-center rounded-full border shadow ${
+                              selectedSplitMarker === marker
+                                ? "border-cyan-100 bg-cyan-300 text-slate-950"
+                                : "border-cyan-300 bg-slate-950 text-cyan-200 hover:bg-cyan-950"
+                            }`}
+                          >
+                            <Flag className="h-3 w-3" />
+                          </button>
+                        </div>
+                      ))}
                     <div className="absolute left-0 top-28 h-8 w-full border-y border-slate-800 bg-slate-900/40">
                       <span className="absolute left-2 top-1 z-10 rounded bg-slate-950/80 px-1 text-[9px] text-slate-500">
                         QUEUE
