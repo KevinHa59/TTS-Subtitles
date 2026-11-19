@@ -88,6 +88,7 @@ import {
 import { getAvailableVideoDubbingVoices } from "../utils/videoDubbingVoices";
 import SubtitleOverlayRenderer from "./SubtitleOverlayRenderer";
 import VideoDubbingAudioTimeline from "./VideoDubbingAudioTimeline";
+import Tabs from "./customs/Tabs";
 
 interface SelectedVideo {
   fileName: string;
@@ -390,7 +391,7 @@ function TextStyleControls({
   }, [fontPickerOpen]);
 
   return (
-    <div className="space-y-3 rounded-lg border border-slate-700/80 bg-[#262626] p-3 text-xs text-slate-200">
+    <div className="space-y-3 rounded-lg text-xs text-slate-200">
       <div className="grid grid-cols-[82px_minmax(0,1fr)] items-center gap-3">
         <span>Font</span>
         <div ref={fontPickerRef} className="relative min-w-0">
@@ -858,6 +859,9 @@ export default function VideoDubbingTab() {
     null,
   );
   const [logoTitleCollapsed, setLogoTitleCollapsed] = useState(false);
+  const [rightPanelTab, setRightPanelTab] = useState<
+    "logo-title" | "srt" | "character-cards"
+  >("logo-title");
   const [settingsCollapsed, setSettingsCollapsed] = useState(false);
   const [leftPanelTab, setLeftPanelTab] = useState<"settings" | "sources">(
     "settings",
@@ -8931,7 +8935,7 @@ export default function VideoDubbingTab() {
 
       <section className="px-3 py-2 shrink-0 border-b border-slate-800 bg-slate-900/60 rounded-none xl:col-span-2 xl:row-start-2 space-y-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-1 items-center gap-2">
             {queueRunning ? (
               <button
                 type="button"
@@ -8969,6 +8973,265 @@ export default function VideoDubbingTab() {
               />
               Ghép nối sau khi hàng đợi xong
             </label>
+            <div className="flex flex-1 items-center gap-2">
+              {queueRunning && (
+                <div className="space-y-2 rounded-xl border border-amber-500/25 bg-amber-950/20 p-3 text-xs text-amber-100">
+                  <div className="flex justify-between gap-2">
+                    <span className="font-semibold">Hàng đợi đang chạy</span>
+                    <span>
+                      {
+                        Object.values(queueStates).filter(
+                          (item) => item.status === "completed",
+                        ).length
+                      }
+                      /{queueRowCount}
+                    </span>
+                  </div>
+                  <div
+                    role="progressbar"
+                    aria-label="Tiến trình hàng đợi video"
+                    aria-valuemin={0}
+                    aria-valuemax={queueRowCount}
+                    aria-valuenow={
+                      Object.values(queueStates).filter(
+                        (item) => item.status === "completed",
+                      ).length
+                    }
+                    className="h-2 overflow-hidden rounded-full bg-slate-800"
+                  >
+                    <div
+                      className="h-full bg-amber-400 transition-all"
+                      style={{
+                        width: `${queueRowCount ? (Object.values(queueStates).filter((item) => item.status === "completed").length / queueRowCount) * 100 : 0}%`,
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
+              {concatStatus !== "idle" && (
+                <div
+                  className={`space-y-2 rounded-xl border p-3 text-xs ${concatStatus === "failed" ? "border-rose-500/25 bg-rose-950/20 text-rose-100" : "border-sky-500/25 bg-sky-950/20 text-sky-100"}`}
+                >
+                  <div className="font-semibold">
+                    {concatStatus === "running"
+                      ? "Đang ghép video · stream copy"
+                      : concatStatus === "completed"
+                        ? "Đã ghép video · không encode lại"
+                        : concatStatus === "skipped"
+                          ? "Không ghép video vì hàng đợi chưa hoàn tất toàn bộ"
+                          : "Không thể ghép video"}
+                  </div>
+                  {joinedVideo && concatStatus === "completed" && (
+                    <a
+                      href={`/api/video-dubbing/jobs/${joinedVideo.jobId}/concatenated-video?fileName=${encodeURIComponent(joinedVideo.fileName)}`}
+                      className="inline-flex items-center gap-2 rounded-lg border border-sky-400/30 px-2.5 py-1.5 font-semibold text-sky-100 hover:bg-sky-900/30"
+                    >
+                      Tải {joinedVideo.fileName} ·{" "}
+                      {formatFileSize(joinedVideo.sizeBytes)}
+                    </a>
+                  )}
+                  {concatStatus === "failed" && mediaError && (
+                    <p className="text-rose-200">{mediaError}</p>
+                  )}
+                </div>
+              )}
+              {autoPipeline && (
+                <div
+                  role="progressbar"
+                  aria-label="Tiến trình Auto Pipeline"
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={autoPipelineProgress}
+                  aria-valuetext={
+                    autoPipelineProgress === undefined &&
+                    autoPipeline.phase === "separation"
+                      ? `Đang tách audio, ${formatElapsed(separationElapsedSeconds)}, heartbeat ${separationHeartbeatFresh ? "đang hoạt động" : "không mới"}`
+                      : undefined
+                  }
+                  className="relative isolate overflow-hidden rounded-xl border border-indigo-500/25 bg-indigo-950/20 p-3 text-xs text-indigo-100"
+                >
+                  {/* Progress Background */}
+                  {autoPipeline.status === "running" && (
+                    <div
+                      className={`absolute inset-y-0 left-0 -z-10 bg-indigo-400/10 transition-[width] duration-500 ease-out ${
+                        autoPipelineProgress === undefined
+                          ? "w-1/3 animate-pulse"
+                          : ""
+                      }`}
+                      style={
+                        autoPipelineProgress === undefined
+                          ? undefined
+                          : { width: `${autoPipelineProgress}%` }
+                      }
+                    />
+                  )}
+
+                  {/* Header */}
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-semibold">
+                      {autoPipeline.status === "running"
+                        ? `Auto Pipeline · ${
+                            autoPipeline.phase === "separation"
+                              ? `tách audio · ${separationPhaseLabel}`
+                              : autoPipeline.phase
+                          }`
+                        : `Auto Pipeline · ${autoPipeline.status}`}
+                    </span>
+
+                    {autoPipeline.status === "running" && (
+                      <span className="shrink-0 text-right">
+                        {autoPipelineProgress === undefined
+                          ? autoPipeline.phase === "separation"
+                            ? `${formatElapsed(separationElapsedSeconds)} · heartbeat ${
+                                separationHeartbeatFresh
+                                  ? "đang hoạt động"
+                                  : "đang chờ"
+                              }`
+                            : "Đang xử lý…"
+                          : `${autoPipelineProgress}%${
+                              autoPipeline.phase === "separation"
+                                ? ` · ${formatElapsed(separationElapsedSeconds)}`
+                                : ""
+                            }`}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Separation Details */}
+                  {autoPipeline.status === "running" &&
+                    autoPipeline.phase === "separation" && (
+                      <p className="mt-2 text-[11px] text-indigo-200/80">
+                        Backend: {separationBackendLabel}
+                        {separation?.completedSegments !== undefined &&
+                        separation.totalSegments !== undefined
+                          ? ` · ${separation.completedSegments}/${separation.totalSegments} đoạn`
+                          : " · model chưa gửi phần trăm chi tiết"}
+                      </p>
+                    )}
+
+                  {/* Errors */}
+                  {autoPipeline.error && (
+                    <p className="mt-2 text-rose-200">{autoPipeline.error}</p>
+                  )}
+
+                  {autoPipelineError && (
+                    <p className="mt-2 text-rose-200">{autoPipelineError}</p>
+                  )}
+
+                  {mediaError && (
+                    <p className="mt-2 text-rose-200">{mediaError}</p>
+                  )}
+                </div>
+              )}
+              {finalMix && finalMix.status !== "idle" && (
+                <div
+                  role="progressbar"
+                  aria-label="Tiến trình render final mix"
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={finalMix.progressPercent ?? 0}
+                  className="relative isolate overflow-hidden rounded-xl border border-cyan-500/25 bg-cyan-950/20 p-3 text-xs text-cyan-100"
+                >
+                  {/* Background Progress */}
+                  {finalMix.status === "running" && (
+                    <div
+                      className="absolute inset-y-0 left-0 z-[-1] bg-cyan-300/15 transition-[width] duration-500 ease-out"
+                      style={{
+                        width: `${finalMix.progressPercent ?? 0}%`,
+                      }}
+                    />
+                  )}
+
+                  {/* Header */}
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-semibold">
+                      Final mix ·{" "}
+                      {finalMix.status === "running"
+                        ? finalMix.phase
+                        : finalMix.status}
+                    </span>
+
+                    {finalMix.status === "running" && (
+                      <div className="flex items-center gap-2">
+                        <span>
+                          {finalMix.progressPercent === undefined
+                            ? "Đang xử lý…"
+                            : `${finalMix.progressPercent}%`}
+                        </span>
+
+                        <button
+                          type="button"
+                          onClick={() => void cancelFinalMix()}
+                          title="Hủy render"
+                          aria-label="Hủy render"
+                          className="rounded-lg border border-slate-700 px-1 text-cyan-100 transition-colors hover:border-cyan-400/50 hover:bg-cyan-400/10 hover:text-white"
+                        >
+                          Hủy
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {finalMix.error && (
+                    <p className="mt-2 text-rose-200">{finalMix.error}</p>
+                  )}
+                </div>
+              )}
+              {videoExport && videoExport.status !== "idle" && (
+                <div className="space-y-2 rounded-xl border border-sky-500/25 bg-sky-950/20 p-3 text-xs text-sky-100">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-semibold">
+                      Export ·{" "}
+                      {videoExport.status === "running"
+                        ? videoExport.detail || videoExport.phase
+                        : videoExport.status}
+                    </span>
+                    {videoExport.status === "running" && (
+                      <span>
+                        {videoExport.progressPercent === undefined
+                          ? "Đang xử lý…"
+                          : `${videoExport.progressPercent}%`}{" "}
+                        ·{" "}
+                        {formatElapsed(
+                          videoExport.startedAtMs
+                            ? (exportClockNow - videoExport.startedAtMs) / 1000
+                            : videoExport.elapsedSeconds,
+                        )}
+                      </span>
+                    )}
+                  </div>
+                  {videoExport.status === "running" && (
+                    <div
+                      role="progressbar"
+                      aria-label="Tiến trình xuất video MP4"
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={videoExport.progressPercent}
+                      className="h-2 overflow-hidden rounded-full bg-slate-800"
+                    >
+                      <div
+                        className="h-full bg-sky-400 transition-all"
+                        style={{
+                          width: `${videoExport.progressPercent ?? 30}%`,
+                        }}
+                      />
+                    </div>
+                  )}
+                  {videoExport.error && (
+                    <p className="text-rose-200">{videoExport.error}</p>
+                  )}
+                  {videoExport.status === "running" && (
+                    <button
+                      type="button"
+                      onClick={() => void cancelMediaTask("export")}
+                      className="rounded-lg border border-slate-700 px-2 py-1 text-[11px]"
+                    >
+                      Hủy export
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <label
@@ -9028,229 +9291,6 @@ export default function VideoDubbingTab() {
             {concatPreflight.message}
           </p>
         )}
-        <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-          {queueRunning && (
-            <div className="space-y-2 rounded-xl border border-amber-500/25 bg-amber-950/20 p-3 text-xs text-amber-100">
-              <div className="flex justify-between gap-2">
-                <span className="font-semibold">Hàng đợi đang chạy</span>
-                <span>
-                  {
-                    Object.values(queueStates).filter(
-                      (item) => item.status === "completed",
-                    ).length
-                  }
-                  /{queueRowCount}
-                </span>
-              </div>
-              <div
-                role="progressbar"
-                aria-label="Tiến trình hàng đợi video"
-                aria-valuemin={0}
-                aria-valuemax={queueRowCount}
-                aria-valuenow={
-                  Object.values(queueStates).filter(
-                    (item) => item.status === "completed",
-                  ).length
-                }
-                className="h-2 overflow-hidden rounded-full bg-slate-800"
-              >
-                <div
-                  className="h-full bg-amber-400 transition-all"
-                  style={{
-                    width: `${queueRowCount ? (Object.values(queueStates).filter((item) => item.status === "completed").length / queueRowCount) * 100 : 0}%`,
-                  }}
-                />
-              </div>
-            </div>
-          )}
-          {concatStatus !== "idle" && (
-            <div
-              className={`space-y-2 rounded-xl border p-3 text-xs ${concatStatus === "failed" ? "border-rose-500/25 bg-rose-950/20 text-rose-100" : "border-sky-500/25 bg-sky-950/20 text-sky-100"}`}
-            >
-              <div className="font-semibold">
-                {concatStatus === "running"
-                  ? "Đang ghép video · stream copy"
-                  : concatStatus === "completed"
-                    ? "Đã ghép video · không encode lại"
-                    : concatStatus === "skipped"
-                      ? "Không ghép video vì hàng đợi chưa hoàn tất toàn bộ"
-                      : "Không thể ghép video"}
-              </div>
-              {joinedVideo && concatStatus === "completed" && (
-                <a
-                  href={`/api/video-dubbing/jobs/${joinedVideo.jobId}/concatenated-video?fileName=${encodeURIComponent(joinedVideo.fileName)}`}
-                  className="inline-flex items-center gap-2 rounded-lg border border-sky-400/30 px-2.5 py-1.5 font-semibold text-sky-100 hover:bg-sky-900/30"
-                >
-                  Tải {joinedVideo.fileName} ·{" "}
-                  {formatFileSize(joinedVideo.sizeBytes)}
-                </a>
-              )}
-              {concatStatus === "failed" && mediaError && (
-                <p className="text-rose-200">{mediaError}</p>
-              )}
-            </div>
-          )}
-          {autoPipeline && (
-            <div className="space-y-2 rounded-xl border border-indigo-500/25 bg-indigo-950/20 p-3 text-xs text-indigo-100">
-              <div className="flex items-center justify-between gap-2">
-                <span className="font-semibold">
-                  {autoPipeline.status === "running"
-                    ? `Auto Pipeline · ${autoPipeline.phase === "separation" ? `tách audio · ${separationPhaseLabel}` : autoPipeline.phase}`
-                    : `Auto Pipeline · ${autoPipeline.status}`}
-                </span>
-                {autoPipeline.status === "running" && (
-                  <span>
-                    {autoPipelineProgress === undefined
-                      ? autoPipeline.phase === "separation"
-                        ? `${formatElapsed(separationElapsedSeconds)} · heartbeat ${separationHeartbeatFresh ? "đang hoạt động" : "đang chờ"}`
-                        : "Đang xử lý…"
-                      : `${autoPipelineProgress}%${autoPipeline.phase === "separation" ? ` · ${formatElapsed(separationElapsedSeconds)}` : ""}`}
-                  </span>
-                )}
-              </div>
-              {autoPipeline.status === "running" &&
-                autoPipeline.phase === "separation" && (
-                  <p className="text-[11px] text-indigo-200/80">
-                    Backend: {separationBackendLabel}
-                    {separation?.completedSegments !== undefined &&
-                    separation.totalSegments !== undefined
-                      ? ` · ${separation.completedSegments}/${separation.totalSegments} đoạn`
-                      : " · model chưa gửi phần trăm chi tiết"}
-                  </p>
-                )}
-              {autoPipeline.status === "running" && (
-                <div
-                  role="progressbar"
-                  aria-label="Tiến trình Auto Pipeline"
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-valuenow={autoPipelineProgress}
-                  aria-valuetext={
-                    autoPipelineProgress === undefined &&
-                    autoPipeline.phase === "separation"
-                      ? `Đang tách audio, ${formatElapsed(separationElapsedSeconds)}, heartbeat ${separationHeartbeatFresh ? "đang hoạt động" : "không mới"}`
-                      : undefined
-                  }
-                  className="h-2 overflow-hidden rounded-full bg-slate-800"
-                >
-                  <div
-                    className={`h-full bg-indigo-400 transition-all ${autoPipelineProgress === undefined ? "w-1/3 animate-pulse" : ""}`}
-                    style={
-                      autoPipelineProgress === undefined
-                        ? undefined
-                        : { width: `${autoPipelineProgress}%` }
-                    }
-                  />
-                </div>
-              )}
-              {autoPipeline.error && (
-                <p className="text-rose-200">{autoPipeline.error}</p>
-              )}
-              {autoPipelineError && (
-                <p className="text-rose-200">{autoPipelineError}</p>
-              )}
-              {mediaError && <p className="text-rose-200">{mediaError}</p>}
-            </div>
-          )}
-          {finalMix && finalMix.status !== "idle" && (
-            <div className="space-y-2 rounded-xl border border-cyan-500/25 bg-cyan-950/20 p-3 text-xs text-cyan-100">
-              <div className="flex items-center justify-between gap-2">
-                <span className="font-semibold">
-                  Final mix ·{" "}
-                  {finalMix.status === "running"
-                    ? finalMix.phase
-                    : finalMix.status}
-                </span>
-                {finalMix.status === "running" && (
-                  <span>
-                    {finalMix.progressPercent === undefined
-                      ? "Đang xử lý…"
-                      : `${finalMix.progressPercent}%`}
-                  </span>
-                )}
-              </div>
-              {finalMix.status === "running" && (
-                <div
-                  role="progressbar"
-                  aria-label="Tiến trình render final mix"
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-valuenow={finalMix.progressPercent}
-                  className="h-2 overflow-hidden rounded-full bg-slate-800"
-                >
-                  <div
-                    className="h-full bg-cyan-400 transition-all"
-                    style={{ width: `${finalMix.progressPercent ?? 30}%` }}
-                  />
-                </div>
-              )}
-              {finalMix.error && (
-                <p className="text-rose-200">{finalMix.error}</p>
-              )}
-              {finalMix.status === "running" && (
-                <button
-                  type="button"
-                  onClick={() => void cancelFinalMix()}
-                  className="rounded-lg border border-slate-700 px-2 py-1 text-[11px]"
-                >
-                  Hủy render
-                </button>
-              )}
-            </div>
-          )}
-          {videoExport && videoExport.status !== "idle" && (
-            <div className="space-y-2 rounded-xl border border-sky-500/25 bg-sky-950/20 p-3 text-xs text-sky-100">
-              <div className="flex items-center justify-between gap-2">
-                <span className="font-semibold">
-                  Export ·{" "}
-                  {videoExport.status === "running"
-                    ? videoExport.detail || videoExport.phase
-                    : videoExport.status}
-                </span>
-                {videoExport.status === "running" && (
-                  <span>
-                    {videoExport.progressPercent === undefined
-                      ? "Đang xử lý…"
-                      : `${videoExport.progressPercent}%`}{" "}
-                    ·{" "}
-                    {formatElapsed(
-                      videoExport.startedAtMs
-                        ? (exportClockNow - videoExport.startedAtMs) / 1000
-                        : videoExport.elapsedSeconds,
-                    )}
-                  </span>
-                )}
-              </div>
-              {videoExport.status === "running" && (
-                <div
-                  role="progressbar"
-                  aria-label="Tiến trình xuất video MP4"
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-valuenow={videoExport.progressPercent}
-                  className="h-2 overflow-hidden rounded-full bg-slate-800"
-                >
-                  <div
-                    className="h-full bg-sky-400 transition-all"
-                    style={{ width: `${videoExport.progressPercent ?? 30}%` }}
-                  />
-                </div>
-              )}
-              {videoExport.error && (
-                <p className="text-rose-200">{videoExport.error}</p>
-              )}
-              {videoExport.status === "running" && (
-                <button
-                  type="button"
-                  onClick={() => void cancelMediaTask("export")}
-                  className="rounded-lg border border-slate-700 px-2 py-1 text-[11px]"
-                >
-                  Hủy export
-                </button>
-              )}
-            </div>
-          )}
-        </div>
       </section>
 
       <div className="hidden grid-cols-1 gap-3 md:grid-cols-3">
@@ -10149,6 +10189,62 @@ export default function VideoDubbingTab() {
                       </p>
                     </div>
                   </fieldset>
+
+                  <div
+                    className={`space-y-4 ${videoWorkspaceTab === "preview" ? "" : "hidden"}`}
+                  >
+                    {!hasMasterAudio && job?.metadata?.audioCodec && (
+                      <p className="rounded-lg border border-amber-500/25 bg-amber-950/20 p-3 text-xs text-amber-200">
+                        TTS Master là tùy chọn. Nếu không có track vocals hoặc
+                        instrumental đang bật, Mix Audio sẽ dùng audio gốc của
+                        video.
+                      </p>
+                    )}
+                    {mixerError && (
+                      <p className="rounded-lg border border-rose-500/30 bg-rose-950/30 p-3 text-xs text-rose-200">
+                        {mixerError}
+                      </p>
+                    )}
+                    {previewError && (
+                      <p className="rounded-lg border border-rose-500/30 bg-rose-950/30 p-3 text-xs text-rose-200">
+                        {previewError}
+                      </p>
+                    )}
+                    <div className="flex flex-wrap items-center gap-3">
+                      {mixerSettingsSaved ? (
+                        <span className="text-[11px] text-emerald-300">
+                          Cấu hình mixer đã lưu cho job
+                        </span>
+                      ) : mixerTouchedRef.current ? (
+                        <span className="text-[11px] text-slate-400">
+                          Đang lưu cấu hình mixer…
+                        </span>
+                      ) : (
+                        <span className="text-[11px] text-slate-400">
+                          Cấu hình mặc định · thay đổi để lưu
+                        </span>
+                      )}
+                    </div>
+
+                    {hasFinalMix && job && (
+                      <div className="space-y-2 rounded-xl border border-emerald-500/25 bg-emerald-950/20 p-3.5">
+                        <p className="text-xs font-semibold text-emerald-300">
+                          {isFinalMixCurrent
+                            ? "Final mix đã xác minh"
+                            : "Final mix cũ vẫn được giữ; chưa khớp mixer settings hiện tại"}
+                        </p>
+                        <audio
+                          key={`${job.id}-${finalMix?.sizeBytes}`}
+                          controls
+                          preload="metadata"
+                          src={`/api/video-dubbing/jobs/${job.id}/final-mix-audio`}
+                          className="w-full"
+                        >
+                          Trình duyệt không hỗ trợ phát WAV.
+                        </audio>
+                      </div>
+                    )}
+                  </div>
 
                   <div className="flex flex-wrap gap-2">
                     <button
@@ -11144,4018 +11240,4288 @@ export default function VideoDubbingTab() {
         )}
       </div>
       <div className="h-full min-h-0 overflow-y-auto flex flex-col gap-0 divide-y divide-slate-800 min-w-0 bg-slate-950 rounded-none scrollbar-thin xl:col-start-2 xl:row-start-3">
-        {job?.status === "completed" ? (
-          <section className="space-y-4 rounded-2xl border border-cyan-500/25 bg-slate-900/80 p-4 sm:p-5">
-            <button
-              type="button"
-              onClick={() => setMixerPanelExpanded((expanded) => !expanded)}
-              aria-expanded={mixerPanelExpanded}
-              aria-controls="video-dubbing-mixer-panel"
-              className="flex w-full items-start gap-3 text-left"
+        {job?.status === "completed" && (
+          <section className="rounded-2xl border border-cyan-500/25 bg-slate-900/80">
+            <div
+              id="video-dubbing-mixer-panel"
+              className={`grid min-w-0 items-start gap-4 grid-cols-1`}
             >
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-cyan-500/25 bg-cyan-500/15 text-cyan-300">
-                <AudioLines className="h-5 w-5" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <h3 className="font-semibold text-white">
-                  Mixer Preview · 3 track
-                </h3>
-                <p className="mt-1 text-xs leading-relaxed text-slate-400">
-                  Nghe đồng bộ bằng Web Audio với gain riêng cho vocals,
-                  instrumental và TTS Master. Mọi thay đổi chỉ áp dụng tức thời
-                  cho preview; chỉ nút render mới tạo file dùng khi xuất MP4.
-                </p>
-              </div>
-              <ChevronDown
-                className={`mt-2 h-4 w-4 shrink-0 text-slate-400 transition-transform ${
-                  mixerPanelExpanded ? "rotate-180" : ""
-                }`}
-              />
-            </button>
-
-            {mixerPanelExpanded && (
-              <div
-                id="video-dubbing-mixer-panel"
-                className={`grid min-w-0 items-start gap-4 ${
-                  videoWorkspaceTab === "preview"
-                    ? "lg:grid-cols-[minmax(0,1fr)_minmax(300px,360px)]"
-                    : "grid-cols-1"
-                }`}
-              >
-                <div className="space-y-4">
-                  <div
-                    role="tablist"
-                    aria-label="Video preview"
-                    className="flex gap-1 rounded-xl border border-slate-800 bg-slate-950/70 p-1"
-                  >
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={videoWorkspaceTab === "preview"}
-                      onClick={() => setVideoWorkspaceTab("preview")}
-                      className={`flex-1 rounded-lg px-3 py-2 text-xs font-semibold ${videoWorkspaceTab === "preview" ? "bg-cyan-400 text-slate-950" : "text-slate-300 hover:bg-slate-800"}`}
-                    >
-                      Video Mixer Preview
-                    </button>
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={videoWorkspaceTab === "merged"}
-                      onClick={() => setVideoWorkspaceTab("merged")}
-                      className={`flex-1 rounded-lg px-3 py-2 text-xs font-semibold ${videoWorkspaceTab === "merged" ? "bg-emerald-400 text-slate-950" : "text-slate-300 hover:bg-slate-800"}`}
-                    >
-                      Merged Video
-                    </button>
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={videoWorkspaceTab === "end-scene"}
-                      onClick={() => setVideoWorkspaceTab("end-scene")}
-                      className={`flex-1 rounded-lg px-3 py-2 text-xs font-semibold ${videoWorkspaceTab === "end-scene" ? "bg-orange-400 text-slate-950" : "text-slate-300 hover:bg-slate-800"}`}
-                    >
-                      End Scene
-                    </button>
-                  </div>
-                  <div className="space-y-3 rounded-xl border border-slate-800 bg-black/40 p-3">
-                    <div
-                      className={`flex justify-center ${videoWorkspaceTab === "preview" ? "" : "hidden"}`}
-                    >
-                      <div
-                        ref={previewStageRef}
-                        onPointerDownCapture={startCharacterCardRegion}
-                        onPointerMove={moveCharacterCardRegion}
-                        onPointerUp={finishCharacterCardRegion}
-                        onPointerCancel={cancelCharacterCardRegionDraw}
-                        className={`relative inline-block max-w-full overflow-hidden rounded-lg bg-black ${characterCardDrawMode ? "cursor-crosshair" : ""}`}
-                      >
-                        <video
-                          key={job.id}
-                          ref={previewVideoRef}
-                          src={`/api/video-dubbing/jobs/${job.id}/source-video`}
-                          muted
-                          playsInline
-                          preload="metadata"
-                          onLoadedMetadata={() => setVideoPreviewReady(true)}
-                          onError={() => {
-                            setVideoPreviewReady(false);
-                            setPreviewError(
-                              "Trình duyệt không thể giải mã định dạng video này. Hãy dùng MP4 hoặc WebM tương thích để xem trước.",
-                            );
-                          }}
-                          className={`block h-auto max-h-[min(60vh,640px)] max-w-full rounded-lg bg-black object-contain ${
-                            previewingEndScene ? "opacity-0" : ""
-                          }`}
-                          aria-label="Video nguồn"
-                        />
-                        {previewingEndScene && (
-                          <div
-                            aria-hidden="true"
-                            className="pointer-events-none absolute inset-0 z-0 bg-black"
-                          />
-                        )}
-                        {job.overlaySettings?.coverEnabled &&
-                          !previewingEndScene &&
-                          job.overlaySettings?.coverFileName &&
-                          previewCurrentTime <
-                            (job.overlaySettings.coverFrameCount ?? 5) /
-                              (job.metadata?.frameRate || 25) && (
-                            <img
-                              src={`/api/video-dubbing/jobs/${job.id}/cover?v=${job.updatedAt}`}
-                              alt="Ảnh cover đầu video"
-                              className="pointer-events-none absolute inset-0 h-full w-full object-cover"
-                            />
-                          )}
-                        {logoEnabled && job.overlaySettings?.logoFileName && (
-                          <div
-                            className={`pointer-events-none absolute inset-0 flex ${
-                              previewingEndScene ? "z-10" : ""
-                            }`}
-                            style={{
-                              justifyContent: overlayAlignment.horizontal,
-                              alignItems: overlayAlignment.vertical,
-                              padding: `${logoPaddingPx * previewOverlayScale}px`,
-                            }}
-                          >
-                            <img
-                              src={`/api/video-dubbing/jobs/${job.id}/logo?v=${job.updatedAt}`}
-                              alt=""
-                              className="h-auto max-h-[40%] max-w-full object-contain"
-                              style={{ width: `${logoWidthPercent}%` }}
-                            />
-                          </div>
-                        )}
-                        {activePreviewSubtitle && !previewingEndScene && (
-                          <div
-                            className="pointer-events-none absolute inset-0 flex"
-                            style={{
-                              justifyContent:
-                                subtitleOverlayAlignment.horizontal,
-                              alignItems: subtitleOverlayAlignment.vertical,
-                              padding: `${subtitleMarginPx * previewOverlayScale}px`,
-                            }}
-                          >
-                            <SubtitleOverlayRenderer
-                              text={activePreviewSubtitle.text}
-                              scale={previewOverlayScale}
-                              fontSize={subtitleFontSize}
-                              fontFamily={subtitleFontFamily}
-                              fontWeight={subtitleBold}
-                              fontStyle={subtitleItalic}
-                              underline={subtitleUnderline}
-                              textCase={subtitleTextCase}
-                              outlineEnabled={subtitleOutlineEnabled}
-                              outlineColor={subtitleOutlineColor}
-                              outlineWidthPx={subtitleOutlineWidthPx}
-                              characterSpacingPx={subtitleCharacterSpacingPx}
-                              lineSpacingPx={subtitleLineSpacingPx}
-                              color={subtitleColor}
-                              backgroundMode={subtitleBackgroundMode}
-                              backgroundColor={subtitleBackgroundColor}
-                              backgroundTransparent={
-                                subtitleBackgroundTransparent
-                              }
-                              backgroundImage={subtitleBackgroundImage}
-                              paddingPx={subtitlePaddingPx}
-                              position={subtitlePosition}
-                            />
-                          </div>
-                        )}
-                        {activePreviewTextItems
-                          .filter(
-                            ({ cue }) => !previewingEndScene || cue.isTitle,
-                          )
-                          .map(({ cue, index }) => {
-                            const customPosition =
-                              Number.isFinite(cue.xPercent) &&
-                              Number.isFinite(cue.yPercent);
-                            const selected = selectedTextOverlay === index;
-                            const textAlign = cue.isTitle
-                              ? undefined
-                              : (cue.textAlign ??
-                                getSubtitleTextAlignment(cue.position));
-                            const horizontalTransform =
-                              textAlign === "left"
-                                ? "0%"
-                                : textAlign === "right"
-                                  ? "-100%"
-                                  : "-50%";
-                            const verticalTransform =
-                              customPosition ||
-                              cue.position.startsWith("middle-")
-                                ? "-50%"
-                                : cue.position.startsWith("bottom-")
-                                  ? "-100%"
-                                  : "0%";
-                            const content = (
-                              <div
-                                onPointerDown={(event) =>
-                                  startTextOverlayPreviewDrag(event, index)
-                                }
-                                className={`pointer-events-auto touch-none cursor-move rounded-sm ${selected ? "outline outline-1 outline-dashed outline-violet-300/80" : ""}`}
-                                title="Kéo để đổi vị trí text"
-                              >
-                                <SubtitleOverlayRenderer
-                                  text={cue.text}
-                                  secondaryText={
-                                    cue.kind === "character-card"
-                                      ? (cue.characterRole ?? "")
-                                      : undefined
-                                  }
-                                  secondaryFontSize={cue.characterRoleFontSize}
-                                  scale={previewOverlayScale}
-                                  fontSize={cue.fontSize}
-                                  fontFamily={cue.fontFamily}
-                                  fontWeight={cue.bold}
-                                  fontStyle={cue.italic}
-                                  underline={cue.underline ?? false}
-                                  textCase={cue.textCase ?? "none"}
-                                  outlineEnabled={cue.outlineEnabled ?? false}
-                                  outlineColor={cue.outlineColor ?? "#000000"}
-                                  outlineWidthPx={cue.outlineWidthPx ?? 2}
-                                  characterSpacingPx={
-                                    cue.characterSpacingPx ?? 0
-                                  }
-                                  lineSpacingPx={cue.lineSpacingPx ?? 0}
-                                  color={cue.color}
-                                  backgroundMode={
-                                    cue.backgroundTransparent ? "none" : "color"
-                                  }
-                                  backgroundColor={cue.backgroundColor}
-                                  paddingPx={cue.paddingPx}
-                                  position={cue.position}
-                                  textAlign={textAlign}
-                                  wrap={false}
-                                />
-                              </div>
-                            );
-                            if (cue.isTitle) {
-                              return customPosition ? (
+              <div>
+                <Tabs
+                  tabs={[
+                    {
+                      id: "preview",
+                      label: "Video Mixer Preview",
+                      content: (
+                        <div>
+                          <div className="grid grid-cols-[minmax(0,1fr)_350px] gap-4 w-full">
+                            {/* Left Column - Auto */}
+                            <div className="min-w-0">
+                              <div className="space-y-3 rounded-xl border border-slate-800 bg-black/40 p-3">
                                 <div
-                                  key={`preview-text-${index}`}
-                                  className="absolute z-10"
-                                  style={{
-                                    left: `${cue.xPercent}%`,
-                                    top: `${cue.yPercent}%`,
-                                    transform: "translate(-50%, -50%)",
-                                  }}
+                                  className={`flex justify-center ${videoWorkspaceTab === "preview" ? "" : "hidden"}`}
                                 >
-                                  {content}
-                                </div>
-                              ) : (
-                                <div
-                                  key={`preview-text-${index}`}
-                                  className="pointer-events-none absolute inset-0 flex"
-                                  style={{
-                                    justifyContent: getOverlayAlignment(
-                                      cue.position,
-                                    ).horizontal,
-                                    alignItems: getOverlayAlignment(
-                                      cue.position,
-                                    ).vertical,
-                                    padding: `${24 * previewOverlayScale}px`,
-                                  }}
-                                >
-                                  {content}
-                                </div>
-                              );
-                            }
-                            const margin = 24 * previewOverlayScale;
-                            return (
-                              <div
-                                key={`preview-text-${index}`}
-                                className="pointer-events-none absolute inset-0"
-                              >
-                                <div
-                                  className="absolute z-10"
-                                  style={{
-                                    left: customPosition
-                                      ? `${cue.xPercent}%`
-                                      : cue.position.endsWith("-left")
-                                        ? `${margin}px`
-                                        : cue.position.endsWith("-center")
-                                          ? "50%"
-                                          : undefined,
-                                    right:
-                                      !customPosition &&
-                                      cue.position.endsWith("-right")
-                                        ? `${margin}px`
-                                        : undefined,
-                                    top: customPosition
-                                      ? `${cue.yPercent}%`
-                                      : cue.position.startsWith("top-")
-                                        ? `${margin}px`
-                                        : cue.position.startsWith("middle-")
-                                          ? "50%"
-                                          : undefined,
-                                    bottom:
-                                      !customPosition &&
-                                      cue.position.startsWith("bottom-")
-                                        ? `${margin}px`
-                                        : undefined,
-                                    transform: `translate(${horizontalTransform}, ${verticalTransform})`,
-                                  }}
-                                >
-                                  {content}
-                                </div>
-                              </div>
-                            );
-                          })}
-                        {previewingEndScene &&
-                          endSceneTextOverlays.map((cue, index) => {
-                            const textAlign = cue.textAlign ?? "center";
-                            const horizontalTransform =
-                              textAlign === "left"
-                                ? "0%"
-                                : textAlign === "right"
-                                  ? "-100%"
-                                  : "-50%";
-                            const verticalTransform = cue.position.startsWith(
-                              "top-",
-                            )
-                              ? "0%"
-                              : cue.position.startsWith("bottom-")
-                                ? "-100%"
-                                : "-50%";
-                            return (
-                              <div
-                                key={`mixer-end-scene-${cue.id ?? index}`}
-                                className="pointer-events-none absolute z-30"
-                                style={{
-                                  left: `${cue.xPercent ?? 50}%`,
-                                  top: `${cue.yPercent ?? 50}%`,
-                                  transform: `translate(${horizontalTransform}, ${verticalTransform})`,
-                                }}
-                              >
-                                <SubtitleOverlayRenderer
-                                  text={cue.text}
-                                  scale={previewOverlayScale}
-                                  fontSize={cue.fontSize}
-                                  fontFamily={cue.fontFamily}
-                                  fontWeight={cue.bold}
-                                  fontStyle={cue.italic}
-                                  underline={cue.underline ?? false}
-                                  textCase={cue.textCase ?? "none"}
-                                  outlineEnabled={cue.outlineEnabled ?? false}
-                                  outlineColor={cue.outlineColor ?? "#000000"}
-                                  outlineWidthPx={cue.outlineWidthPx ?? 2}
-                                  characterSpacingPx={
-                                    cue.characterSpacingPx ?? 0
-                                  }
-                                  lineSpacingPx={cue.lineSpacingPx ?? 0}
-                                  color={cue.color}
-                                  backgroundMode={
-                                    cue.backgroundTransparent ? "none" : "color"
-                                  }
-                                  backgroundColor={cue.backgroundColor}
-                                  paddingPx={cue.paddingPx}
-                                  position={cue.position}
-                                  textAlign={textAlign}
-                                  wrap={false}
-                                />
-                              </div>
-                            );
-                          })}
-                        {(characterCardRegionDraft || characterCardRegion) && (
-                          <div
-                            aria-hidden="true"
-                            className="pointer-events-none absolute z-30 border-2 border-amber-300 bg-amber-300/10"
-                            style={{
-                              left: `${(characterCardRegionDraft || characterCardRegion)!.left * 100}%`,
-                              top: `${(characterCardRegionDraft || characterCardRegion)!.top * 100}%`,
-                              width: `${(characterCardRegionDraft || characterCardRegion)!.width * 100}%`,
-                              height: `${(characterCardRegionDraft || characterCardRegion)!.height * 100}%`,
-                            }}
-                          />
-                        )}
-                      </div>
-                    </div>
-                    {videoWorkspaceTab === "end-scene" && (
-                      <div className="space-y-4">
-                        <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1.4fr)_minmax(280px,0.8fr)]">
-                          <div
-                            ref={endScenePreviewContainerRef}
-                            className="flex min-w-0 justify-center"
-                          >
-                            <div
-                              ref={endSceneStageRef}
-                              className="relative shrink-0 overflow-hidden rounded-lg border border-slate-700 bg-black"
-                              style={{
-                                width: `${endScenePreviewSize.width}px`,
-                                height: `${endScenePreviewSize.height}px`,
-                                maxWidth: "100%",
-                              }}
-                            >
-                              {endSceneTextOverlays.map((cue, index) => {
-                                const textAlign = cue.textAlign ?? "center";
-                                const horizontalTransform =
-                                  textAlign === "left"
-                                    ? "0%"
-                                    : textAlign === "right"
-                                      ? "-100%"
-                                      : "-50%";
-                                const verticalTransform =
-                                  cue.position.startsWith("top-")
-                                    ? "0%"
-                                    : cue.position.startsWith("bottom-")
-                                      ? "-100%"
-                                      : "-50%";
-                                return (
                                   <div
-                                    key={cue.id ?? `end-scene-text-${index}`}
-                                    className={`absolute z-30 touch-none ${
-                                      selectedEndSceneTextIndex === index
-                                        ? "outline outline-1 outline-dashed outline-orange-300"
-                                        : ""
-                                    }`}
-                                    style={{
-                                      left: `${cue.xPercent ?? 50}%`,
-                                      top: `${cue.yPercent ?? 50}%`,
-                                      transform: `translate(${horizontalTransform}, ${verticalTransform})`,
-                                    }}
-                                    onPointerDown={(event) =>
-                                      startEndSceneTextDrag(event, index)
+                                    ref={previewStageRef}
+                                    onPointerDownCapture={
+                                      startCharacterCardRegion
                                     }
+                                    onPointerMove={moveCharacterCardRegion}
+                                    onPointerUp={finishCharacterCardRegion}
+                                    onPointerCancel={
+                                      cancelCharacterCardRegionDraw
+                                    }
+                                    className={`relative inline-block max-w-full overflow-hidden rounded-lg bg-black ${characterCardDrawMode ? "cursor-crosshair" : ""}`}
                                   >
-                                    <SubtitleOverlayRenderer
-                                      text={cue.text}
-                                      scale={endSceneOverlayScale}
-                                      fontSize={cue.fontSize}
-                                      fontFamily={cue.fontFamily}
-                                      fontWeight={cue.bold}
-                                      fontStyle={cue.italic}
-                                      underline={cue.underline ?? false}
-                                      textCase={cue.textCase ?? "none"}
-                                      outlineEnabled={
-                                        cue.outlineEnabled ?? false
+                                    <video
+                                      key={job.id}
+                                      ref={previewVideoRef}
+                                      src={`/api/video-dubbing/jobs/${job.id}/source-video`}
+                                      muted
+                                      playsInline
+                                      preload="metadata"
+                                      onLoadedMetadata={() =>
+                                        setVideoPreviewReady(true)
                                       }
-                                      outlineColor={
-                                        cue.outlineColor ?? "#000000"
-                                      }
-                                      outlineWidthPx={cue.outlineWidthPx ?? 2}
-                                      characterSpacingPx={
-                                        cue.characterSpacingPx ?? 0
-                                      }
-                                      lineSpacingPx={cue.lineSpacingPx ?? 0}
-                                      color={cue.color}
-                                      backgroundMode={
-                                        cue.backgroundTransparent
-                                          ? "none"
-                                          : "color"
-                                      }
-                                      backgroundColor={cue.backgroundColor}
-                                      paddingPx={cue.paddingPx}
-                                      position={cue.position}
-                                      textAlign={textAlign}
-                                      wrap={false}
+                                      onError={() => {
+                                        setVideoPreviewReady(false);
+                                        setPreviewError(
+                                          "Trình duyệt không thể giải mã định dạng video này. Hãy dùng MP4 hoặc WebM tương thích để xem trước.",
+                                        );
+                                      }}
+                                      className={`block h-auto max-h-[min(60vh,640px)] max-w-full rounded-lg bg-black object-contain ${
+                                        previewingEndScene ? "opacity-0" : ""
+                                      }`}
+                                      aria-label="Video nguồn"
                                     />
-                                  </div>
-                                );
-                              })}
-                              {endSceneTextOverlays.length === 0 && (
-                                <p className="absolute inset-0 flex items-center justify-center text-xs text-slate-600">
-                                  Màn hình đen · Chưa có text
-                                </p>
-                              )}
-                            </div>
-                          </div>
-                          <div className="min-w-0 space-y-3">
-                            <div className="flex flex-wrap items-center justify-between gap-2">
-                              <div>
-                                <h4 className="text-sm font-semibold text-white">
-                                  End Scene
-                                </h4>
-                                <p className="mt-1 text-[10px] text-slate-400">
-                                  Style được lưu trong project; việc thêm vào
-                                  timeline áp dụng riêng cho video này.
-                                </p>
-                              </div>
-                              <button
-                                type="button"
-                                disabled={
-                                  !job || !job.metadata || isMediaProcessing
-                                }
-                                onClick={() =>
-                                  void saveEndSceneForCurrentVideo(
-                                    !endSceneEnabled,
-                                  )
-                                }
-                                className={`rounded-md border px-2.5 py-1.5 text-xs font-semibold disabled:opacity-40 ${
-                                  endSceneEnabled
-                                    ? "border-orange-400/50 bg-orange-500/15 text-orange-200"
-                                    : "border-slate-700 text-slate-300 hover:border-orange-400/50"
-                                }`}
-                              >
-                                {endSceneEnabled
-                                  ? "Bỏ End Scene khỏi video"
-                                  : "Add End Scene vào video"}
-                              </button>
-                            </div>
-                            <label className="flex items-center justify-between gap-3 rounded-lg border border-slate-800 bg-slate-950/60 p-2.5 text-xs text-slate-300">
-                              Thời lượng End Scene (giây)
-                              <input
-                                type="number"
-                                min={1}
-                                max={120}
-                                step={0.5}
-                                value={endSceneDurationSeconds}
-                                onChange={(event) => {
-                                  const value = Number(event.target.value);
-                                  if (
-                                    !Number.isFinite(value) ||
-                                    value < 1 ||
-                                    value > 120
-                                  )
-                                    return;
-                                  setEndSceneDurationSeconds(value);
-                                  setEndSceneTextOverlays((items) =>
-                                    items.map((cue) => ({
-                                      ...cue,
-                                      startTime: Math.min(
-                                        cue.startTime,
-                                        value - 0.1,
-                                      ),
-                                      endTime: value,
-                                    })),
-                                  );
-                                }}
-                                className="w-24 rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-right text-xs text-white"
-                              />
-                            </label>
-                            <label className="flex items-center justify-between gap-3 rounded-lg border border-slate-800 bg-slate-950/60 p-2.5 text-xs text-slate-300">
-                              Tỉ lệ khung hình preview
-                              <select
-                                value={endSceneAspectRatio}
-                                onChange={(event) =>
-                                  setEndSceneAspectRatio(
-                                    event.target
-                                      .value as VideoDubbingEndSceneAspectRatio,
-                                  )
-                                }
-                                className="rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-white"
-                              >
-                                {END_SCENE_ASPECT_RATIOS.map((ratio) => (
-                                  <option key={ratio} value={ratio}>
-                                    {ratio}
-                                  </option>
-                                ))}
-                              </select>
-                            </label>
-                            <div className="flex flex-wrap gap-2">
-                              <button
-                                type="button"
-                                onClick={addEndSceneText}
-                                className="inline-flex items-center gap-1 rounded-md border border-orange-500/30 px-2.5 py-1.5 text-xs text-orange-200 hover:bg-orange-950/30"
-                              >
-                                <Plus className="h-3 w-3" />
-                                Thêm text
-                              </button>
-                              <button
-                                type="button"
-                                disabled={!selectedEndSceneCue}
-                                onClick={removeSelectedEndSceneText}
-                                className="inline-flex items-center gap-1 rounded-md border border-rose-500/30 px-2.5 py-1.5 text-xs text-rose-200 hover:bg-rose-950/30 disabled:opacity-40"
-                              >
-                                <Trash2 className="h-3 w-3" />
-                                Xóa text
-                              </button>
-                            </div>
-                            <div className="max-h-28 space-y-1 overflow-y-auto rounded-lg border border-slate-800 bg-slate-950/50 p-1.5">
-                              {endSceneTextOverlays.map((cue, index) => (
-                                <button
-                                  key={cue.id ?? index}
-                                  type="button"
-                                  aria-pressed={
-                                    selectedEndSceneTextIndex === index
-                                  }
-                                  onClick={() =>
-                                    setSelectedEndSceneTextIndex(index)
-                                  }
-                                  className={`w-full truncate rounded-md px-2 py-1.5 text-left text-xs ${
-                                    selectedEndSceneTextIndex === index
-                                      ? "bg-orange-500/20 text-orange-100"
-                                      : "text-slate-300 hover:bg-slate-800"
-                                  }`}
-                                >
-                                  {cue.text || `Text ${index + 1}`}
-                                </button>
-                              ))}
-                              {!endSceneTextOverlays.length && (
-                                <p className="px-2 py-2 text-[10px] text-slate-500">
-                                  Chưa có text trong End Scene.
-                                </p>
-                              )}
-                            </div>
-                            {selectedEndSceneCue &&
-                              selectedEndSceneTextIndex !== null && (
-                                <div className="space-y-3 rounded-lg border border-slate-800 bg-slate-950/50 p-2.5">
-                                  <label className="block space-y-1 text-[10px] text-slate-400">
-                                    Nội dung
-                                    <textarea
-                                      rows={2}
-                                      value={selectedEndSceneCue.text}
-                                      onChange={(event) =>
-                                        updateEndSceneText(
-                                          selectedEndSceneTextIndex,
-                                          { text: event.target.value },
-                                        )
-                                      }
-                                      className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-white"
-                                    />
-                                  </label>
-                                  <TextStyleControls
-                                    value={endSceneTextStyleValue}
-                                    onChange={updateSelectedEndSceneStyle}
-                                    fontOptions={subtitleFontOptions}
-                                    disabled={!selectedEndSceneCue}
-                                    maxFontSize={160}
-                                  />
-                                  <div className="grid grid-cols-2 gap-2 text-[10px] text-slate-400">
-                                    <label className="flex items-center justify-between gap-2">
-                                      Căn chữ
-                                      <select
-                                        value={
-                                          selectedEndSceneCue.textAlign ??
-                                          "center"
+                                    {previewingEndScene && (
+                                      <div
+                                        aria-hidden="true"
+                                        className="pointer-events-none absolute inset-0 z-0 bg-black"
+                                      />
+                                    )}
+                                    {job.overlaySettings?.coverEnabled &&
+                                      !previewingEndScene &&
+                                      job.overlaySettings?.coverFileName &&
+                                      previewCurrentTime <
+                                        (job.overlaySettings.coverFrameCount ??
+                                          5) /
+                                          (job.metadata?.frameRate || 25) && (
+                                        <img
+                                          src={`/api/video-dubbing/jobs/${job.id}/cover?v=${job.updatedAt}`}
+                                          alt="Ảnh cover đầu video"
+                                          className="pointer-events-none absolute inset-0 h-full w-full object-cover"
+                                        />
+                                      )}
+                                    {logoEnabled &&
+                                      job.overlaySettings?.logoFileName && (
+                                        <div
+                                          className={`pointer-events-none absolute inset-0 flex ${
+                                            previewingEndScene ? "z-10" : ""
+                                          }`}
+                                          style={{
+                                            justifyContent:
+                                              overlayAlignment.horizontal,
+                                            alignItems:
+                                              overlayAlignment.vertical,
+                                            padding: `${logoPaddingPx * previewOverlayScale}px`,
+                                          }}
+                                        >
+                                          <img
+                                            src={`/api/video-dubbing/jobs/${job.id}/logo?v=${job.updatedAt}`}
+                                            alt=""
+                                            className="h-auto max-h-[40%] max-w-full object-contain"
+                                            style={{
+                                              width: `${logoWidthPercent}%`,
+                                            }}
+                                          />
+                                        </div>
+                                      )}
+                                    {activePreviewSubtitle &&
+                                      !previewingEndScene && (
+                                        <div
+                                          className="pointer-events-none absolute inset-0 flex"
+                                          style={{
+                                            justifyContent:
+                                              subtitleOverlayAlignment.horizontal,
+                                            alignItems:
+                                              subtitleOverlayAlignment.vertical,
+                                            padding: `${subtitleMarginPx * previewOverlayScale}px`,
+                                          }}
+                                        >
+                                          <SubtitleOverlayRenderer
+                                            text={activePreviewSubtitle.text}
+                                            scale={previewOverlayScale}
+                                            fontSize={subtitleFontSize}
+                                            fontFamily={subtitleFontFamily}
+                                            fontWeight={subtitleBold}
+                                            fontStyle={subtitleItalic}
+                                            underline={subtitleUnderline}
+                                            textCase={subtitleTextCase}
+                                            outlineEnabled={
+                                              subtitleOutlineEnabled
+                                            }
+                                            outlineColor={subtitleOutlineColor}
+                                            outlineWidthPx={
+                                              subtitleOutlineWidthPx
+                                            }
+                                            characterSpacingPx={
+                                              subtitleCharacterSpacingPx
+                                            }
+                                            lineSpacingPx={
+                                              subtitleLineSpacingPx
+                                            }
+                                            color={subtitleColor}
+                                            backgroundMode={
+                                              subtitleBackgroundMode
+                                            }
+                                            backgroundColor={
+                                              subtitleBackgroundColor
+                                            }
+                                            backgroundTransparent={
+                                              subtitleBackgroundTransparent
+                                            }
+                                            backgroundImage={
+                                              subtitleBackgroundImage
+                                            }
+                                            paddingPx={subtitlePaddingPx}
+                                            position={subtitlePosition}
+                                          />
+                                        </div>
+                                      )}
+                                    {activePreviewTextItems
+                                      .filter(
+                                        ({ cue }) =>
+                                          !previewingEndScene || cue.isTitle,
+                                      )
+                                      .map(({ cue, index }) => {
+                                        const customPosition =
+                                          Number.isFinite(cue.xPercent) &&
+                                          Number.isFinite(cue.yPercent);
+                                        const selected =
+                                          selectedTextOverlay === index;
+                                        const textAlign = cue.isTitle
+                                          ? undefined
+                                          : (cue.textAlign ??
+                                            getSubtitleTextAlignment(
+                                              cue.position,
+                                            ));
+                                        const horizontalTransform =
+                                          textAlign === "left"
+                                            ? "0%"
+                                            : textAlign === "right"
+                                              ? "-100%"
+                                              : "-50%";
+                                        const verticalTransform =
+                                          customPosition ||
+                                          cue.position.startsWith("middle-")
+                                            ? "-50%"
+                                            : cue.position.startsWith("bottom-")
+                                              ? "-100%"
+                                              : "0%";
+                                        const content = (
+                                          <div
+                                            onPointerDown={(event) =>
+                                              startTextOverlayPreviewDrag(
+                                                event,
+                                                index,
+                                              )
+                                            }
+                                            className={`pointer-events-auto touch-none cursor-move rounded-sm ${selected ? "outline outline-1 outline-dashed outline-violet-300/80" : ""}`}
+                                            title="Kéo để đổi vị trí text"
+                                          >
+                                            <SubtitleOverlayRenderer
+                                              text={cue.text}
+                                              secondaryText={
+                                                cue.kind === "character-card"
+                                                  ? (cue.characterRole ?? "")
+                                                  : undefined
+                                              }
+                                              secondaryFontSize={
+                                                cue.characterRoleFontSize
+                                              }
+                                              scale={previewOverlayScale}
+                                              fontSize={cue.fontSize}
+                                              fontFamily={cue.fontFamily}
+                                              fontWeight={cue.bold}
+                                              fontStyle={cue.italic}
+                                              underline={cue.underline ?? false}
+                                              textCase={cue.textCase ?? "none"}
+                                              outlineEnabled={
+                                                cue.outlineEnabled ?? false
+                                              }
+                                              outlineColor={
+                                                cue.outlineColor ?? "#000000"
+                                              }
+                                              outlineWidthPx={
+                                                cue.outlineWidthPx ?? 2
+                                              }
+                                              characterSpacingPx={
+                                                cue.characterSpacingPx ?? 0
+                                              }
+                                              lineSpacingPx={
+                                                cue.lineSpacingPx ?? 0
+                                              }
+                                              color={cue.color}
+                                              backgroundMode={
+                                                cue.backgroundTransparent
+                                                  ? "none"
+                                                  : "color"
+                                              }
+                                              backgroundColor={
+                                                cue.backgroundColor
+                                              }
+                                              paddingPx={cue.paddingPx}
+                                              position={cue.position}
+                                              textAlign={textAlign}
+                                              wrap={false}
+                                            />
+                                          </div>
+                                        );
+                                        if (cue.isTitle) {
+                                          return customPosition ? (
+                                            <div
+                                              key={`preview-text-${index}`}
+                                              className="absolute z-10"
+                                              style={{
+                                                left: `${cue.xPercent}%`,
+                                                top: `${cue.yPercent}%`,
+                                                transform:
+                                                  "translate(-50%, -50%)",
+                                              }}
+                                            >
+                                              {content}
+                                            </div>
+                                          ) : (
+                                            <div
+                                              key={`preview-text-${index}`}
+                                              className="pointer-events-none absolute inset-0 flex"
+                                              style={{
+                                                justifyContent:
+                                                  getOverlayAlignment(
+                                                    cue.position,
+                                                  ).horizontal,
+                                                alignItems: getOverlayAlignment(
+                                                  cue.position,
+                                                ).vertical,
+                                                padding: `${24 * previewOverlayScale}px`,
+                                              }}
+                                            >
+                                              {content}
+                                            </div>
+                                          );
                                         }
-                                        onChange={(event) =>
-                                          updateEndSceneText(
-                                            selectedEndSceneTextIndex,
-                                            {
-                                              textAlign: event.target.value as
-                                                | "left"
-                                                | "center"
-                                                | "right",
-                                            },
-                                          )
-                                        }
-                                        className="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-white"
-                                      >
-                                        <option value="left">Trái</option>
-                                        <option value="center">Giữa</option>
-                                        <option value="right">Phải</option>
-                                      </select>
-                                    </label>
-                                    <label className="flex items-center justify-between gap-2">
-                                      Vị trí dọc
-                                      <select
-                                        value={
-                                          selectedEndSceneCue.position.startsWith(
-                                            "top-",
-                                          )
-                                            ? "top"
-                                            : selectedEndSceneCue.position.startsWith(
-                                                  "bottom-",
-                                                )
-                                              ? "bottom"
-                                              : "middle"
-                                        }
-                                        onChange={(event) => {
-                                          const vertical = event.target.value;
-                                          const horizontal =
-                                            selectedEndSceneCue.position.endsWith(
-                                              "-left",
-                                            )
-                                              ? "left"
-                                              : selectedEndSceneCue.position.endsWith(
+                                        const margin = 24 * previewOverlayScale;
+                                        return (
+                                          <div
+                                            key={`preview-text-${index}`}
+                                            className="pointer-events-none absolute inset-0"
+                                          >
+                                            <div
+                                              className="absolute z-10"
+                                              style={{
+                                                left: customPosition
+                                                  ? `${cue.xPercent}%`
+                                                  : cue.position.endsWith(
+                                                        "-left",
+                                                      )
+                                                    ? `${margin}px`
+                                                    : cue.position.endsWith(
+                                                          "-center",
+                                                        )
+                                                      ? "50%"
+                                                      : undefined,
+                                                right:
+                                                  !customPosition &&
+                                                  cue.position.endsWith(
                                                     "-right",
                                                   )
-                                                ? "right"
-                                                : "center";
-                                          updateEndSceneText(
-                                            selectedEndSceneTextIndex,
-                                            {
-                                              position:
-                                                `${vertical}-${horizontal}` as VideoDubbingOverlayPosition,
-                                            },
-                                          );
-                                        }}
-                                        className="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-white"
-                                      >
-                                        <option value="top">Trên</option>
-                                        <option value="middle">Giữa</option>
-                                        <option value="bottom">Dưới</option>
-                                      </select>
-                                    </label>
-                                    <label className="flex items-center justify-between gap-2">
-                                      Màu nền
-                                      <input
-                                        type="color"
-                                        value={
-                                          selectedEndSceneCue.backgroundColor
-                                        }
-                                        disabled={
-                                          selectedEndSceneCue.backgroundTransparent
-                                        }
-                                        onChange={(event) =>
-                                          updateEndSceneText(
-                                            selectedEndSceneTextIndex,
-                                            {
-                                              backgroundColor:
-                                                event.target.value,
-                                            },
-                                          )
-                                        }
-                                        className="h-7 w-10 rounded border border-slate-700 bg-slate-950 disabled:opacity-40"
-                                      />
-                                    </label>
-                                    <label className="flex items-center gap-2">
-                                      <input
-                                        type="checkbox"
-                                        checked={
-                                          selectedEndSceneCue.backgroundTransparent
-                                        }
-                                        onChange={(event) =>
-                                          updateEndSceneText(
-                                            selectedEndSceneTextIndex,
-                                            {
-                                              backgroundTransparent:
-                                                event.target.checked,
-                                            },
-                                          )
-                                        }
-                                        className="accent-orange-400"
-                                      />
-                                      Nền trong suốt
-                                    </label>
-                                  </div>
-                                </div>
-                              )}
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                    {videoWorkspaceTab === "merged" &&
-                      (hasExportedVideo && job ? (
-                        <div className="space-y-3 rounded-xl border border-emerald-500/25 bg-emerald-950/20 p-3.5">
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <span className="text-xs font-semibold text-emerald-300">
-                              {videoExport?.status === "completed" &&
-                              isFinalMixCurrent
-                                ? "MP4 đã xuất"
-                                : "MP4 trước đó vẫn được giữ"}
-                            </span>
-                            <span className="text-xs text-slate-400">
-                              {job.exportedVideoFileName ||
-                                `${job.fileName.replace(/\.[^.]+$/, "")}_merged.mp4`}{" "}
-                              · {formatFileSize(videoExport?.sizeBytes || 0)}
-                              {videoExport?.durationSeconds !== undefined &&
-                                ` · ${formatDuration(videoExport.durationSeconds)}`}
-                            </span>
-                          </div>
-                          {videoExport?.status === "completed" && (
-                            <p className="text-xs text-slate-400">
-                              Thời gian export:{" "}
-                              {formatElapsed(videoExport.elapsedSeconds)}
-                            </p>
-                          )}
-                          <video
-                            key={`merged-${job.id}-${videoExport?.completedAtMs}`}
-                            controls
-                            playsInline
-                            preload="metadata"
-                            src={`/api/video-dubbing/jobs/${job.id}/exported-video?v=${videoExport?.sizeBytes || 0}-${videoExport?.completedAtMs || 0}`}
-                            className="max-h-[min(65vh,760px)] w-full rounded-lg bg-black"
-                            aria-label="Merged Video"
-                          />
-                          <a
-                            href={`/api/video-dubbing/jobs/${job.id}/download`}
-                            download={
-                              job.exportedVideoFileName ||
-                              `${job.fileName.replace(/\.[^.]+$/, "")}_merged.mp4`
-                            }
-                            className="inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-500/40 px-4 py-2.5 text-sm font-bold text-emerald-200 hover:bg-emerald-950/60"
-                          >
-                            Tải MP4
-                          </a>
-                        </div>
-                      ) : (
-                        <div className="flex min-h-64 flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-slate-700 bg-slate-950/60 p-6 text-center">
-                          <Film className="h-8 w-8 text-slate-600" />
-                          <p className="text-sm font-semibold text-slate-300">
-                            Chưa có video đã merge
-                          </p>
-                          <p className="text-xs text-slate-500">
-                            Video hoàn tất sẽ xuất hiện tại tab này.
-                          </p>
-                        </div>
-                      ))}
-                    <p
-                      className={`text-[10px] leading-relaxed text-slate-500 ${videoWorkspaceTab === "preview" ? "" : "hidden"}`}
-                    >
-                      Preview logo và style phụ đề sẽ cập nhật trực tiếp khi
-                      phát hoặc tua video.
-                    </p>
-                    <div
-                      className={`flex flex-wrap items-center gap-2 ${videoWorkspaceTab === "preview" ? "" : "hidden"}`}
-                    >
-                      <button
-                        type="button"
-                        onClick={() => void playMixerPreview()}
-                        disabled={!videoPreviewReady || isMediaProcessing}
-                        title={
-                          hasPreviewTrack
-                            ? "Phát preview video và các track âm thanh đang bật"
-                            : "Phát video preview (im lặng nếu chưa có track âm thanh)"
-                        }
-                        className="inline-flex items-center gap-2 rounded-lg border border-cyan-500/30 bg-cyan-950/30 px-3 py-2 text-xs font-semibold text-cyan-100 hover:bg-cyan-950/60 disabled:cursor-not-allowed disabled:opacity-40"
-                      >
-                        {previewStatus === "playing" ? (
-                          <Pause className="h-3.5 w-3.5" />
-                        ) : (
-                          <Play className="h-3.5 w-3.5" />
-                        )}
-                        {previewStatus === "playing" ? "Tạm dừng" : "Phát"}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => void restartMixerPreview()}
-                        disabled={!videoPreviewReady || isMediaProcessing}
-                        className="inline-flex items-center gap-2 rounded-lg border border-slate-700 px-3 py-2 text-xs text-slate-300 hover:text-white disabled:opacity-40"
-                      >
-                        <RotateCcw className="h-3.5 w-3.5" />
-                        Phát lại từ đầu
-                      </button>
-                      <span className="text-xs tabular-nums text-slate-400">
-                        {formatDuration(previewCurrentTime)} /{" "}
-                        {formatDuration(job.metadata?.durationSeconds || 0)}
-                      </span>
-                    </div>
-                    {job.metadata && videoWorkspaceTab === "preview" && (
-                      <input
-                        type="range"
-                        min={0}
-                        max={job.metadata.durationSeconds}
-                        step={0.05}
-                        value={Math.min(
-                          previewCurrentTime,
-                          job.metadata.durationSeconds,
-                        )}
-                        onChange={(event) =>
-                          seekMixerPreview(Number(event.target.value))
-                        }
-                        disabled={!videoPreviewReady}
-                        className="w-full accent-cyan-400 disabled:opacity-40"
-                        aria-label="Tua video và các track mixer"
-                      />
-                    )}
-                    {videoWorkspaceTab === "preview" &&
-                      timelineWorkspaceTab === "subtitle" && (
-                        <section className="space-y-2 rounded-lg border border-amber-500/20 bg-amber-950/10 p-3">
-                          <button
-                            type="button"
-                            aria-expanded={!characterCardScanCollapsed}
-                            aria-controls="character-card-scan-panel"
-                            onClick={() =>
-                              setCharacterCardScanCollapsed(
-                                (collapsed) => !collapsed,
-                              )
-                            }
-                            className="flex w-full items-center justify-between gap-2 text-left text-xs font-semibold text-amber-100"
-                          >
-                            <span>Quét và tạo card nhân vật</span>
-                            <span className="flex items-center gap-2">
-                              {(characterCardOcrJob?.status === "running" ||
-                                characterCardReferenceScanJob?.status ===
-                                  "running") && (
-                                <span className="text-[10px] font-normal text-amber-200">
-                                  Đang quét…
-                                </span>
-                              )}
-                              <ChevronDown
-                                className={`h-4 w-4 transition-transform ${characterCardScanCollapsed ? "-rotate-90" : ""}`}
-                              />
-                            </span>
-                          </button>
-                          <div
-                            id="character-card-scan-panel"
-                            className={
-                              characterCardScanCollapsed
-                                ? "hidden"
-                                : "space-y-2"
-                            }
-                          >
-                            <div className="flex flex-wrap items-center gap-2">
-                              <button
-                                type="button"
-                                disabled={
-                                  characterCardOcrWorker.status ===
-                                    "starting" ||
-                                  characterCardOcrWorker.status === "ready" ||
-                                  characterCardOcrWorker.status === "busy"
-                                }
-                                onClick={() =>
-                                  void startCharacterCardOcrWorker()
-                                }
-                                className="rounded-md border border-cyan-500/30 px-2.5 py-1.5 text-xs text-cyan-100 hover:bg-cyan-950/40 disabled:cursor-not-allowed disabled:opacity-40"
-                              >
-                                {characterCardOcrWorker.status === "starting"
-                                  ? "Đang nạp OCR…"
-                                  : "Giữ OCR chạy"}
-                              </button>
-                              {(characterCardOcrWorker.status === "starting" ||
-                                characterCardOcrWorker.status === "ready" ||
-                                characterCardOcrWorker.status === "busy") && (
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    void stopCharacterCardOcrWorker()
-                                  }
-                                  className="rounded-md border border-rose-500/30 px-2.5 py-1.5 text-xs text-rose-200 hover:bg-rose-950/40"
-                                >
-                                  Dừng OCR
-                                </button>
-                              )}
-                              <span
-                                className="text-[10px] text-slate-400"
-                                role="status"
-                              >
-                                {characterCardOcrWorker.message}
-                              </span>
-                            </div>
-                            <p className="text-[10px] text-slate-500">
-                              Bật một lần để nạp model và tái sử dụng cho các
-                              lần quét tiếp theo; nhấn Dừng OCR để giải phóng
-                              RAM/VRAM.
-                            </p>
-                            <div className="flex flex-wrap items-center gap-2">
-                              <button
-                                type="button"
-                                disabled={
-                                  !videoPreviewReady ||
-                                  characterCardOcrJob?.status === "running" ||
-                                  characterCardOcrJob?.status === "queued"
-                                }
-                                onClick={() => {
-                                  setCharacterCardOcrError(null);
-                                  setCharacterCardDrawMode(
-                                    (drawing) => !drawing,
-                                  );
-                                  setCharacterCardDrawStart(null);
-                                  setCharacterCardRegionDraft(null);
-                                }}
-                                className={`rounded-md border px-2.5 py-1.5 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-40 ${characterCardDrawMode ? "border-amber-300 bg-amber-300 text-slate-950" : "border-amber-500/40 text-amber-100 hover:bg-amber-950/40"}`}
-                              >
-                                {characterCardDrawMode
-                                  ? "Đang vẽ vùng…"
-                                  : characterCardRegion
-                                    ? "Vẽ lại vùng card nhân vật"
-                                    : "Vẽ vùng card nhân vật"}
-                              </button>
-                              {characterCardRegion &&
-                                !characterCardDrawMode && (
-                                  <button
-                                    type="button"
-                                    disabled={
-                                      characterCardOcrJob?.status ===
-                                        "running" ||
-                                      characterCardOcrJob?.status === "queued"
-                                    }
-                                    onClick={() => setCharacterCardRegion(null)}
-                                    className="rounded-md border border-slate-700 px-2 py-1.5 text-xs text-slate-300 hover:bg-slate-800 disabled:opacity-40"
-                                  >
-                                    Xóa vùng
-                                  </button>
-                                )}
-                              <label className="flex items-center gap-2 text-xs text-slate-300">
-                                Bắt đầu trước playhead (giây)
-                                <input
-                                  type="number"
-                                  min={0}
-                                  max={60}
-                                  step={1}
-                                  value={characterCardOcrStartOffset}
-                                  onChange={(event) => {
-                                    const value = Number(event.target.value);
-                                    if (Number.isFinite(value)) {
-                                      setCharacterCardOcrStartOffset(
-                                        Math.max(0, Math.min(60, value)),
-                                      );
-                                    }
-                                  }}
-                                  className="w-16 rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-center text-xs text-white"
-                                />
-                              </label>
-                              <label className="flex items-center gap-2 text-xs text-slate-300">
-                                Độ dài quét (giây)
-                                <input
-                                  type="number"
-                                  min={1}
-                                  max={60}
-                                  step={1}
-                                  value={characterCardOcrDuration}
-                                  onChange={(event) => {
-                                    const value = Number(event.target.value);
-                                    if (Number.isFinite(value)) {
-                                      setCharacterCardOcrDuration(
-                                        Math.max(1, Math.min(60, value)),
-                                      );
-                                    }
-                                  }}
-                                  className="w-16 rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-center text-xs text-white"
-                                />
-                              </label>
-                              {characterCardOcrJob?.status === "running" ||
-                              characterCardOcrJob?.status === "queued" ? (
-                                <button
-                                  type="button"
-                                  onClick={() => void cancelCharacterCardOcr()}
-                                  className="rounded-md border border-rose-500/30 px-2.5 py-1.5 text-xs text-rose-200 hover:bg-rose-950/40"
-                                >
-                                  {characterCardOcrWorker.status === "busy"
-                                    ? "Hủy OCR · dừng worker"
-                                    : "Hủy OCR"}
-                                </button>
-                              ) : (
-                                <button
-                                  type="button"
-                                  disabled={
-                                    !job ||
-                                    !characterCardRegion ||
-                                    characterCardDrawMode ||
-                                    characterCardOcrWorker.status ===
-                                      "starting" ||
-                                    characterCardOcrWorker.status === "busy"
-                                  }
-                                  onClick={() =>
-                                    void createCharacterCardsAutomatically()
-                                  }
-                                  className="rounded-md bg-amber-300 px-2.5 py-1.5 text-xs font-bold text-slate-950 hover:bg-amber-200 disabled:cursor-not-allowed disabled:opacity-40"
-                                >
-                                  Tạo card tự động
-                                </button>
-                              )}
-                            </div>
-                            <p className="text-[10px] text-slate-400">
-                              Khoanh vùng chứa card trên preview và dùng ảnh mẫu
-                              đã crop sát card. OCR bắt đầu từ N giây trước thời
-                              điểm khớp, quét M giây và tự giới hạn trong video.
-                            </p>
-                            {characterCardDrawMode && (
-                              <p className="text-[10px] text-amber-200">
-                                Nhấn giữ và kéo trên video để chọn vùng.
-                              </p>
-                            )}
-                            {characterCardOcrJob && (
-                              <p
-                                className="text-[10px] text-slate-300"
-                                role="status"
-                              >
-                                {characterCardOcrJob.message}{" "}
-                                {characterCardOcrJob.status === "running" &&
-                                  `${characterCardOcrJob.progressPercent}%`}
-                              </p>
-                            )}
-                            {characterCardOcrError && (
-                              <p
-                                className="text-[10px] text-rose-300"
-                                role="alert"
-                              >
-                                {characterCardOcrError}
-                              </p>
-                            )}
-                            <div
-                              onPaste={pasteCharacterCardReference}
-                              tabIndex={0}
-                              className="space-y-3 rounded-lg border border-violet-500/25 bg-violet-950/10 p-3 outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
-                              aria-label="Ảnh mẫu card nhân vật"
-                            >
-                              <div className="flex flex-wrap items-center justify-between gap-2">
-                                <div>
-                                  <h4 className="text-xs font-semibold text-violet-100">
-                                    Tìm card theo ảnh mẫu
-                                  </h4>
-                                  <p className="mt-1 text-[10px] text-slate-400">
-                                    Dò ảnh bằng OpenCV rồi dùng OCR hiện có để
-                                    lọc kết quả không có chữ trước khi hiển thị.
-                                  </p>
-                                </div>
-                                <label
-                                  className={`rounded-md border border-violet-400/40 px-2.5 py-1.5 text-xs font-semibold text-violet-100 ${characterCardReferenceScanJob?.status === "running" ? "cursor-not-allowed opacity-40" : "cursor-pointer hover:bg-violet-950/50"}`}
-                                >
-                                  Chọn ảnh mẫu
-                                  <input
-                                    type="file"
-                                    accept="image/png,image/jpeg,image/webp"
-                                    className="sr-only"
-                                    disabled={
-                                      characterCardReferenceScanJob?.status ===
-                                      "running"
-                                    }
-                                    onChange={(event) => {
-                                      acceptCharacterCardReferenceFile(
-                                        event.target.files?.[0] ?? null,
-                                      );
-                                      event.target.value = "";
-                                    }}
-                                  />
-                                </label>
-                              </div>
-                              {characterCardReferencePreviewUrl ? (
-                                <div className="flex items-center gap-3">
-                                  <img
-                                    src={characterCardReferencePreviewUrl}
-                                    alt="Ảnh mẫu card nhân vật"
-                                    className="max-h-24 max-w-48 rounded border border-slate-700 object-contain"
-                                  />
-                                  <div className="min-w-0 flex-1 text-[10px] text-slate-400">
-                                    <p className="truncate">
-                                      {characterCardReferenceFile?.name ||
-                                        "Ảnh dán từ clipboard"}
-                                    </p>
-                                    <button
-                                      type="button"
-                                      disabled={
-                                        characterCardReferenceScanJob?.status ===
-                                        "running"
-                                      }
-                                      onClick={() => {
-                                        setCharacterCardReferenceFile(null);
-                                        setCharacterCardReferenceScanJob(null);
-                                        setCharacterCardReferenceError(null);
-                                      }}
-                                      className="mt-1 text-rose-200 hover:text-rose-100 disabled:cursor-not-allowed disabled:opacity-40"
-                                    >
-                                      Xóa ảnh mẫu
-                                    </button>
-                                  </div>
-                                </div>
-                              ) : (
-                                <p className="rounded-md border border-dashed border-slate-700 px-3 py-4 text-center text-[10px] text-slate-500">
-                                  Dán ảnh bằng Ctrl+V tại đây hoặc chọn ảnh
-                                  PNG/JPEG/WebP.
-                                </p>
-                              )}
-                              <div className="flex flex-wrap items-center gap-3">
-                                <label className="flex items-center gap-2 text-[10px] text-slate-300">
-                                  Bỏ qua frame
-                                  <input
-                                    type="number"
-                                    min={0}
-                                    max={10000}
-                                    step={1}
-                                    value={characterCardReferenceFramesToSkip}
-                                    onChange={(event) => {
-                                      const value = Number(event.target.value);
-                                      if (Number.isFinite(value)) {
-                                        setCharacterCardReferenceFramesToSkip(
-                                          Math.max(
-                                            0,
-                                            Math.min(10000, Math.round(value)),
-                                          ),
+                                                    ? `${margin}px`
+                                                    : undefined,
+                                                top: customPosition
+                                                  ? `${cue.yPercent}%`
+                                                  : cue.position.startsWith(
+                                                        "top-",
+                                                      )
+                                                    ? `${margin}px`
+                                                    : cue.position.startsWith(
+                                                          "middle-",
+                                                        )
+                                                      ? "50%"
+                                                      : undefined,
+                                                bottom:
+                                                  !customPosition &&
+                                                  cue.position.startsWith(
+                                                    "bottom-",
+                                                  )
+                                                    ? `${margin}px`
+                                                    : undefined,
+                                                transform: `translate(${horizontalTransform}, ${verticalTransform})`,
+                                              }}
+                                            >
+                                              {content}
+                                            </div>
+                                          </div>
                                         );
-                                      }
-                                    }}
-                                    className="w-20 rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-center text-xs text-white"
-                                  />
-                                  <span className="text-slate-500">
-                                    (
-                                    {(
-                                      (characterCardReferenceFramesToSkip + 1) /
-                                      (job?.metadata?.frameRate || 30)
-                                    ).toFixed(2)}{" "}
-                                    giây/mẫu)
-                                  </span>
-                                </label>
-                                <label className="flex items-center gap-2 text-[10px] text-slate-300">
-                                  Ngưỡng giống
-                                  <input
-                                    type="range"
-                                    min={0.3}
-                                    max={0.99}
-                                    step={0.01}
-                                    value={characterCardReferenceSimilarity}
-                                    onChange={(event) =>
-                                      setCharacterCardReferenceSimilarity(
-                                        Number(event.target.value),
-                                      )
-                                    }
-                                    className="w-24 accent-violet-400"
-                                  />
-                                  <span className="w-9 text-right tabular-nums">
-                                    {Math.round(
-                                      characterCardReferenceSimilarity * 100,
+                                      })}
+                                    {previewingEndScene &&
+                                      endSceneTextOverlays.map((cue, index) => {
+                                        const textAlign =
+                                          cue.textAlign ?? "center";
+                                        const horizontalTransform =
+                                          textAlign === "left"
+                                            ? "0%"
+                                            : textAlign === "right"
+                                              ? "-100%"
+                                              : "-50%";
+                                        const verticalTransform =
+                                          cue.position.startsWith("top-")
+                                            ? "0%"
+                                            : cue.position.startsWith("bottom-")
+                                              ? "-100%"
+                                              : "-50%";
+                                        return (
+                                          <div
+                                            key={`mixer-end-scene-${cue.id ?? index}`}
+                                            className="pointer-events-none absolute z-30"
+                                            style={{
+                                              left: `${cue.xPercent ?? 50}%`,
+                                              top: `${cue.yPercent ?? 50}%`,
+                                              transform: `translate(${horizontalTransform}, ${verticalTransform})`,
+                                            }}
+                                          >
+                                            <SubtitleOverlayRenderer
+                                              text={cue.text}
+                                              scale={previewOverlayScale}
+                                              fontSize={cue.fontSize}
+                                              fontFamily={cue.fontFamily}
+                                              fontWeight={cue.bold}
+                                              fontStyle={cue.italic}
+                                              underline={cue.underline ?? false}
+                                              textCase={cue.textCase ?? "none"}
+                                              outlineEnabled={
+                                                cue.outlineEnabled ?? false
+                                              }
+                                              outlineColor={
+                                                cue.outlineColor ?? "#000000"
+                                              }
+                                              outlineWidthPx={
+                                                cue.outlineWidthPx ?? 2
+                                              }
+                                              characterSpacingPx={
+                                                cue.characterSpacingPx ?? 0
+                                              }
+                                              lineSpacingPx={
+                                                cue.lineSpacingPx ?? 0
+                                              }
+                                              color={cue.color}
+                                              backgroundMode={
+                                                cue.backgroundTransparent
+                                                  ? "none"
+                                                  : "color"
+                                              }
+                                              backgroundColor={
+                                                cue.backgroundColor
+                                              }
+                                              paddingPx={cue.paddingPx}
+                                              position={cue.position}
+                                              textAlign={textAlign}
+                                              wrap={false}
+                                            />
+                                          </div>
+                                        );
+                                      })}
+                                    {(characterCardRegionDraft ||
+                                      characterCardRegion) && (
+                                      <div
+                                        aria-hidden="true"
+                                        className="pointer-events-none absolute z-30 border-2 border-amber-300 bg-amber-300/10"
+                                        style={{
+                                          left: `${(characterCardRegionDraft || characterCardRegion)!.left * 100}%`,
+                                          top: `${(characterCardRegionDraft || characterCardRegion)!.top * 100}%`,
+                                          width: `${(characterCardRegionDraft || characterCardRegion)!.width * 100}%`,
+                                          height: `${(characterCardRegionDraft || characterCardRegion)!.height * 100}%`,
+                                        }}
+                                      />
                                     )}
-                                    %
-                                  </span>
-                                </label>
-                                {characterCardReferenceScanJob?.status ===
-                                "running" ? (
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      void cancelCharacterCardReferenceScan()
-                                    }
-                                    className="rounded-md border border-rose-500/30 px-2.5 py-1.5 text-xs text-rose-200 hover:bg-rose-950/40"
-                                  >
-                                    Hủy quét
-                                  </button>
-                                ) : (
-                                  <button
-                                    type="button"
-                                    disabled={
-                                      !job ||
-                                      !characterCardRegion ||
-                                      !characterCardReferenceFile ||
-                                      characterCardDrawMode
-                                    }
-                                    onClick={() =>
-                                      void startCharacterCardReferenceScan()
-                                    }
-                                    className="rounded-md bg-violet-300 px-2.5 py-1.5 text-xs font-bold text-slate-950 hover:bg-violet-200 disabled:cursor-not-allowed disabled:opacity-40"
-                                  >
-                                    Quét toàn video
-                                  </button>
-                                )}
-                              </div>
-                              {characterCardReferenceScanJob?.status ===
-                                "running" && (
-                                <div className="space-y-1" role="status">
-                                  <div className="flex justify-between gap-2 text-[10px] text-slate-300">
-                                    <span>
-                                      {characterCardReferenceScanJob.message}
-                                    </span>
-                                    <span>
-                                      {
-                                        characterCardReferenceScanJob.progressPercent
-                                      }
-                                      %
-                                    </span>
-                                  </div>
-                                  <div className="h-1 overflow-hidden rounded bg-slate-800">
-                                    <div
-                                      className="h-full bg-violet-300 transition-[width]"
-                                      style={{
-                                        width: `${characterCardReferenceScanJob.progressPercent}%`,
-                                      }}
-                                    />
                                   </div>
                                 </div>
-                              )}
-                              {characterCardReferenceScanJob?.status ===
-                                "completed" && (
-                                <p
-                                  className="text-[10px] text-emerald-200"
-                                  role="status"
-                                >
-                                  {characterCardReferenceScanJob.message}
+                                {/* {videoWorkspaceTab === "end-scene" && (
+                         
+                        )} */}
+                                {/* {videoWorkspaceTab === "merged" &&
+                          (hasExportedVideo && job ? (
+                            <div className="space-y-3 rounded-xl border border-emerald-500/25 bg-emerald-950/20 p-3.5">
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <span className="text-xs font-semibold text-emerald-300">
+                                  {videoExport?.status === "completed" &&
+                                  isFinalMixCurrent
+                                    ? "MP4 đã xuất"
+                                    : "MP4 trước đó vẫn được giữ"}
+                                </span>
+                                <span className="text-xs text-slate-400">
+                                  {job.exportedVideoFileName ||
+                                    `${job.fileName.replace(/\.[^.]+$/, "")}_merged.mp4`}{" "}
+                                  ·{" "}
+                                  {formatFileSize(videoExport?.sizeBytes || 0)}
+                                  {videoExport?.durationSeconds !== undefined &&
+                                    ` · ${formatDuration(videoExport.durationSeconds)}`}
+                                </span>
+                              </div>
+                              {videoExport?.status === "completed" && (
+                                <p className="text-xs text-slate-400">
+                                  Thời gian export:{" "}
+                                  {formatElapsed(videoExport.elapsedSeconds)}
                                 </p>
                               )}
-                              {characterCardReferenceScanJob?.status ===
-                                "error" && (
-                                <p
-                                  className="text-[10px] text-rose-300"
-                                  role="alert"
-                                >
-                                  {characterCardReferenceScanJob.error ||
-                                    characterCardReferenceScanJob.message}
-                                </p>
-                              )}
-                              {characterCardReferenceError && (
-                                <p
-                                  className="text-[10px] text-rose-300"
-                                  role="alert"
-                                >
-                                  {characterCardReferenceError}
-                                </p>
-                              )}
-                            </div>
-                          </div>
-                        </section>
-                      )}
-                    {characterCardReferenceScanJob?.status === "completed" && (
-                      <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/80 p-3 backdrop-blur-sm sm:p-6">
-                        <section
-                          role="dialog"
-                          aria-modal="true"
-                          aria-labelledby="character-card-reference-results-title"
-                          className="flex max-h-[90vh] w-full max-w-4xl flex-col rounded-2xl border border-violet-500/30 bg-slate-900 shadow-2xl"
-                        >
-                          <header className="flex items-start gap-3 border-b border-slate-800 p-4">
-                            <div className="min-w-0 flex-1">
-                              <h3
-                                id="character-card-reference-results-title"
-                                className="text-sm font-bold text-white"
-                              >
-                                Kết quả tìm card theo ảnh mẫu
-                              </h3>
-                              <p className="mt-1 text-[10px] text-slate-400">
-                                Chọn các lần xuất hiện cần tạo card. OCR sẽ quét
-                                từ {characterCardOcrStartOffset} giây trước thời
-                                điểm khớp trong {characterCardOcrDuration} giây.
-                                Bật “Giữ OCR chạy” để tránh nạp lại model khi
-                                chọn nhiều khoảng.
-                              </p>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setCharacterCardReferenceScanJob(null);
-                                setCharacterCardReferenceSelectedIds([]);
-                              }}
-                              className="rounded-md p-1 text-slate-400 hover:bg-slate-800 hover:text-white"
-                              aria-label="Đóng kết quả quét ảnh mẫu"
-                            >
-                              <X className="h-4 w-4" />
-                            </button>
-                          </header>
-                          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 px-4 py-2">
-                            <label className="flex items-center gap-2 text-xs text-slate-300">
-                              <input
-                                type="checkbox"
-                                checked={
-                                  characterCardReferenceScanJob.results.length >
-                                    0 &&
-                                  characterCardReferenceSelectedIds.length ===
-                                    characterCardReferenceScanJob.results.length
-                                }
-                                onChange={(event) =>
-                                  setCharacterCardReferenceSelectedIds(
-                                    event.target.checked
-                                      ? characterCardReferenceScanJob.results.map(
-                                          (item) => item.id,
-                                        )
-                                      : [],
-                                  )
-                                }
-                                className="accent-violet-400"
+                              <video
+                                key={`merged-${job.id}-${videoExport?.completedAtMs}`}
+                                controls
+                                playsInline
+                                preload="metadata"
+                                src={`/api/video-dubbing/jobs/${job.id}/exported-video?v=${videoExport?.sizeBytes || 0}-${videoExport?.completedAtMs || 0}`}
+                                className="max-h-[min(65vh,760px)] w-full rounded-lg bg-black"
+                                aria-label="Merged Video"
                               />
-                              Chọn tất cả (
-                              {characterCardReferenceScanJob.results.length})
-                            </label>
-                            <span className="text-[10px] text-slate-500">
-                              Độ giống tối thiểu{" "}
-                              {Math.round(
-                                characterCardReferenceSimilarity * 100,
-                              )}
-                              %
-                            </span>
-                          </div>
-                          <div className="min-h-0 flex-1 overflow-y-auto p-4">
-                            {characterCardReferenceScanJob.results.length ? (
-                              <div className="grid gap-2 sm:grid-cols-2">
-                                {characterCardReferenceScanJob.results.map(
-                                  (item) => {
-                                    const checked =
-                                      characterCardReferenceSelectedIds.includes(
-                                        item.id,
-                                      );
-                                    return (
-                                      <label
-                                        key={item.id}
-                                        className={`flex cursor-pointer gap-3 rounded-lg border p-2.5 ${checked ? "border-violet-400/60 bg-violet-950/30" : "border-slate-800 bg-slate-950/50"}`}
-                                      >
-                                        <input
-                                          type="checkbox"
-                                          checked={checked}
-                                          onChange={(event) =>
-                                            setCharacterCardReferenceSelectedIds(
-                                              (current) =>
-                                                event.target.checked
-                                                  ? [...current, item.id]
-                                                  : current.filter(
-                                                      (id) => id !== item.id,
-                                                    ),
-                                            )
-                                          }
-                                          className="mt-1 accent-violet-400"
-                                          aria-label={`Chọn card tại ${formatDuration(item.time)}`}
-                                        />
-                                        {item.thumbnail && (
-                                          <img
-                                            src={item.thumbnail}
-                                            alt=""
-                                            className="h-20 w-32 shrink-0 rounded bg-black object-contain"
-                                          />
-                                        )}
-                                        <span className="min-w-0 text-[10px] text-slate-300">
-                                          <span className="block font-semibold text-white">
-                                            {formatDuration(item.startTime)} –{" "}
-                                            {formatDuration(item.endTime)}
-                                          </span>
-                                          <span className="mt-1 block text-slate-400">
-                                            Khớp tốt nhất:{" "}
-                                            {formatDuration(item.time)}
-                                          </span>
-                                          <span className="mt-1 block text-violet-200">
-                                            Độ giống{" "}
-                                            {Math.round(item.confidence * 100)}%
-                                          </span>
-                                        </span>
-                                      </label>
-                                    );
-                                  },
-                                )}
-                              </div>
-                            ) : (
-                              <p className="py-12 text-center text-sm text-slate-400">
-                                Không tìm thấy kết quả phù hợp có chữ. Hãy thử
-                                giảm ngưỡng giống hoặc chọn ảnh mẫu rõ hơn.
-                              </p>
-                            )}
-                            {characterCardOcrJob?.status === "running" && (
-                              <p
-                                className="mt-3 text-xs text-amber-200"
-                                role="status"
+                              <a
+                                href={`/api/video-dubbing/jobs/${job.id}/download`}
+                                download={
+                                  job.exportedVideoFileName ||
+                                  `${job.fileName.replace(/\.[^.]+$/, "")}_merged.mp4`
+                                }
+                                className="inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-500/40 px-4 py-2.5 text-sm font-bold text-emerald-200 hover:bg-emerald-950/60"
                               >
-                                {characterCardOcrJob.message}{" "}
-                                {characterCardOcrJob.progressPercent}%
+                                Tải MP4
+                              </a>
+                            </div>
+                          ) : (
+                            <div className="flex min-h-64 flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-slate-700 bg-slate-950/60 p-6 text-center">
+                              <Film className="h-8 w-8 text-slate-600" />
+                              <p className="text-sm font-semibold text-slate-300">
+                                Chưa có video đã merge
                               </p>
-                            )}
-                            {characterCardOcrError && (
-                              <p
-                                className="mt-3 text-xs text-rose-300"
-                                role="alert"
-                              >
-                                {characterCardOcrError}
-                              </p>
-                            )}
-                          </div>
-                          <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-800 p-4">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setCharacterCardReferenceScanJob(null);
-                                setCharacterCardReferenceSelectedIds([]);
-                              }}
-                              className="rounded-md border border-slate-700 px-3 py-2 text-xs text-slate-300 hover:bg-slate-800"
-                            >
-                              Đóng
-                            </button>
-                            <button
-                              type="button"
-                              disabled={
-                                !characterCardReferenceSelectedIds.length ||
-                                characterCardOcrJob?.status === "running" ||
-                                characterCardOcrJob?.status === "queued"
-                              }
-                              onClick={() => {
-                                const selectedOccurrences =
-                                  characterCardReferenceScanJob.results
-                                    .filter((item) =>
-                                      characterCardReferenceSelectedIds.includes(
-                                        item.id,
-                                      ),
-                                    )
-                                    .map(({ startTime, endTime, time }) => ({
-                                      startTime,
-                                      endTime,
-                                      time,
-                                    }));
-                                void createCharacterCardsAutomatically(
-                                  selectedOccurrences,
-                                );
-                              }}
-                              className="rounded-md bg-violet-300 px-3 py-2 text-xs font-bold text-slate-950 hover:bg-violet-200 disabled:cursor-not-allowed disabled:opacity-40"
-                            >
-                              Tạo card từ{" "}
-                              {characterCardReferenceSelectedIds.length} kết quả
-                              đã chọn
-                            </button>
-                          </footer>
-                        </section>
-                      </div>
-                    )}
-                    <p
-                      className={`text-[10px] leading-relaxed text-slate-500 ${videoWorkspaceTab === "preview" ? "" : "hidden"}`}
-                    >
-                      Video là mốc thời gian chính; nguồn video được làm im lặng
-                      trong preview. Các track chưa có hoặc chưa xác minh sẽ
-                      không thể chọn.
-                    </p>
-                  </div>
-                  {videoWorkspaceTab === "preview" && (
-                    <div className="space-y-3">
-                      <div
-                        role="tablist"
-                        aria-label="Timeline video dubbing"
-                        className="flex gap-1 rounded-xl border border-slate-800 bg-slate-950/70 p-1"
-                      >
-                        <button
-                          type="button"
-                          role="tab"
-                          aria-selected={timelineWorkspaceTab === "subtitle"}
-                          onClick={() => setTimelineWorkspaceTab("subtitle")}
-                          className={`flex-1 rounded-lg px-3 py-2 text-xs font-semibold ${timelineWorkspaceTab === "subtitle" ? "bg-cyan-400 text-slate-950" : "text-slate-300 hover:bg-slate-800"}`}
-                        >
-                          Timeline phụ đề
-                        </button>
-                        <button
-                          type="button"
-                          role="tab"
-                          aria-selected={timelineWorkspaceTab === "audio"}
-                          onClick={() => setTimelineWorkspaceTab("audio")}
-                          className={`flex-1 rounded-lg px-3 py-2 text-xs font-semibold ${timelineWorkspaceTab === "audio" ? "bg-violet-400 text-slate-950" : "text-slate-300 hover:bg-slate-800"}`}
-                        >
-                          Timeline âm thanh
-                        </button>
-                        <button
-                          type="button"
-                          role="tab"
-                          aria-selected={
-                            timelineWorkspaceTab === "subtitle-audio"
-                          }
-                          onClick={() =>
-                            setTimelineWorkspaceTab("subtitle-audio")
-                          }
-                          className={`flex-1 rounded-lg px-3 py-2 text-xs font-semibold ${timelineWorkspaceTab === "subtitle-audio" ? "bg-violet-400 text-slate-950" : "text-slate-300 hover:bg-slate-800"}`}
-                        >
-                          Subtitle-Audio
-                        </button>
-                      </div>
-                      {timelineWorkspaceTab === "subtitle-audio" && (
-                        <section className="space-y-3 rounded-xl border border-violet-500/25 bg-slate-950/70 p-3">
-                          <div className="flex flex-wrap items-center justify-between gap-3">
-                            <div>
-                              <h4 className="text-xs font-semibold text-white">
-                                Subtitle-Audio
-                              </h4>
-                              <p className="mt-1 text-[10px] text-slate-400">
-                                Sửa chữ không tự tạo lại audio; tạo lại Master
-                                sẽ dùng audio hiện có.
+                              <p className="text-xs text-slate-500">
+                                Video hoàn tất sẽ xuất hiện tại tab này.
                               </p>
                             </div>
-                            <div className="flex items-center gap-2">
-                              <span className="text-[10px] text-slate-400">
-                                {activeSubtitleAudioFilterCount
-                                  ? `${filteredSubtitleAudioInput.length}/${subtitleAudioInput.length} câu`
-                                  : `${subtitleAudioInput.length} câu`}
-                              </span>
-                              <div className="relative">
-                                <button
-                                  type="button"
-                                  aria-expanded={subtitleAudioFilterOpen}
-                                  aria-haspopup="dialog"
-                                  onClick={() =>
-                                    setSubtitleAudioFilterOpen((open) => !open)
-                                  }
-                                  className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-2 text-xs font-semibold ${activeSubtitleAudioFilterCount ? "border-cyan-400/50 bg-cyan-950/30 text-cyan-100" : "border-slate-700 text-slate-300 hover:bg-slate-800"}`}
+                          ))} */}
+                                <p
+                                  className={`text-[10px] leading-relaxed text-slate-500 ${videoWorkspaceTab === "preview" ? "" : "hidden"}`}
                                 >
-                                  <Filter className="h-3.5 w-3.5" />
-                                  Lọc
-                                  {activeSubtitleAudioFilterCount > 0 && (
-                                    <span className="rounded-full bg-cyan-300 px-1.5 text-[10px] font-bold text-slate-950">
-                                      {activeSubtitleAudioFilterCount}
-                                    </span>
-                                  )}
-                                </button>
-                                {subtitleAudioFilterOpen && (
-                                  <div
-                                    role="dialog"
-                                    aria-label="Lọc danh sách phụ đề"
-                                    className="absolute right-0 top-full z-30 mt-2 w-[min(22rem,calc(100vw-2rem))] space-y-3 rounded-xl border border-slate-700 bg-slate-900 p-3 shadow-2xl"
-                                  >
-                                    <div className="flex items-center justify-between gap-2">
-                                      <h5 className="text-xs font-semibold text-white">
-                                        Lọc câu phụ đề
-                                      </h5>
-                                      <button
-                                        type="button"
-                                        onClick={() =>
-                                          setSubtitleAudioFilterOpen(false)
-                                        }
-                                        className="rounded p-1 text-slate-400 hover:bg-slate-800 hover:text-white"
-                                        aria-label="Đóng bộ lọc"
-                                      >
-                                        <X className="h-3.5 w-3.5" />
-                                      </button>
-                                    </div>
-                                    <p className="text-[10px] text-slate-400">
-                                      Hiện các câu khớp với bất kỳ tiêu chí nào
-                                      đang bật.
-                                    </p>
-                                    <label className="flex items-center gap-2 text-xs text-slate-200">
-                                      <input
-                                        type="checkbox"
-                                        checked={
-                                          subtitleAudioShortFilterEnabled
-                                        }
-                                        onChange={(event) =>
-                                          setSubtitleAudioShortFilterEnabled(
-                                            event.target.checked,
-                                          )
-                                        }
-                                        className="accent-cyan-400"
-                                      />
-                                      Câu ngắn, tối đa{" "}
-                                      {subtitleAudioMaxCharacterCount} ký tự
-                                    </label>
-                                    <div
-                                      className={`flex items-center gap-3 pl-6 ${subtitleAudioShortFilterEnabled ? "" : "opacity-50"}`}
-                                    >
-                                      <span className="text-[10px] text-slate-500">
-                                        0
-                                      </span>
-                                      <input
-                                        type="range"
-                                        min={0}
-                                        max={20}
-                                        step={1}
-                                        value={subtitleAudioMaxCharacterCount}
-                                        disabled={
-                                          !subtitleAudioShortFilterEnabled
-                                        }
-                                        onChange={(event) =>
-                                          setSubtitleAudioMaxCharacterCount(
-                                            Number(event.target.value),
-                                          )
-                                        }
-                                        className="w-full accent-cyan-400"
-                                        aria-label="Số ký tự tối đa của câu ngắn"
-                                      />
-                                      <span className="w-5 text-right text-[10px] tabular-nums text-slate-400">
-                                        {subtitleAudioMaxCharacterCount}
-                                      </span>
-                                    </div>
-                                    <label className="flex items-center gap-2 text-xs text-slate-200">
-                                      <input
-                                        type="checkbox"
-                                        checked={
-                                          subtitleAudioSpecialCharactersFilterEnabled
-                                        }
-                                        onChange={(event) =>
-                                          setSubtitleAudioSpecialCharactersFilterEnabled(
-                                            event.target.checked,
-                                          )
-                                        }
-                                        className="accent-cyan-400"
-                                      />
-                                      Câu chỉ có ký tự đặc biệt, không có chữ
-                                      hoặc số
-                                    </label>
-                                    <label className="flex items-center gap-2 text-xs text-slate-200">
-                                      <input
-                                        type="checkbox"
-                                        checked={
-                                          subtitleAudioSimilarFilterEnabled
-                                        }
-                                        onChange={(event) =>
-                                          setSubtitleAudioSimilarFilterEnabled(
-                                            event.target.checked,
-                                          )
-                                        }
-                                        className="accent-cyan-400"
-                                      />
-                                      Câu liền kề giống nhau trên 80%
-                                    </label>
-                                    <div className="flex justify-end border-t border-slate-800 pt-2">
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          setSubtitleAudioShortFilterEnabled(
-                                            false,
-                                          );
-                                          setSubtitleAudioSpecialCharactersFilterEnabled(
-                                            false,
-                                          );
-                                          setSubtitleAudioSimilarFilterEnabled(
-                                            false,
-                                          );
-                                        }}
-                                        disabled={
-                                          !activeSubtitleAudioFilterCount
-                                        }
-                                        className="rounded-md px-2 py-1 text-[10px] font-semibold text-cyan-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
-                                      >
-                                        Xóa bộ lọc
-                                      </button>
-                                    </div>
-                                  </div>
-                                )}
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  void rebuildMasterFromSubtitleAudio()
-                                }
-                                disabled={
-                                  !subtitleAudioInput.length ||
-                                  subtitleAudioSyncing ||
-                                  subtitleAudioMasterBusy ||
-                                  Boolean(subtitleAudioRegeneratingId) ||
-                                  isMasterGenerating ||
-                                  isMediaProcessing
-                                }
-                                className="inline-flex items-center gap-2 rounded-lg bg-violet-400 px-3 py-2 text-xs font-bold text-slate-950 hover:bg-violet-300 disabled:cursor-not-allowed disabled:opacity-40"
-                              >
-                                {subtitleAudioMasterBusy ? (
-                                  <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
-                                ) : (
-                                  <RefreshCw className="h-3.5 w-3.5" />
-                                )}
-                                Tạo lại Master
-                              </button>
-                            </div>
-                          </div>
-                          {(subtitleAudioError || subtitleAudioSyncing) && (
-                            <p
-                              role={subtitleAudioError ? "alert" : "status"}
-                              className={`rounded-lg border px-3 py-2 text-[11px] ${subtitleAudioError ? "border-rose-500/30 bg-rose-950/30 text-rose-200" : "border-slate-700 bg-slate-900 text-slate-400"}`}
-                            >
-                              {subtitleAudioError ||
-                                "Đang đồng bộ danh sách câu phụ đề…"}
-                            </p>
-                          )}
-                          <div className="overflow-hidden rounded-lg border border-cyan-500/30 bg-cyan-950/10">
-                            <div
-                              role="row"
-                              aria-label="Câu phụ đề đang nói"
-                              className="grid w-full grid-cols-[3.5rem_minmax(0,1fr)_max-content_max-content] text-slate-300"
-                            >
-                              <div
-                                role="cell"
-                                className="px-2 py-1.5 font-mono text-cyan-300"
-                              >
-                                {activeSubtitleAudioItem?.index ?? "—"}
-                              </div>
-                              <div role="cell" className="min-w-0 px-2 py-1">
-                                <div className="flex min-w-0 items-center gap-2">
-                                  <span className="shrink-0 rounded bg-cyan-500/10 px-1.5 py-1 text-[9px] font-semibold text-cyan-200">
-                                    Đang nói
-                                  </span>
-                                  <input
-                                    type="text"
-                                    aria-label="Nội dung phụ đề đang nói"
-                                    placeholder="Không có câu phụ đề tại vị trí hiện tại"
-                                    value={
-                                      activeSubtitleAudioItem
-                                        ? (subtitleAudioDrafts[
-                                            activeSubtitleAudioItem.id
-                                          ] ?? activeSubtitleAudioItem.text)
-                                        : ""
-                                    }
-                                    onChange={(event) => {
-                                      if (!activeSubtitleAudioItem) return;
-                                      setSubtitleAudioDrafts((current) => ({
-                                        ...current,
-                                        [activeSubtitleAudioItem.id]:
-                                          event.target.value,
-                                      }));
-                                    }}
-                                    onBlur={() => {
-                                      if (activeSubtitleAudioItem) {
-                                        commitSubtitleAudioCueText(
-                                          activeSubtitleAudioItem.id,
-                                        );
-                                      }
-                                    }}
-                                    disabled={
-                                      !activeSubtitleAudioItem ||
-                                      subtitleAudioSyncing ||
-                                      Boolean(subtitleAudioRegeneratingId) ||
-                                      subtitleAudioMasterBusy ||
-                                      isMasterGenerating ||
-                                      isMediaProcessing
-                                    }
-                                    className="h-8 min-w-0 flex-1 rounded-md border border-cyan-500/30 bg-slate-950 px-2 text-xs text-slate-100 outline-none focus:border-cyan-300 disabled:opacity-60"
-                                  />
-                                  {activeSubtitleAudioItem && (
-                                    <span className="shrink-0 text-[10px] text-slate-500">
-                                      {formatDuration(
-                                        activeSubtitleAudioItem.startTime,
-                                      )}{" "}
-                                      –{" "}
-                                      {formatDuration(
-                                        activeSubtitleAudioItem.endTime,
-                                      )}
-                                    </span>
-                                  )}
-                                </div>
-                              </div>
-                              <div
-                                role="cell"
-                                className="whitespace-nowrap px-2 py-1"
-                              >
-                                <span
-                                  className={`inline-flex items-center gap-1.5 text-[10px] ${activeSubtitleAudioRow?.status === "failed" ? "text-rose-300" : "text-slate-500"}`}
+                                  Preview logo và style phụ đề sẽ cập nhật trực
+                                  tiếp khi phát hoặc tua video.
+                                </p>
+                                <div
+                                  className={`flex flex-wrap items-center gap-2 ${videoWorkspaceTab === "preview" ? "" : "hidden"}`}
                                 >
-                                  {activeSubtitleAudioRow?.status ===
-                                    "generating" && (
-                                    <LoaderCircle className="h-3 w-3 animate-spin" />
-                                  )}
-                                  {activeSubtitleAudioRow?.status === "failed"
-                                    ? activeSubtitleAudioRow.error ||
-                                      "Tạo audio thất bại"
-                                    : activeSubtitleAudioRow?.status ===
-                                        "generating"
-                                      ? "Đang tạo audio…"
-                                      : activeSubtitleAudioRow?.audioUrl
-                                        ? "Đã có audio"
-                                        : activeSubtitleAudioItem
-                                          ? "Chưa có audio"
-                                          : "—"}
-                                </span>
-                              </div>
-                              <div role="cell" className="px-2 py-1" />
-                              <div
-                                role="cell"
-                                className="col-span-4 flex flex-wrap items-center gap-1.5 border-t border-cyan-500/15 px-2 py-1.5"
-                              >
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    previousSubtitleAudioItem &&
-                                    seekSubtitleTimeline(
-                                      previousSubtitleAudioItem.startTime,
-                                    )
-                                  }
-                                  disabled={
-                                    !previousSubtitleAudioItem ||
-                                    subtitleAudioSyncing ||
-                                    isMediaProcessing
-                                  }
-                                  className="rounded-md border border-slate-700 px-2 py-1 text-[10px] font-semibold text-slate-200 hover:border-cyan-500/50 disabled:cursor-not-allowed disabled:opacity-40"
-                                  title="Nhảy đến câu phụ đề trước"
-                                >
-                                  Câu Trước
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    nextSubtitleAudioItem &&
-                                    seekSubtitleTimeline(
-                                      nextSubtitleAudioItem.startTime,
-                                    )
-                                  }
-                                  disabled={
-                                    !nextSubtitleAudioItem ||
-                                    subtitleAudioSyncing ||
-                                    isMediaProcessing
-                                  }
-                                  className="rounded-md border border-slate-700 px-2 py-1 text-[10px] font-semibold text-slate-200 hover:border-cyan-500/50 disabled:cursor-not-allowed disabled:opacity-40"
-                                  title="Nhảy đến câu phụ đề sau"
-                                >
-                                  Câu Sau
-                                </button>
-                                <span
-                                  className="mx-1 h-5 border-l border-slate-700"
-                                  aria-hidden="true"
-                                />
-                                <span
-                                  className="text-[10px] text-slate-400"
-                                  title="Điều chỉnh điểm bắt đầu"
-                                >
-                                  Trước
-                                </span>
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    activeSubtitleAudioItem &&
-                                    adjustSubtitleAudioCueTiming(
-                                      activeSubtitleAudioItem.id,
-                                      "start",
-                                      -1,
-                                    )
-                                  }
-                                  disabled={
-                                    !activeSubtitleAudioItem ||
-                                    subtitleAudioSyncing ||
-                                    Boolean(subtitleAudioRegeneratingId) ||
-                                    subtitleAudioMasterBusy ||
-                                    isMasterGenerating ||
-                                    isMediaProcessing
-                                  }
-                                  aria-label={`Mở rộng phía trước ${subtitleAudioTimingStepMs} mili giây`}
-                                  title="Mở rộng thời gian phía trước"
-                                  className="rounded-md border border-cyan-500/30 px-2 py-1 text-xs font-bold text-cyan-200 hover:bg-cyan-950/40 disabled:cursor-not-allowed disabled:opacity-40"
-                                >
-                                  +
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    activeSubtitleAudioItem &&
-                                    adjustSubtitleAudioCueTiming(
-                                      activeSubtitleAudioItem.id,
-                                      "start",
-                                      1,
-                                    )
-                                  }
-                                  disabled={
-                                    !activeSubtitleAudioItem ||
-                                    subtitleAudioSyncing ||
-                                    Boolean(subtitleAudioRegeneratingId) ||
-                                    subtitleAudioMasterBusy ||
-                                    isMasterGenerating ||
-                                    isMediaProcessing
-                                  }
-                                  aria-label={`Thu gọn phía trước ${subtitleAudioTimingStepMs} mili giây`}
-                                  title="Thu gọn thời gian phía trước"
-                                  className="rounded-md border border-slate-700 px-2 py-1 text-xs font-bold text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
-                                >
-                                  −
-                                </button>
-                                <input
-                                  type="number"
-                                  min={1}
-                                  step={1}
-                                  value={subtitleAudioTimingStepMs}
-                                  onChange={(event) => {
-                                    const value = Number(event.target.value);
-                                    if (Number.isFinite(value) && value >= 1) {
-                                      setSubtitleAudioTimingStepMs(
-                                        Math.round(value),
-                                      );
-                                    }
-                                  }}
-                                  aria-label="Bước chỉnh thời gian câu đang nói (mili giây)"
-                                  className="h-7 w-16 rounded border border-slate-700 bg-slate-950 px-1 text-center text-[10px] tabular-nums text-slate-200"
-                                />
-                                <span className="-ml-1 text-[10px] text-slate-400">
-                                  ms
-                                </span>
-                                <span
-                                  className="mx-1 h-5 border-l border-slate-700"
-                                  aria-hidden="true"
-                                />
-                                <span
-                                  className="text-[10px] text-slate-400"
-                                  title="Điều chỉnh điểm kết thúc"
-                                >
-                                  Sau
-                                </span>
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    activeSubtitleAudioItem &&
-                                    adjustSubtitleAudioCueTiming(
-                                      activeSubtitleAudioItem.id,
-                                      "end",
-                                      -1,
-                                    )
-                                  }
-                                  disabled={
-                                    !activeSubtitleAudioItem ||
-                                    subtitleAudioSyncing ||
-                                    Boolean(subtitleAudioRegeneratingId) ||
-                                    subtitleAudioMasterBusy ||
-                                    isMasterGenerating ||
-                                    isMediaProcessing
-                                  }
-                                  aria-label={`Thu gọn phía sau ${subtitleAudioTimingStepMs} mili giây`}
-                                  title="Thu gọn thời gian phía sau"
-                                  className="rounded-md border border-slate-700 px-2 py-1 text-xs font-bold text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
-                                >
-                                  −
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    activeSubtitleAudioItem &&
-                                    adjustSubtitleAudioCueTiming(
-                                      activeSubtitleAudioItem.id,
-                                      "end",
-                                      1,
-                                    )
-                                  }
-                                  disabled={
-                                    !activeSubtitleAudioItem ||
-                                    subtitleAudioSyncing ||
-                                    Boolean(subtitleAudioRegeneratingId) ||
-                                    subtitleAudioMasterBusy ||
-                                    isMasterGenerating ||
-                                    isMediaProcessing
-                                  }
-                                  aria-label={`Mở rộng phía sau ${subtitleAudioTimingStepMs} mili giây`}
-                                  title="Mở rộng thời gian phía sau"
-                                  className="rounded-md border border-cyan-500/30 px-2 py-1 text-xs font-bold text-cyan-200 hover:bg-cyan-950/40 disabled:cursor-not-allowed disabled:opacity-40"
-                                >
-                                  +
-                                </button>
-                                <span
-                                  className="mx-1 h-5 border-l border-slate-700"
-                                  aria-hidden="true"
-                                />
-                                {activeSubtitleAudioRow?.audioUrl && (
                                   <button
                                     type="button"
-                                    onClick={() =>
-                                      void playSubtitleAudio(
-                                        activeSubtitleAudioRow,
-                                      )
-                                    }
-                                    aria-label={
-                                      subtitleAudioPlayingId ===
-                                      activeSubtitleAudioRow.id
-                                        ? "Dừng audio câu đang nói"
-                                        : "Phát audio câu đang nói"
+                                    onClick={() => void playMixerPreview()}
+                                    disabled={
+                                      !videoPreviewReady || isMediaProcessing
                                     }
                                     title={
-                                      subtitleAudioPlayingId ===
-                                      activeSubtitleAudioRow.id
-                                        ? "Dừng phát"
-                                        : "Phát audio"
+                                      hasPreviewTrack
+                                        ? "Phát preview video và các track âm thanh đang bật"
+                                        : "Phát video preview (im lặng nếu chưa có track âm thanh)"
                                     }
-                                    className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-violet-500/30 bg-violet-500/10 text-violet-200 hover:bg-violet-500/20"
+                                    className="inline-flex items-center gap-2 rounded-lg border border-cyan-500/30 bg-cyan-950/30 px-3 py-2 text-xs font-semibold text-cyan-100 hover:bg-cyan-950/60 disabled:cursor-not-allowed disabled:opacity-40"
                                   >
-                                    {subtitleAudioPlayingId ===
-                                    activeSubtitleAudioRow.id ? (
+                                    {previewStatus === "playing" ? (
                                       <Pause className="h-3.5 w-3.5" />
                                     ) : (
                                       <Play className="h-3.5 w-3.5" />
                                     )}
+                                    {previewStatus === "playing"
+                                      ? "Tạm dừng"
+                                      : "Phát"}
                                   </button>
-                                )}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    if (activeSubtitleAudio) {
-                                      regenerateSubtitleAudioWithDraft(
-                                        activeSubtitleAudio,
-                                      );
+                                  <button
+                                    type="button"
+                                    onClick={() => void restartMixerPreview()}
+                                    disabled={
+                                      !videoPreviewReady || isMediaProcessing
                                     }
-                                  }}
-                                  disabled={
-                                    !activeSubtitleAudio ||
-                                    !selectedVoice ||
-                                    subtitleAudioSyncing ||
-                                    Boolean(subtitleAudioRegeneratingId) ||
-                                    subtitleAudioMasterBusy ||
-                                    isMasterGenerating ||
-                                    isMediaProcessing
-                                  }
-                                  className="inline-flex items-center gap-1 rounded-md border border-violet-500/30 bg-violet-500/10 px-2 py-1 text-[10px] font-semibold text-violet-200 hover:bg-violet-500/20 disabled:cursor-not-allowed disabled:opacity-40"
-                                  title="Tạo lại TTS cho câu đang nói"
-                                >
-                                  {subtitleAudioRegeneratingId ===
-                                  activeSubtitleAudioItem?.id ? (
-                                    <LoaderCircle className="h-3 w-3 animate-spin" />
-                                  ) : (
-                                    <RefreshCw className="h-3 w-3" />
-                                  )}
-                                  Tạo lại
-                                </button>
-                              </div>
-                            </div>
-                          </div>
-                          <div className="max-h-[70vh] overflow-auto rounded-lg border border-slate-800">
-                            <div
-                              role="table"
-                              aria-label="Danh sách phụ đề và audio"
-                              className="w-full text-xs"
-                            >
-                              <div role="rowgroup">
-                                <div
-                                  role="row"
-                                  className="sticky top-0 z-10 grid w-full grid-cols-[3.5rem_minmax(0,1fr)_max-content_max-content] bg-slate-900 text-[10px] uppercase tracking-wider text-slate-500"
-                                >
-                                  <div
-                                    role="columnheader"
-                                    className="px-2 py-2"
+                                    className="inline-flex items-center gap-2 rounded-lg border border-slate-700 px-3 py-2 text-xs text-slate-300 hover:text-white disabled:opacity-40"
                                   >
-                                    #
-                                  </div>
-                                  <div
-                                    role="columnheader"
-                                    className="px-2 py-2"
-                                  >
-                                    Phụ đề
-                                  </div>
-                                  <div
-                                    role="columnheader"
-                                    className="whitespace-nowrap px-2 py-2"
-                                  >
-                                    Audio
-                                  </div>
-                                  <div
-                                    role="columnheader"
-                                    className="whitespace-nowrap px-2 py-2 text-right"
-                                  >
-                                    Tác vụ
-                                  </div>
-                                </div>
-                              </div>
-                              <div
-                                role="rowgroup"
-                                className="divide-y divide-slate-800/80"
-                              >
-                                {filteredSubtitleAudioInput.length ? (
-                                  filteredSubtitleAudioInput.map((item) => {
-                                    const audio = subtitleAudioItems.find(
-                                      (entry) => entry.id === item.id,
-                                    );
-                                    const editedAfterAudio = Boolean(
-                                      audio?.audioUrl &&
-                                      audio.generatedText !== item.text,
-                                    );
-                                    const subtitleItem: SubtitleItem = {
-                                      ...item,
-                                      targetDuration: Math.max(
-                                        0.1,
-                                        item.endTime - item.startTime,
-                                      ),
-                                      status: "pending",
-                                    };
-                                    const subtitleCueIndex =
-                                      previewSubtitleCues.findIndex(
-                                        (cue) => cue.id === item.id,
-                                      );
-                                    const combineDisabled =
-                                      subtitleCueIndex <= 0 ||
-                                      subtitleAudioSyncing ||
-                                      Boolean(subtitleAudioRegeneratingId) ||
-                                      subtitleAudioMasterBusy ||
-                                      isMasterGenerating ||
-                                      isMediaProcessing;
-                                    return (
-                                      <div
-                                        key={item.id}
-                                        role="row"
-                                        className="grid w-full grid-cols-[3.5rem_minmax(0,1fr)_max-content_max-content] text-slate-300"
-                                      >
-                                        <div
-                                          role="cell"
-                                          onClick={() =>
-                                            seekSubtitleTimeline(item.startTime)
-                                          }
-                                          title={`Tua preview đến câu ${item.index}`}
-                                          className="cursor-pointer px-2 py-1.5 font-mono text-slate-500 hover:bg-cyan-950/20"
-                                        >
-                                          {item.index}
+                                    <RotateCcw className="h-3.5 w-3.5" />
+                                    Phát lại từ đầu
+                                  </button>
+                                  <span className="text-xs tabular-nums text-slate-400">
+                                    {formatDuration(previewCurrentTime)} /{" "}
+                                    {formatDuration(
+                                      job.metadata?.durationSeconds || 0,
+                                    )}
+                                  </span>
+                                  {selectedSubtitleCue !== null &&
+                                    previewSubtitleCues[
+                                      selectedSubtitleCue
+                                    ] && (
+                                      <div className="flex flex-1 min-w-0 items-center gap-2 rounded-lg">
+                                        <label className="flex-1 min-w-0 space-y-1 text-[10px] text-slate-400">
+                                          Nội dung câu {selectedSubtitleCue + 1}
+                                          <textarea
+                                            value={
+                                              previewSubtitleCues[
+                                                selectedSubtitleCue
+                                              ].text
+                                            }
+                                            onChange={(event) =>
+                                              updateSelectedSubtitleCue({
+                                                text: event.target.value,
+                                              })
+                                            }
+                                            rows={2}
+                                            className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 text-xs text-white"
+                                          />
+                                          {subtitleAudioError && (
+                                            <p
+                                              role="alert"
+                                              className="rounded-md border border-rose-500/30 bg-rose-950/20 px-2 py-1.5 text-[10px] text-rose-200 sm:col-span-2"
+                                            >
+                                              {subtitleAudioError}
+                                            </p>
+                                          )}
+                                        </label>
+
+                                        <div className="flex shrink-0 flex-wrap items-center gap-2">
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              if (selectedSubtitleCueTtsItem) {
+                                                void regenerateSubtitleAudio(
+                                                  selectedSubtitleCueTtsItem,
+                                                );
+                                              }
+                                            }}
+                                            disabled={
+                                              !selectedSubtitleCueTtsItem ||
+                                              !selectedVoice ||
+                                              subtitleAudioSyncing ||
+                                              Boolean(
+                                                subtitleAudioRegeneratingId,
+                                              ) ||
+                                              subtitleAudioMasterBusy ||
+                                              isMasterGenerating ||
+                                              isMediaProcessing
+                                            }
+                                            className="inline-flex items-center justify-center gap-1 rounded-md border border-violet-500/30 bg-violet-500/10 px-2 py-1.5 text-xs text-violet-200 hover:bg-violet-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                                            title="Tạo lại TTS cho câu đang chọn"
+                                          >
+                                            {subtitleAudioRegeneratingId ===
+                                            selectedSubtitleCueTtsItem?.id ? (
+                                              <LoaderCircle className="h-3 w-3 animate-spin" />
+                                            ) : (
+                                              <RefreshCw className="h-3 w-3" />
+                                            )}
+                                            Tạo lại TTS
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() =>
+                                              void rebuildMasterFromSubtitleAudio()
+                                            }
+                                            disabled={
+                                              !subtitleAudioInput.length ||
+                                              subtitleAudioSyncing ||
+                                              Boolean(
+                                                subtitleAudioRegeneratingId,
+                                              ) ||
+                                              subtitleAudioMasterBusy ||
+                                              isMasterGenerating ||
+                                              isMediaProcessing
+                                            }
+                                            className="inline-flex items-center justify-center gap-1 rounded-md border border-violet-500/30 px-2 py-1.5 text-xs text-violet-200 hover:bg-violet-950/30 disabled:cursor-not-allowed disabled:opacity-40"
+                                            title="Tạo lại Master từ audio của các câu phụ đề"
+                                          >
+                                            {subtitleAudioMasterBusy ||
+                                            isMasterGenerating ? (
+                                              <LoaderCircle className="h-3 w-3 animate-spin" />
+                                            ) : (
+                                              <RefreshCw className="h-3 w-3" />
+                                            )}
+                                            Tạo lại Master
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              updatePreviewSubtitleCues(
+                                                (cues) =>
+                                                  cues.filter(
+                                                    (_, index) =>
+                                                      index !==
+                                                      selectedSubtitleCue,
+                                                  ),
+                                              );
+                                              setSelectedSubtitleCue(null);
+                                            }}
+                                            className="inline-flex items-center justify-center gap-1 rounded-md border border-rose-500/30 px-2 py-1.5 text-xs text-rose-200 hover:bg-rose-950/30"
+                                          >
+                                            <Trash2 className="h-3 w-3" />
+                                            Xóa câu
+                                          </button>
                                         </div>
-                                        <div
-                                          role="cell"
-                                          onClick={() =>
-                                            seekSubtitleTimeline(item.startTime)
-                                          }
-                                          title={`Tua preview đến câu ${item.index}`}
-                                          className="min-w-0 cursor-pointer px-2 py-1 hover:bg-cyan-950/20"
+                                      </div>
+                                    )}
+                                </div>
+                                {job.metadata &&
+                                  videoWorkspaceTab === "preview" && (
+                                    <input
+                                      type="range"
+                                      min={0}
+                                      max={job.metadata.durationSeconds}
+                                      step={0.05}
+                                      value={Math.min(
+                                        previewCurrentTime,
+                                        job.metadata.durationSeconds,
+                                      )}
+                                      onChange={(event) =>
+                                        seekMixerPreview(
+                                          Number(event.target.value),
+                                        )
+                                      }
+                                      disabled={!videoPreviewReady}
+                                      className="w-full accent-cyan-400 disabled:opacity-40"
+                                      aria-label="Tua video và các track mixer"
+                                    />
+                                  )}
+
+                                {characterCardReferenceScanJob?.status ===
+                                  "completed" && (
+                                  <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/80 p-3 backdrop-blur-sm sm:p-6">
+                                    <section
+                                      role="dialog"
+                                      aria-modal="true"
+                                      aria-labelledby="character-card-reference-results-title"
+                                      className="flex max-h-[90vh] w-full max-w-4xl flex-col rounded-2xl border border-violet-500/30 bg-slate-900 shadow-2xl"
+                                    >
+                                      <header className="flex items-start gap-3 border-b border-slate-800 p-4">
+                                        <div className="min-w-0 flex-1">
+                                          <h3
+                                            id="character-card-reference-results-title"
+                                            className="text-sm font-bold text-white"
+                                          >
+                                            Kết quả tìm card theo ảnh mẫu
+                                          </h3>
+                                          <p className="mt-1 text-[10px] text-slate-400">
+                                            Chọn các lần xuất hiện cần tạo card.
+                                            OCR sẽ quét từ{" "}
+                                            {characterCardOcrStartOffset} giây
+                                            trước thời điểm khớp trong{" "}
+                                            {characterCardOcrDuration} giây. Bật
+                                            “Giữ OCR chạy” để tránh nạp lại
+                                            model khi chọn nhiều khoảng.
+                                          </p>
+                                        </div>
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setCharacterCardReferenceScanJob(
+                                              null,
+                                            );
+                                            setCharacterCardReferenceSelectedIds(
+                                              [],
+                                            );
+                                          }}
+                                          className="rounded-md p-1 text-slate-400 hover:bg-slate-800 hover:text-white"
+                                          aria-label="Đóng kết quả quét ảnh mẫu"
                                         >
-                                          <div className="flex min-w-0 items-center gap-2">
-                                            <input
-                                              type="text"
-                                              aria-label={`Nội dung phụ đề câu ${item.index}`}
-                                              value={
-                                                subtitleAudioDrafts[item.id] ??
-                                                item.text
-                                              }
-                                              onChange={(event) =>
-                                                setSubtitleAudioDrafts(
-                                                  (current) => ({
-                                                    ...current,
-                                                    [item.id]:
-                                                      event.target.value,
-                                                  }),
-                                                )
-                                              }
-                                              onBlur={() =>
-                                                commitSubtitleAudioCueText(
-                                                  item.id,
-                                                )
-                                              }
-                                              disabled={
-                                                subtitleAudioSyncing ||
-                                                Boolean(
-                                                  subtitleAudioRegeneratingId,
-                                                ) ||
-                                                subtitleAudioMasterBusy ||
-                                                isMasterGenerating ||
-                                                isMediaProcessing
-                                              }
-                                              className="h-8 min-w-0 flex-1 rounded-md border border-slate-700 bg-slate-950 px-2 text-xs text-slate-100 outline-none focus:border-violet-400"
-                                            />
-                                            <span className="shrink-0 text-[10px] text-slate-500">
-                                              {formatDuration(item.startTime)} –{" "}
-                                              {formatDuration(item.endTime)}
-                                            </span>
-                                            {editedAfterAudio && (
-                                              <span
-                                                className="shrink-0 text-[10px] text-amber-300"
-                                                title="Audio vẫn dùng nội dung trước"
-                                              >
-                                                Audio cũ
-                                              </span>
+                                          <X className="h-4 w-4" />
+                                        </button>
+                                      </header>
+                                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 px-4 py-2">
+                                        <label className="flex items-center gap-2 text-xs text-slate-300">
+                                          <input
+                                            type="checkbox"
+                                            checked={
+                                              characterCardReferenceScanJob
+                                                .results.length > 0 &&
+                                              characterCardReferenceSelectedIds.length ===
+                                                characterCardReferenceScanJob
+                                                  .results.length
+                                            }
+                                            onChange={(event) =>
+                                              setCharacterCardReferenceSelectedIds(
+                                                event.target.checked
+                                                  ? characterCardReferenceScanJob.results.map(
+                                                      (item) => item.id,
+                                                    )
+                                                  : [],
+                                              )
+                                            }
+                                            className="accent-violet-400"
+                                          />
+                                          Chọn tất cả (
+                                          {
+                                            characterCardReferenceScanJob
+                                              .results.length
+                                          }
+                                          )
+                                        </label>
+                                        <span className="text-[10px] text-slate-500">
+                                          Độ giống tối thiểu{" "}
+                                          {Math.round(
+                                            characterCardReferenceSimilarity *
+                                              100,
+                                          )}
+                                          %
+                                        </span>
+                                      </div>
+                                      <div className="min-h-0 flex-1 overflow-y-auto p-4">
+                                        {characterCardReferenceScanJob.results
+                                          .length ? (
+                                          <div className="grid gap-2 sm:grid-cols-2">
+                                            {characterCardReferenceScanJob.results.map(
+                                              (item) => {
+                                                const checked =
+                                                  characterCardReferenceSelectedIds.includes(
+                                                    item.id,
+                                                  );
+                                                return (
+                                                  <label
+                                                    key={item.id}
+                                                    className={`flex cursor-pointer gap-3 rounded-lg border p-2.5 ${checked ? "border-violet-400/60 bg-violet-950/30" : "border-slate-800 bg-slate-950/50"}`}
+                                                  >
+                                                    <input
+                                                      type="checkbox"
+                                                      checked={checked}
+                                                      onChange={(event) =>
+                                                        setCharacterCardReferenceSelectedIds(
+                                                          (current) =>
+                                                            event.target.checked
+                                                              ? [
+                                                                  ...current,
+                                                                  item.id,
+                                                                ]
+                                                              : current.filter(
+                                                                  (id) =>
+                                                                    id !==
+                                                                    item.id,
+                                                                ),
+                                                        )
+                                                      }
+                                                      className="mt-1 accent-violet-400"
+                                                      aria-label={`Chọn card tại ${formatDuration(item.time)}`}
+                                                    />
+                                                    {item.thumbnail && (
+                                                      <img
+                                                        src={item.thumbnail}
+                                                        alt=""
+                                                        className="h-20 w-32 shrink-0 rounded bg-black object-contain"
+                                                      />
+                                                    )}
+                                                    <span className="min-w-0 text-[10px] text-slate-300">
+                                                      <span className="block font-semibold text-white">
+                                                        {formatDuration(
+                                                          item.startTime,
+                                                        )}{" "}
+                                                        –{" "}
+                                                        {formatDuration(
+                                                          item.endTime,
+                                                        )}
+                                                      </span>
+                                                      <span className="mt-1 block text-slate-400">
+                                                        Khớp tốt nhất:{" "}
+                                                        {formatDuration(
+                                                          item.time,
+                                                        )}
+                                                      </span>
+                                                      <span className="mt-1 block text-violet-200">
+                                                        Độ giống{" "}
+                                                        {Math.round(
+                                                          item.confidence * 100,
+                                                        )}
+                                                        %
+                                                      </span>
+                                                    </span>
+                                                  </label>
+                                                );
+                                              },
                                             )}
                                           </div>
-                                        </div>
-                                        <div
-                                          role="cell"
-                                          className="whitespace-nowrap px-2 py-1"
+                                        ) : (
+                                          <p className="py-12 text-center text-sm text-slate-400">
+                                            Không tìm thấy kết quả phù hợp có
+                                            chữ. Hãy thử giảm ngưỡng giống hoặc
+                                            chọn ảnh mẫu rõ hơn.
+                                          </p>
+                                        )}
+                                        {characterCardOcrJob?.status ===
+                                          "running" && (
+                                          <p
+                                            className="mt-3 text-xs text-amber-200"
+                                            role="status"
+                                          >
+                                            {characterCardOcrJob.message}{" "}
+                                            {
+                                              characterCardOcrJob.progressPercent
+                                            }
+                                            %
+                                          </p>
+                                        )}
+                                        {characterCardOcrError && (
+                                          <p
+                                            className="mt-3 text-xs text-rose-300"
+                                            role="alert"
+                                          >
+                                            {characterCardOcrError}
+                                          </p>
+                                        )}
+                                      </div>
+                                      <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-800 p-4">
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setCharacterCardReferenceScanJob(
+                                              null,
+                                            );
+                                            setCharacterCardReferenceSelectedIds(
+                                              [],
+                                            );
+                                          }}
+                                          className="rounded-md border border-slate-700 px-3 py-2 text-xs text-slate-300 hover:bg-slate-800"
                                         >
-                                          {audio?.audioUrl ? (
-                                            <div className="flex items-center gap-2">
+                                          Đóng
+                                        </button>
+                                        <button
+                                          type="button"
+                                          disabled={
+                                            !characterCardReferenceSelectedIds.length ||
+                                            characterCardOcrJob?.status ===
+                                              "running" ||
+                                            characterCardOcrJob?.status ===
+                                              "queued"
+                                          }
+                                          onClick={() => {
+                                            const selectedOccurrences =
+                                              characterCardReferenceScanJob.results
+                                                .filter((item) =>
+                                                  characterCardReferenceSelectedIds.includes(
+                                                    item.id,
+                                                  ),
+                                                )
+                                                .map(
+                                                  ({
+                                                    startTime,
+                                                    endTime,
+                                                    time,
+                                                  }) => ({
+                                                    startTime,
+                                                    endTime,
+                                                    time,
+                                                  }),
+                                                );
+                                            void createCharacterCardsAutomatically(
+                                              selectedOccurrences,
+                                            );
+                                          }}
+                                          className="rounded-md bg-violet-300 px-3 py-2 text-xs font-bold text-slate-950 hover:bg-violet-200 disabled:cursor-not-allowed disabled:opacity-40"
+                                        >
+                                          Tạo card từ{" "}
+                                          {
+                                            characterCardReferenceSelectedIds.length
+                                          }{" "}
+                                          kết quả đã chọn
+                                        </button>
+                                      </footer>
+                                    </section>
+                                  </div>
+                                )}
+                                <p
+                                  className={`text-[10px] leading-relaxed text-slate-500 ${videoWorkspaceTab === "preview" ? "" : "hidden"}`}
+                                >
+                                  Video là mốc thời gian chính; nguồn video được
+                                  làm im lặng trong preview. Các track chưa có
+                                  hoặc chưa xác minh sẽ không thể chọn.
+                                </p>
+                              </div>
+                            </div>
+
+                            {/* Right Column - Fixed 350px */}
+                            <div className="w-[350px]">
+                              <Tabs
+                                defaultTab="logotitle"
+                                tabs={[
+                                  {
+                                    id: "logotitle",
+                                    label: "Logo & Title",
+                                    content: (
+                                      <div className="space-y-3">
+                                        <div className="flex flex-wrap items-center justify-between gap-3">
+                                          <label className="flex items-center gap-2 text-sm font-semibold text-slate-100">
+                                            <input
+                                              type="checkbox"
+                                              checked={logoEnabled}
+                                              disabled={
+                                                !job?.overlaySettings
+                                                  ?.logoFileName ||
+                                                logoUploading
+                                              }
+                                              onChange={(event) =>
+                                                setLogoEnabled(
+                                                  event.target.checked,
+                                                )
+                                              }
+                                              className="accent-sky-400"
+                                            />
+                                            Bật logo
+                                          </label>
+                                          <input
+                                            ref={logoInputRef}
+                                            type="file"
+                                            accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp"
+                                            className="hidden"
+                                            onChange={(event) => {
+                                              const file =
+                                                event.target.files?.[0];
+                                              event.target.value = "";
+                                              if (file)
+                                                void uploadOverlayLogo(file);
+                                            }}
+                                          />
+                                          <button
+                                            type="button"
+                                            onClick={() =>
+                                              logoInputRef.current?.click()
+                                            }
+                                            disabled={
+                                              !job ||
+                                              logoUploading ||
+                                              isMediaProcessing
+                                            }
+                                            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-200 hover:border-sky-400/50 disabled:cursor-not-allowed disabled:opacity-50"
+                                          >
+                                            {logoUploading ? (
+                                              <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+                                            ) : (
+                                              <Upload className="h-3.5 w-3.5" />
+                                            )}
+                                            {job?.overlaySettings?.logoFileName
+                                              ? "Thay logo"
+                                              : "Thêm logo"}
+                                          </button>
+                                        </div>
+                                        {job?.overlaySettings?.logoFileName ? (
+                                          <div className="flex items-center gap-3">
+                                            <img
+                                              src={`/api/video-dubbing/jobs/${job.id}/logo`}
+                                              alt="Logo chèn vào video"
+                                              className="max-h-12 max-w-24 rounded border border-slate-700 bg-slate-900 object-contain p-1"
+                                            />
+                                            <span className="text-xs text-slate-400">
+                                              {job.overlaySettings.logoFileName}
+                                            </span>
+                                          </div>
+                                        ) : (
+                                          <p className="text-xs text-slate-500">
+                                            Chọn logo PNG, JPG hoặc WebP (tối đa
+                                            20 MB).
+                                          </p>
+                                        )}
+                                        <label className="block space-y-1.5 text-xs text-slate-300">
+                                          <span className="flex justify-between gap-2">
+                                            <span>
+                                              Kích thước theo chiều rộng video
+                                            </span>
+                                            <span>{logoWidthPercent}%</span>
+                                          </span>
+                                          <input
+                                            type="range"
+                                            min="5"
+                                            max="40"
+                                            value={logoWidthPercent}
+                                            onChange={(event) =>
+                                              setLogoWidthPercent(
+                                                Number(event.target.value),
+                                              )
+                                            }
+                                            disabled={
+                                              !job?.overlaySettings
+                                                ?.logoFileName
+                                            }
+                                            className="w-full accent-sky-400"
+                                          />
+                                        </label>
+                                        <label className="block space-y-1.5 text-xs text-slate-300">
+                                          <span className="flex justify-between gap-2">
+                                            <span>Padding cách mép video</span>
+                                            <span>{logoPaddingPx} px</span>
+                                          </span>
+                                          <input
+                                            type="range"
+                                            min="0"
+                                            max="200"
+                                            step="4"
+                                            value={logoPaddingPx}
+                                            onChange={(event) =>
+                                              setLogoPaddingPx(
+                                                Number(event.target.value),
+                                              )
+                                            }
+                                            disabled={
+                                              !job?.overlaySettings
+                                                ?.logoFileName
+                                            }
+                                            className="w-full accent-sky-400"
+                                          />
+                                        </label>
+                                        <label className="flex items-center justify-between gap-3 text-xs text-slate-300">
+                                          Vị trí logo
+                                          <select
+                                            value={logoPosition}
+                                            onChange={(event) =>
+                                              setLogoPosition(
+                                                event.target
+                                                  .value as VideoDubbingOverlayPosition,
+                                              )
+                                            }
+                                            disabled={
+                                              !job?.overlaySettings
+                                                ?.logoFileName
+                                            }
+                                            className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-2 text-xs text-slate-100"
+                                          >
+                                            {OVERLAY_POSITION_OPTIONS.map(
+                                              (option) => (
+                                                <option
+                                                  key={option.value}
+                                                  value={option.value}
+                                                >
+                                                  {option.label}
+                                                </option>
+                                              ),
+                                            )}
+                                          </select>
+                                        </label>
+                                        <p className="text-[11px] text-slate-500">
+                                          Mặc định: trên trái.
+                                        </p>
+                                        <div className="border-t border-slate-800 pt-3">
+                                          <div className="flex flex-wrap items-center justify-between gap-3">
+                                            <label className="flex items-center gap-2 text-sm font-semibold text-slate-100">
+                                              <input
+                                                type="checkbox"
+                                                checked={Boolean(
+                                                  titleOverlay &&
+                                                  titleOverlay.enabled !==
+                                                    false,
+                                                )}
+                                                disabled={!titleOverlay}
+                                                onChange={(event) => {
+                                                  if (titleOverlayIndex >= 0) {
+                                                    setTextOverlays((items) =>
+                                                      items.map(
+                                                        (item, index) =>
+                                                          index ===
+                                                          titleOverlayIndex
+                                                            ? {
+                                                                ...item,
+                                                                enabled:
+                                                                  event.target
+                                                                    .checked,
+                                                              }
+                                                            : item,
+                                                      ),
+                                                    );
+                                                  }
+                                                }}
+                                                className="accent-violet-400"
+                                              />
+                                              Bật tiêu đề
+                                            </label>
+                                            <button
+                                              type="button"
+                                              onClick={createTitleOverlay}
+                                              disabled={
+                                                !job || isMediaProcessing
+                                              }
+                                              className="inline-flex items-center gap-1.5 rounded-lg border border-violet-500/30 bg-violet-950/20 px-3 py-2 text-xs font-semibold text-violet-100 hover:bg-violet-950/40 disabled:cursor-not-allowed disabled:opacity-50"
+                                            >
+                                              <Plus className="h-3.5 w-3.5" />
+                                              {titleOverlay
+                                                ? "Chỉnh tiêu đề"
+                                                : "Tạo Tiêu Đề"}
+                                            </button>
+                                          </div>
+                                          <p className="mt-2 text-[11px] text-slate-500">
+                                            Tiêu đề luôn hiển thị từ đầu đến hết
+                                            video. Kéo tiêu đề trực tiếp trên
+                                            preview để đặt cạnh logo.
+                                          </p>
+                                        </div>
+                                        {titleOverlay &&
+                                          selectedTextOverlay ===
+                                            titleOverlayIndex && (
+                                            <div className="grid gap-3 rounded-lg border border-violet-500/20 bg-violet-950/10 p-3 sm:grid-cols-2">
+                                              <label className="space-y-1 text-[10px] text-slate-400 sm:col-span-2">
+                                                Nội dung tiêu đề
+                                                <textarea
+                                                  value={titleOverlay.text}
+                                                  onChange={(event) =>
+                                                    updateSelectedTextOverlay({
+                                                      text: event.target.value,
+                                                    })
+                                                  }
+                                                  rows={2}
+                                                  className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-white"
+                                                />
+                                              </label>
+                                              <div className="sm:col-span-2">
+                                                <TextStyleControls
+                                                  value={{
+                                                    fontFamily:
+                                                      titleOverlay.fontFamily,
+                                                    fontSize:
+                                                      titleOverlay.fontSize,
+                                                    bold: titleOverlay.bold,
+                                                    underline:
+                                                      titleOverlay.underline ??
+                                                      false,
+                                                    italic: titleOverlay.italic,
+                                                    textCase:
+                                                      titleOverlay.textCase ??
+                                                      "none",
+                                                    color: titleOverlay.color,
+                                                    outlineEnabled:
+                                                      titleOverlay.outlineEnabled ??
+                                                      false,
+                                                    outlineColor:
+                                                      titleOverlay.outlineColor ??
+                                                      "#000000",
+                                                    outlineWidthPx:
+                                                      titleOverlay.outlineWidthPx ??
+                                                      2,
+                                                    characterSpacingPx:
+                                                      titleOverlay.characterSpacingPx ??
+                                                      0,
+                                                    lineSpacingPx:
+                                                      titleOverlay.lineSpacingPx ??
+                                                      0,
+                                                  }}
+                                                  onChange={
+                                                    updateSelectedTextOverlay
+                                                  }
+                                                  fontOptions={
+                                                    subtitleFontOptions
+                                                  }
+                                                />
+                                              </div>
+                                              <label className="space-y-1 text-[10px] text-slate-400">
+                                                Vị trí neo
+                                                <select
+                                                  value={titleOverlay.position}
+                                                  onChange={(event) =>
+                                                    updateSelectedTextOverlay({
+                                                      position: event.target
+                                                        .value as VideoDubbingOverlayPosition,
+                                                      xPercent: undefined,
+                                                      yPercent: undefined,
+                                                    })
+                                                  }
+                                                  className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-white"
+                                                >
+                                                  {OVERLAY_POSITION_OPTIONS.map(
+                                                    (option) => (
+                                                      <option
+                                                        key={option.value}
+                                                        value={option.value}
+                                                      >
+                                                        {option.label}
+                                                      </option>
+                                                    ),
+                                                  )}
+                                                </select>
+                                              </label>
+                                              {(titleOverlay.xPercent !==
+                                                undefined ||
+                                                titleOverlay.yPercent !==
+                                                  undefined) && (
+                                                <button
+                                                  type="button"
+                                                  onClick={() =>
+                                                    updateSelectedTextOverlay({
+                                                      xPercent: undefined,
+                                                      yPercent: undefined,
+                                                    })
+                                                  }
+                                                  className="self-end rounded-md border border-violet-500/30 px-2 py-1.5 text-xs text-violet-200"
+                                                >
+                                                  Đặt lại vị trí neo
+                                                </button>
+                                              )}
+                                              <label className="inline-flex items-center gap-2 text-xs text-slate-300">
+                                                <input
+                                                  type="checkbox"
+                                                  checked={
+                                                    titleOverlay.backgroundTransparent
+                                                  }
+                                                  onChange={(event) =>
+                                                    updateSelectedTextOverlay({
+                                                      backgroundTransparent:
+                                                        event.target.checked,
+                                                    })
+                                                  }
+                                                  className="accent-violet-400"
+                                                />
+                                                Nền trong suốt
+                                              </label>
+                                              {!titleOverlay.backgroundTransparent && (
+                                                <label className="space-y-1 text-[10px] text-slate-400">
+                                                  Màu nền
+                                                  <input
+                                                    type="color"
+                                                    value={
+                                                      titleOverlay.backgroundColor
+                                                    }
+                                                    onChange={(event) =>
+                                                      updateSelectedTextOverlay(
+                                                        {
+                                                          backgroundColor:
+                                                            event.target.value,
+                                                        },
+                                                      )
+                                                    }
+                                                    className="h-8 w-full rounded-md border border-slate-700 bg-slate-950"
+                                                  />
+                                                </label>
+                                              )}
+                                              <button
+                                                type="button"
+                                                onClick={() => {
+                                                  setTextOverlays((items) =>
+                                                    items.filter(
+                                                      (_, index) =>
+                                                        index !==
+                                                        titleOverlayIndex,
+                                                    ),
+                                                  );
+                                                  setSelectedTextOverlay(null);
+                                                }}
+                                                className="inline-flex items-center justify-center gap-1 justify-self-start rounded-md border border-rose-500/30 px-2 py-1 text-xs text-rose-200"
+                                              >
+                                                <Trash2 className="h-3 w-3" />
+                                                Xóa tiêu đề
+                                              </button>
+                                            </div>
+                                          )}
+                                      </div>
+                                    ),
+                                  },
+                                  {
+                                    id: "text",
+                                    label: "Text",
+                                    content: (
+                                      <div className="space-y-3 rounded-xl">
+                                        <label className="flex items-center gap-2 text-sm font-semibold text-slate-100">
+                                          <input
+                                            type="checkbox"
+                                            checked={subtitlesEnabled}
+                                            disabled={
+                                              !srt?.analysis?.items.length &&
+                                              !job?.overlaySettings?.subtitles
+                                                .length
+                                            }
+                                            onChange={(event) =>
+                                              setSubtitlesEnabled(
+                                                event.target.checked,
+                                              )
+                                            }
+                                            className="accent-sky-400"
+                                          />
+                                          Chèn phụ đề SRT
+                                        </label>
+                                        <p className="text-xs text-slate-400">
+                                          {srt?.analysis
+                                            ? `${srt.fileName} · ${srt.analysis.subtitleCount} dòng`
+                                            : job?.overlaySettings?.subtitles
+                                                  .length
+                                              ? `${job.overlaySettings.subtitles.length} dòng phụ đề đã lưu`
+                                              : "Chọn và phân tích tệp SRT ở phần phụ đề trước khi xuất."}
+                                        </p>
+                                        <TextStyleControls
+                                          value={subtitleTextStyleValue}
+                                          onChange={updateSubtitleTextStyle}
+                                          fontOptions={subtitleFontOptions}
+                                          minFontSize={12}
+                                          maxFontSize={72}
+                                          disabled={
+                                            !srt?.analysis?.items.length &&
+                                            !job?.overlaySettings?.subtitles
+                                              .length
+                                          }
+                                        />
+                                        <div className="grid gap-3 sm:grid-cols-2">
+                                          <label className="flex items-center justify-between gap-2 text-xs text-slate-300">
+                                            Kiểu nền phụ đề
+                                            <select
+                                              value={subtitleBackgroundMode}
+                                              onChange={(event) => {
+                                                setSubtitleBackgroundMode(
+                                                  event.target.value as
+                                                    | "none"
+                                                    | "color"
+                                                    | "image",
+                                                );
+                                                if (
+                                                  event.target.value ===
+                                                    "image" &&
+                                                  !subtitleBackgroundImage &&
+                                                  subtitleBackgrounds.length > 0
+                                                ) {
+                                                  setSubtitleBackgroundImage(
+                                                    subtitleBackgrounds[0],
+                                                  );
+                                                }
+                                              }}
+                                              disabled={
+                                                !srt?.analysis?.items.length &&
+                                                !job?.overlaySettings?.subtitles
+                                                  .length
+                                              }
+                                              className="min-w-0 rounded-lg border border-slate-700 bg-slate-900 px-2 py-2 text-xs text-slate-100"
+                                            >
+                                              <option value="none">
+                                                Không nền / Trong suốt
+                                              </option>
+                                              <option value="color">
+                                                Màu nền
+                                              </option>
+                                              <option value="image">
+                                                Nền ảnh 3-slice
+                                              </option>
+                                            </select>
+                                          </label>
+                                          {subtitleBackgroundMode ===
+                                            "color" && (
+                                            <label className="flex items-center justify-between gap-2 text-xs text-slate-300">
+                                              Màu nền
+                                              <input
+                                                type="color"
+                                                value={subtitleBackgroundColor}
+                                                onChange={(event) =>
+                                                  setSubtitleBackgroundColor(
+                                                    event.target.value,
+                                                  )
+                                                }
+                                                disabled={
+                                                  !srt?.analysis?.items
+                                                    .length &&
+                                                  !job?.overlaySettings
+                                                    ?.subtitles.length
+                                                }
+                                                className="h-8 w-12 cursor-pointer rounded border border-slate-700 bg-slate-900 p-1 disabled:cursor-not-allowed"
+                                              />
+                                            </label>
+                                          )}
+                                          {subtitleBackgroundMode ===
+                                            "image" && (
+                                            <div className="flex items-center justify-between gap-2 text-xs text-slate-300">
+                                              <span>Ảnh nền</span>
                                               <button
                                                 type="button"
                                                 onClick={() =>
-                                                  void playSubtitleAudio(audio)
+                                                  setSubtitleBackgroundPickerOpen(
+                                                    true,
+                                                  )
                                                 }
-                                                aria-label={
-                                                  subtitleAudioPlayingId ===
-                                                  item.id
-                                                    ? `Dừng audio câu ${item.index}`
-                                                    : `Phát audio câu ${item.index}`
+                                                disabled={
+                                                  (!srt?.analysis?.items
+                                                    .length &&
+                                                    !job?.overlaySettings
+                                                      ?.subtitles.length) ||
+                                                  subtitleBackgrounds.length ===
+                                                    0
                                                 }
-                                                title={
-                                                  subtitleAudioPlayingId ===
-                                                  item.id
-                                                    ? "Dừng phát"
-                                                    : "Phát audio"
-                                                }
-                                                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-violet-500/30 bg-violet-500/10 text-violet-200 hover:bg-violet-500/20"
+                                                className="flex min-w-0 items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-2 py-2 text-xs text-slate-100 hover:border-sky-500/50 disabled:cursor-not-allowed disabled:opacity-50"
                                               >
-                                                {subtitleAudioPlayingId ===
-                                                item.id ? (
-                                                  <Pause className="h-3.5 w-3.5" />
-                                                ) : (
-                                                  <Play className="h-3.5 w-3.5" />
-                                                )}
-                                              </button>
-                                              {audio.status === "failed" && (
-                                                <span
-                                                  className="max-w-36 truncate text-[10px] text-rose-300"
-                                                  title={audio.error}
-                                                >
-                                                  {audio.error ||
-                                                    "Tạo audio thất bại"}
+                                                <span className="max-w-32 truncate">
+                                                  {subtitleBackgroundImage?.replace(
+                                                    /\.(png|webp)$/i,
+                                                    "",
+                                                  ) || "Chọn nền"}
                                                 </span>
-                                              )}
+                                                <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                                              </button>
                                             </div>
-                                          ) : (
-                                            <span
-                                              className={`inline-flex items-center gap-1.5 text-[10px] ${audio?.status === "failed" ? "text-rose-300" : "text-slate-500"}`}
-                                            >
-                                              {audio?.status ===
-                                                "generating" && (
-                                                <LoaderCircle className="h-3 w-3 animate-spin" />
-                                              )}
-                                              {audio?.status === "failed"
-                                                ? audio.error ||
-                                                  "Tạo audio thất bại"
-                                                : audio?.status === "generating"
-                                                  ? "Đang tạo audio…"
-                                                  : "Chưa có audio"}
-                                            </span>
                                           )}
                                         </div>
+                                        <label className="block space-y-1.5 text-xs text-slate-300">
+                                          <span className="flex justify-between gap-2">
+                                            <span>Padding nền phụ đề</span>
+                                            <span>{subtitlePaddingPx} px</span>
+                                          </span>
+                                          <input
+                                            type="range"
+                                            min="0"
+                                            max="40"
+                                            value={subtitlePaddingPx}
+                                            onChange={(event) =>
+                                              setSubtitlePaddingPx(
+                                                Number(event.target.value),
+                                              )
+                                            }
+                                            disabled={
+                                              !srt?.analysis?.items.length &&
+                                              !job?.overlaySettings?.subtitles
+                                                .length
+                                            }
+                                            className="w-full accent-sky-400"
+                                          />
+                                        </label>
+                                        <label className="block space-y-1.5 text-xs text-slate-300">
+                                          <span className="flex justify-between gap-2">
+                                            <span>
+                                              Khoảng cách phụ đề tới mép video
+                                            </span>
+                                            <span>{subtitleMarginPx} px</span>
+                                          </span>
+                                          <input
+                                            type="range"
+                                            min="0"
+                                            max="200"
+                                            step="4"
+                                            value={subtitleMarginPx}
+                                            onChange={(event) =>
+                                              (() => {
+                                                const value = Number(
+                                                  event.target.value,
+                                                );
+                                                setSubtitleMarginPx(value);
+                                                if (job?.id)
+                                                  scheduleSubtitleMarginSave(
+                                                    job.id,
+                                                    value,
+                                                  );
+                                              })()
+                                            }
+                                            onPointerUp={
+                                              flushSubtitleMarginSave
+                                            }
+                                            onKeyUp={flushSubtitleMarginSave}
+                                            disabled={
+                                              !srt?.analysis?.items.length &&
+                                              !job?.overlaySettings?.subtitles
+                                                .length
+                                            }
+                                            className="w-full accent-sky-400"
+                                          />
+                                        </label>
+                                        <label className="flex items-center justify-between gap-3 text-xs text-slate-300">
+                                          Vị trí phụ đề
+                                          <select
+                                            value={subtitlePosition}
+                                            onChange={(event) =>
+                                              setSubtitlePosition(
+                                                event.target
+                                                  .value as VideoDubbingOverlayPosition,
+                                              )
+                                            }
+                                            disabled={
+                                              !srt?.analysis?.items.length &&
+                                              !job?.overlaySettings?.subtitles
+                                                .length
+                                            }
+                                            className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-2 text-xs text-slate-100"
+                                          >
+                                            {OVERLAY_POSITION_OPTIONS.map(
+                                              (option) => (
+                                                <option
+                                                  key={option.value}
+                                                  value={option.value}
+                                                >
+                                                  {option.label}
+                                                </option>
+                                              ),
+                                            )}
+                                          </select>
+                                        </label>
+                                        <p className="text-[11px] text-slate-500">
+                                          Mặc định: dưới giữa.
+                                        </p>
+                                      </div>
+                                    ),
+                                  },
+                                  {
+                                    id: "cardscan",
+                                    label: "Quét Cards",
+                                    content: (
+                                      <div
+                                        id="character-card-scan-panel"
+                                        className="space-y-2"
+                                      >
+                                        <div className="flex flex-wrap items-center gap-2">
+                                          <button
+                                            type="button"
+                                            disabled={
+                                              characterCardOcrWorker.status ===
+                                                "starting" ||
+                                              characterCardOcrWorker.status ===
+                                                "ready" ||
+                                              characterCardOcrWorker.status ===
+                                                "busy"
+                                            }
+                                            onClick={() =>
+                                              void startCharacterCardOcrWorker()
+                                            }
+                                            className="rounded-md border border-cyan-500/30 px-2.5 py-1.5 text-xs text-cyan-100 hover:bg-cyan-950/40 disabled:cursor-not-allowed disabled:opacity-40"
+                                          >
+                                            {characterCardOcrWorker.status ===
+                                            "starting"
+                                              ? "Đang nạp OCR…"
+                                              : "Giữ OCR chạy"}
+                                          </button>
+                                          {(characterCardOcrWorker.status ===
+                                            "starting" ||
+                                            characterCardOcrWorker.status ===
+                                              "ready" ||
+                                            characterCardOcrWorker.status ===
+                                              "busy") && (
+                                            <button
+                                              type="button"
+                                              onClick={() =>
+                                                void stopCharacterCardOcrWorker()
+                                              }
+                                              className="rounded-md border border-rose-500/30 px-2.5 py-1.5 text-xs text-rose-200 hover:bg-rose-950/40"
+                                            >
+                                              Dừng OCR
+                                            </button>
+                                          )}
+                                          <span
+                                            className="text-[10px] text-slate-400"
+                                            role="status"
+                                          >
+                                            {characterCardOcrWorker.message}
+                                          </span>
+                                        </div>
+                                        <p className="text-[10px] text-slate-500">
+                                          Bật một lần để nạp model và tái sử
+                                          dụng cho các lần quét tiếp theo; nhấn
+                                          Dừng OCR để giải phóng RAM/VRAM.
+                                        </p>
+                                        <div className="flex flex-wrap items-center gap-2">
+                                          <button
+                                            type="button"
+                                            disabled={
+                                              !videoPreviewReady ||
+                                              characterCardOcrJob?.status ===
+                                                "running" ||
+                                              characterCardOcrJob?.status ===
+                                                "queued"
+                                            }
+                                            onClick={() => {
+                                              setCharacterCardOcrError(null);
+                                              setCharacterCardDrawMode(
+                                                (drawing) => !drawing,
+                                              );
+                                              setCharacterCardDrawStart(null);
+                                              setCharacterCardRegionDraft(null);
+                                            }}
+                                            className={`rounded-md border px-2.5 py-1.5 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-40 ${characterCardDrawMode ? "border-amber-300 bg-amber-300 text-slate-950" : "border-amber-500/40 text-amber-100 hover:bg-amber-950/40"}`}
+                                          >
+                                            {characterCardDrawMode
+                                              ? "Đang vẽ vùng…"
+                                              : characterCardRegion
+                                                ? "Vẽ lại vùng card nhân vật"
+                                                : "Vẽ vùng card nhân vật"}
+                                          </button>
+                                          {characterCardRegion &&
+                                            !characterCardDrawMode && (
+                                              <button
+                                                type="button"
+                                                disabled={
+                                                  characterCardOcrJob?.status ===
+                                                    "running" ||
+                                                  characterCardOcrJob?.status ===
+                                                    "queued"
+                                                }
+                                                onClick={() =>
+                                                  setCharacterCardRegion(null)
+                                                }
+                                                className="rounded-md border border-slate-700 px-2 py-1.5 text-xs text-slate-300 hover:bg-slate-800 disabled:opacity-40"
+                                              >
+                                                Xóa vùng
+                                              </button>
+                                            )}
+                                          <label className="flex items-center gap-2 text-xs text-slate-300">
+                                            Bắt đầu trước playhead (giây)
+                                            <input
+                                              type="number"
+                                              min={0}
+                                              max={60}
+                                              step={1}
+                                              value={
+                                                characterCardOcrStartOffset
+                                              }
+                                              onChange={(event) => {
+                                                const value = Number(
+                                                  event.target.value,
+                                                );
+                                                if (Number.isFinite(value)) {
+                                                  setCharacterCardOcrStartOffset(
+                                                    Math.max(
+                                                      0,
+                                                      Math.min(60, value),
+                                                    ),
+                                                  );
+                                                }
+                                              }}
+                                              className="w-16 rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-center text-xs text-white"
+                                            />
+                                          </label>
+                                          <label className="flex items-center gap-2 text-xs text-slate-300">
+                                            Độ dài quét (giây)
+                                            <input
+                                              type="number"
+                                              min={1}
+                                              max={60}
+                                              step={1}
+                                              value={characterCardOcrDuration}
+                                              onChange={(event) => {
+                                                const value = Number(
+                                                  event.target.value,
+                                                );
+                                                if (Number.isFinite(value)) {
+                                                  setCharacterCardOcrDuration(
+                                                    Math.max(
+                                                      1,
+                                                      Math.min(60, value),
+                                                    ),
+                                                  );
+                                                }
+                                              }}
+                                              className="w-16 rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-center text-xs text-white"
+                                            />
+                                          </label>
+                                          {characterCardOcrJob?.status ===
+                                            "running" ||
+                                          characterCardOcrJob?.status ===
+                                            "queued" ? (
+                                            <button
+                                              type="button"
+                                              onClick={() =>
+                                                void cancelCharacterCardOcr()
+                                              }
+                                              className="rounded-md border border-rose-500/30 px-2.5 py-1.5 text-xs text-rose-200 hover:bg-rose-950/40"
+                                            >
+                                              {characterCardOcrWorker.status ===
+                                              "busy"
+                                                ? "Hủy OCR · dừng worker"
+                                                : "Hủy OCR"}
+                                            </button>
+                                          ) : (
+                                            <button
+                                              type="button"
+                                              disabled={
+                                                !job ||
+                                                !characterCardRegion ||
+                                                characterCardDrawMode ||
+                                                characterCardOcrWorker.status ===
+                                                  "starting" ||
+                                                characterCardOcrWorker.status ===
+                                                  "busy"
+                                              }
+                                              onClick={() =>
+                                                void createCharacterCardsAutomatically()
+                                              }
+                                              className="rounded-md bg-amber-300 px-2.5 py-1.5 text-xs font-bold text-slate-950 hover:bg-amber-200 disabled:cursor-not-allowed disabled:opacity-40"
+                                            >
+                                              Tạo card tự động
+                                            </button>
+                                          )}
+                                        </div>
+                                        <p className="text-[10px] text-slate-400">
+                                          Khoanh vùng chứa card trên preview và
+                                          dùng ảnh mẫu đã crop sát card. OCR bắt
+                                          đầu từ N giây trước thời điểm khớp,
+                                          quét M giây và tự giới hạn trong
+                                          video.
+                                        </p>
+                                        {characterCardDrawMode && (
+                                          <p className="text-[10px] text-amber-200">
+                                            Nhấn giữ và kéo trên video để chọn
+                                            vùng.
+                                          </p>
+                                        )}
+                                        {characterCardOcrJob && (
+                                          <p
+                                            className="text-[10px] text-slate-300"
+                                            role="status"
+                                          >
+                                            {characterCardOcrJob.message}{" "}
+                                            {characterCardOcrJob.status ===
+                                              "running" &&
+                                              `${characterCardOcrJob.progressPercent}%`}
+                                          </p>
+                                        )}
+                                        {characterCardOcrError && (
+                                          <p
+                                            className="text-[10px] text-rose-300"
+                                            role="alert"
+                                          >
+                                            {characterCardOcrError}
+                                          </p>
+                                        )}
                                         <div
-                                          role="cell"
-                                          className="whitespace-nowrap px-2 py-1 text-right"
+                                          onPaste={pasteCharacterCardReference}
+                                          tabIndex={0}
+                                          className="space-y-3 rounded-lg border border-violet-500/25 bg-violet-950/10 p-3 outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+                                          aria-label="Ảnh mẫu card nhân vật"
                                         >
-                                          <div className="flex flex-nowrap justify-end gap-1">
+                                          <div className="flex flex-wrap items-center justify-between gap-2">
+                                            <div>
+                                              <h4 className="text-xs font-semibold text-violet-100">
+                                                Tìm card theo ảnh mẫu
+                                              </h4>
+                                              <p className="mt-1 text-[10px] text-slate-400">
+                                                Dò ảnh bằng OpenCV rồi dùng OCR
+                                                hiện có để lọc kết quả không có
+                                                chữ trước khi hiển thị.
+                                              </p>
+                                            </div>
+                                            <label
+                                              className={`rounded-md border border-violet-400/40 px-2.5 py-1.5 text-xs font-semibold text-violet-100 ${characterCardReferenceScanJob?.status === "running" ? "cursor-not-allowed opacity-40" : "cursor-pointer hover:bg-violet-950/50"}`}
+                                            >
+                                              Chọn ảnh mẫu
+                                              <input
+                                                type="file"
+                                                accept="image/png,image/jpeg,image/webp"
+                                                className="sr-only"
+                                                disabled={
+                                                  characterCardReferenceScanJob?.status ===
+                                                  "running"
+                                                }
+                                                onChange={(event) => {
+                                                  acceptCharacterCardReferenceFile(
+                                                    event.target.files?.[0] ??
+                                                      null,
+                                                  );
+                                                  event.target.value = "";
+                                                }}
+                                              />
+                                            </label>
+                                          </div>
+                                          {characterCardReferencePreviewUrl ? (
+                                            <div className="flex items-center gap-3">
+                                              <img
+                                                src={
+                                                  characterCardReferencePreviewUrl
+                                                }
+                                                alt="Ảnh mẫu card nhân vật"
+                                                className="max-h-24 max-w-48 rounded border border-slate-700 object-contain"
+                                              />
+                                              <div className="min-w-0 flex-1 text-[10px] text-slate-400">
+                                                <p className="truncate">
+                                                  {characterCardReferenceFile?.name ||
+                                                    "Ảnh dán từ clipboard"}
+                                                </p>
+                                                <button
+                                                  type="button"
+                                                  disabled={
+                                                    characterCardReferenceScanJob?.status ===
+                                                    "running"
+                                                  }
+                                                  onClick={() => {
+                                                    setCharacterCardReferenceFile(
+                                                      null,
+                                                    );
+                                                    setCharacterCardReferenceScanJob(
+                                                      null,
+                                                    );
+                                                    setCharacterCardReferenceError(
+                                                      null,
+                                                    );
+                                                  }}
+                                                  className="mt-1 text-rose-200 hover:text-rose-100 disabled:cursor-not-allowed disabled:opacity-40"
+                                                >
+                                                  Xóa ảnh mẫu
+                                                </button>
+                                              </div>
+                                            </div>
+                                          ) : (
+                                            <p className="rounded-md border border-dashed border-slate-700 px-3 py-4 text-center text-[10px] text-slate-500">
+                                              Dán ảnh bằng Ctrl+V tại đây hoặc
+                                              chọn ảnh PNG/JPEG/WebP.
+                                            </p>
+                                          )}
+                                          <div className="flex flex-wrap items-center gap-3">
+                                            <label className="flex items-center gap-2 text-[10px] text-slate-300">
+                                              Bỏ qua frame
+                                              <input
+                                                type="number"
+                                                min={0}
+                                                max={10000}
+                                                step={1}
+                                                value={
+                                                  characterCardReferenceFramesToSkip
+                                                }
+                                                onChange={(event) => {
+                                                  const value = Number(
+                                                    event.target.value,
+                                                  );
+                                                  if (Number.isFinite(value)) {
+                                                    setCharacterCardReferenceFramesToSkip(
+                                                      Math.max(
+                                                        0,
+                                                        Math.min(
+                                                          10000,
+                                                          Math.round(value),
+                                                        ),
+                                                      ),
+                                                    );
+                                                  }
+                                                }}
+                                                className="w-20 rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-center text-xs text-white"
+                                              />
+                                              <span className="text-slate-500">
+                                                (
+                                                {(
+                                                  (characterCardReferenceFramesToSkip +
+                                                    1) /
+                                                  (job?.metadata?.frameRate ||
+                                                    30)
+                                                ).toFixed(2)}{" "}
+                                                giây/mẫu)
+                                              </span>
+                                            </label>
+                                            <label className="flex items-center gap-2 text-[10px] text-slate-300">
+                                              Ngưỡng giống
+                                              <input
+                                                type="range"
+                                                min={0.3}
+                                                max={0.99}
+                                                step={0.01}
+                                                value={
+                                                  characterCardReferenceSimilarity
+                                                }
+                                                onChange={(event) =>
+                                                  setCharacterCardReferenceSimilarity(
+                                                    Number(event.target.value),
+                                                  )
+                                                }
+                                                className="w-24 accent-violet-400"
+                                              />
+                                              <span className="w-9 text-right tabular-nums">
+                                                {Math.round(
+                                                  characterCardReferenceSimilarity *
+                                                    100,
+                                                )}
+                                                %
+                                              </span>
+                                            </label>
+                                            {characterCardReferenceScanJob?.status ===
+                                            "running" ? (
+                                              <button
+                                                type="button"
+                                                onClick={() =>
+                                                  void cancelCharacterCardReferenceScan()
+                                                }
+                                                className="rounded-md border border-rose-500/30 px-2.5 py-1.5 text-xs text-rose-200 hover:bg-rose-950/40"
+                                              >
+                                                Hủy quét
+                                              </button>
+                                            ) : (
+                                              <button
+                                                type="button"
+                                                disabled={
+                                                  !job ||
+                                                  !characterCardRegion ||
+                                                  !characterCardReferenceFile ||
+                                                  characterCardDrawMode
+                                                }
+                                                onClick={() =>
+                                                  void startCharacterCardReferenceScan()
+                                                }
+                                                className="rounded-md bg-violet-300 px-2.5 py-1.5 text-xs font-bold text-slate-950 hover:bg-violet-200 disabled:cursor-not-allowed disabled:opacity-40"
+                                              >
+                                                Quét toàn video
+                                              </button>
+                                            )}
+                                          </div>
+                                          {characterCardReferenceScanJob?.status ===
+                                            "running" && (
+                                            <div
+                                              className="space-y-1"
+                                              role="status"
+                                            >
+                                              <div className="flex justify-between gap-2 text-[10px] text-slate-300">
+                                                <span>
+                                                  {
+                                                    characterCardReferenceScanJob.message
+                                                  }
+                                                </span>
+                                                <span>
+                                                  {
+                                                    characterCardReferenceScanJob.progressPercent
+                                                  }
+                                                  %
+                                                </span>
+                                              </div>
+                                              <div className="h-1 overflow-hidden rounded bg-slate-800">
+                                                <div
+                                                  className="h-full bg-violet-300 transition-[width]"
+                                                  style={{
+                                                    width: `${characterCardReferenceScanJob.progressPercent}%`,
+                                                  }}
+                                                />
+                                              </div>
+                                            </div>
+                                          )}
+                                          {characterCardReferenceScanJob?.status ===
+                                            "completed" && (
+                                            <p
+                                              className="text-[10px] text-emerald-200"
+                                              role="status"
+                                            >
+                                              {
+                                                characterCardReferenceScanJob.message
+                                              }
+                                            </p>
+                                          )}
+                                          {characterCardReferenceScanJob?.status ===
+                                            "error" && (
+                                            <p
+                                              className="text-[10px] text-rose-300"
+                                              role="alert"
+                                            >
+                                              {characterCardReferenceScanJob.error ||
+                                                characterCardReferenceScanJob.message}
+                                            </p>
+                                          )}
+                                          {characterCardReferenceError && (
+                                            <p
+                                              className="text-[10px] text-rose-300"
+                                              role="alert"
+                                            >
+                                              {characterCardReferenceError}
+                                            </p>
+                                          )}
+                                        </div>
+                                      </div>
+                                    ),
+                                  },
+                                ]}
+                              />
+                            </div>
+                          </div>
+                          <div className="space-y-3">
+                            <div
+                              role="tablist"
+                              aria-label="Timeline video dubbing"
+                              className="flex gap-1 rounded-xl border border-slate-800 bg-slate-950/70 p-1"
+                            >
+                              <button
+                                type="button"
+                                role="tab"
+                                aria-selected={
+                                  timelineWorkspaceTab === "subtitle"
+                                }
+                                onClick={() =>
+                                  setTimelineWorkspaceTab("subtitle")
+                                }
+                                className={`flex-1 rounded-lg px-3 py-2 text-xs font-semibold ${timelineWorkspaceTab === "subtitle" ? "bg-cyan-400 text-slate-950" : "text-slate-300 hover:bg-slate-800"}`}
+                              >
+                                Timeline phụ đề
+                              </button>
+                              <button
+                                type="button"
+                                role="tab"
+                                aria-selected={timelineWorkspaceTab === "audio"}
+                                onClick={() => setTimelineWorkspaceTab("audio")}
+                                className={`flex-1 rounded-lg px-3 py-2 text-xs font-semibold ${timelineWorkspaceTab === "audio" ? "bg-violet-400 text-slate-950" : "text-slate-300 hover:bg-slate-800"}`}
+                              >
+                                Timeline âm thanh
+                              </button>
+                              <button
+                                type="button"
+                                role="tab"
+                                aria-selected={
+                                  timelineWorkspaceTab === "subtitle-audio"
+                                }
+                                onClick={() =>
+                                  setTimelineWorkspaceTab("subtitle-audio")
+                                }
+                                className={`flex-1 rounded-lg px-3 py-2 text-xs font-semibold ${timelineWorkspaceTab === "subtitle-audio" ? "bg-violet-400 text-slate-950" : "text-slate-300 hover:bg-slate-800"}`}
+                              >
+                                Subtitle-Audio
+                              </button>
+                            </div>
+                            {timelineWorkspaceTab === "subtitle-audio" && (
+                              <section className="space-y-3 rounded-xl border border-violet-500/25 bg-slate-950/70 p-3">
+                                <div className="flex flex-wrap items-center justify-between gap-3">
+                                  <div>
+                                    <h4 className="text-xs font-semibold text-white">
+                                      Subtitle-Audio
+                                    </h4>
+                                    <p className="mt-1 text-[10px] text-slate-400">
+                                      Sửa chữ không tự tạo lại audio; tạo lại
+                                      Master sẽ dùng audio hiện có.
+                                    </p>
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-[10px] text-slate-400">
+                                      {activeSubtitleAudioFilterCount
+                                        ? `${filteredSubtitleAudioInput.length}/${subtitleAudioInput.length} câu`
+                                        : `${subtitleAudioInput.length} câu`}
+                                    </span>
+                                    <div className="relative">
+                                      <button
+                                        type="button"
+                                        aria-expanded={subtitleAudioFilterOpen}
+                                        aria-haspopup="dialog"
+                                        onClick={() =>
+                                          setSubtitleAudioFilterOpen(
+                                            (open) => !open,
+                                          )
+                                        }
+                                        className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-2 text-xs font-semibold ${activeSubtitleAudioFilterCount ? "border-cyan-400/50 bg-cyan-950/30 text-cyan-100" : "border-slate-700 text-slate-300 hover:bg-slate-800"}`}
+                                      >
+                                        <Filter className="h-3.5 w-3.5" />
+                                        Lọc
+                                        {activeSubtitleAudioFilterCount > 0 && (
+                                          <span className="rounded-full bg-cyan-300 px-1.5 text-[10px] font-bold text-slate-950">
+                                            {activeSubtitleAudioFilterCount}
+                                          </span>
+                                        )}
+                                      </button>
+                                      {subtitleAudioFilterOpen && (
+                                        <div
+                                          role="dialog"
+                                          aria-label="Lọc danh sách phụ đề"
+                                          className="absolute right-0 top-full z-30 mt-2 w-[min(22rem,calc(100vw-2rem))] space-y-3 rounded-xl border border-slate-700 bg-slate-900 p-3 shadow-2xl"
+                                        >
+                                          <div className="flex items-center justify-between gap-2">
+                                            <h5 className="text-xs font-semibold text-white">
+                                              Lọc câu phụ đề
+                                            </h5>
                                             <button
                                               type="button"
                                               onClick={() =>
-                                                regenerateSubtitleAudioWithDraft(
-                                                  subtitleItem,
+                                                setSubtitleAudioFilterOpen(
+                                                  false,
                                                 )
+                                              }
+                                              className="rounded p-1 text-slate-400 hover:bg-slate-800 hover:text-white"
+                                              aria-label="Đóng bộ lọc"
+                                            >
+                                              <X className="h-3.5 w-3.5" />
+                                            </button>
+                                          </div>
+                                          <p className="text-[10px] text-slate-400">
+                                            Hiện các câu khớp với bất kỳ tiêu
+                                            chí nào đang bật.
+                                          </p>
+                                          <label className="flex items-center gap-2 text-xs text-slate-200">
+                                            <input
+                                              type="checkbox"
+                                              checked={
+                                                subtitleAudioShortFilterEnabled
+                                              }
+                                              onChange={(event) =>
+                                                setSubtitleAudioShortFilterEnabled(
+                                                  event.target.checked,
+                                                )
+                                              }
+                                              className="accent-cyan-400"
+                                            />
+                                            Câu ngắn, tối đa{" "}
+                                            {subtitleAudioMaxCharacterCount} ký
+                                            tự
+                                          </label>
+                                          <div
+                                            className={`flex items-center gap-3 pl-6 ${subtitleAudioShortFilterEnabled ? "" : "opacity-50"}`}
+                                          >
+                                            <span className="text-[10px] text-slate-500">
+                                              0
+                                            </span>
+                                            <input
+                                              type="range"
+                                              min={0}
+                                              max={20}
+                                              step={1}
+                                              value={
+                                                subtitleAudioMaxCharacterCount
                                               }
                                               disabled={
-                                                !selectedVoice ||
-                                                subtitleAudioSyncing ||
-                                                Boolean(
-                                                  subtitleAudioRegeneratingId,
-                                                ) ||
-                                                subtitleAudioMasterBusy ||
-                                                isMasterGenerating ||
-                                                isMediaProcessing
+                                                !subtitleAudioShortFilterEnabled
                                               }
-                                              className="inline-flex items-center gap-1 rounded-md border border-violet-500/30 bg-violet-500/10 px-1.5 py-1 text-[9px] font-semibold text-violet-200 hover:bg-violet-500/20 disabled:opacity-40"
-                                              title={`Tạo lại audio câu ${item.index}`}
-                                            >
-                                              {subtitleAudioRegeneratingId ===
-                                              item.id ? (
-                                                <LoaderCircle className="h-3 w-3 animate-spin" />
-                                              ) : (
-                                                <RefreshCw className="h-3 w-3" />
-                                              )}
-                                              Tạo lại
-                                            </button>
-                                            <button
-                                              type="button"
-                                              onClick={() =>
-                                                combineSubtitleAudioCueAbove(
-                                                  item.id,
-                                                  "merge",
+                                              onChange={(event) =>
+                                                setSubtitleAudioMaxCharacterCount(
+                                                  Number(event.target.value),
                                                 )
                                               }
-                                              disabled={combineDisabled}
-                                              className="rounded-md border border-amber-500/30 px-1.5 py-1 text-[9px] font-semibold text-amber-200 hover:bg-amber-950/30 disabled:cursor-not-allowed disabled:opacity-40"
-                                              title="Gộp với câu phía trên, giữ nội dung câu phía trên và mở rộng thời gian"
-                                            >
-                                              Merge above
-                                            </button>
-                                            <button
-                                              type="button"
-                                              onClick={() =>
-                                                combineSubtitleAudioCueAbove(
-                                                  item.id,
-                                                  "join",
+                                              className="w-full accent-cyan-400"
+                                              aria-label="Số ký tự tối đa của câu ngắn"
+                                            />
+                                            <span className="w-5 text-right text-[10px] tabular-nums text-slate-400">
+                                              {subtitleAudioMaxCharacterCount}
+                                            </span>
+                                          </div>
+                                          <label className="flex items-center gap-2 text-xs text-slate-200">
+                                            <input
+                                              type="checkbox"
+                                              checked={
+                                                subtitleAudioSpecialCharactersFilterEnabled
+                                              }
+                                              onChange={(event) =>
+                                                setSubtitleAudioSpecialCharactersFilterEnabled(
+                                                  event.target.checked,
                                                 )
                                               }
-                                              disabled={combineDisabled}
-                                              className="rounded-md border border-cyan-500/30 px-1.5 py-1 text-[9px] font-semibold text-cyan-200 hover:bg-cyan-950/30 disabled:cursor-not-allowed disabled:opacity-40"
-                                              title="Nối nội dung với câu phía trên và mở rộng thời gian"
-                                            >
-                                              Join above
-                                            </button>
+                                              className="accent-cyan-400"
+                                            />
+                                            Câu chỉ có ký tự đặc biệt, không có
+                                            chữ hoặc số
+                                          </label>
+                                          <label className="flex items-center gap-2 text-xs text-slate-200">
+                                            <input
+                                              type="checkbox"
+                                              checked={
+                                                subtitleAudioSimilarFilterEnabled
+                                              }
+                                              onChange={(event) =>
+                                                setSubtitleAudioSimilarFilterEnabled(
+                                                  event.target.checked,
+                                                )
+                                              }
+                                              className="accent-cyan-400"
+                                            />
+                                            Câu liền kề giống nhau trên 80%
+                                          </label>
+                                          <div className="flex justify-end border-t border-slate-800 pt-2">
                                             <button
                                               type="button"
-                                              onClick={() =>
-                                                deleteSubtitleAudioCue(item.id)
-                                              }
+                                              onClick={() => {
+                                                setSubtitleAudioShortFilterEnabled(
+                                                  false,
+                                                );
+                                                setSubtitleAudioSpecialCharactersFilterEnabled(
+                                                  false,
+                                                );
+                                                setSubtitleAudioSimilarFilterEnabled(
+                                                  false,
+                                                );
+                                              }}
                                               disabled={
-                                                subtitleAudioSyncing ||
-                                                Boolean(
-                                                  subtitleAudioRegeneratingId,
-                                                ) ||
-                                                subtitleAudioMasterBusy ||
-                                                isMasterGenerating ||
-                                                isMediaProcessing
+                                                !activeSubtitleAudioFilterCount
                                               }
-                                              className="inline-flex items-center gap-1 rounded-md border border-rose-500/30 bg-rose-500/10 px-1.5 py-1 text-[9px] font-semibold text-rose-200 hover:bg-rose-500/20 disabled:opacity-40"
-                                              title={`Xóa câu ${item.index} và audio`}
+                                              className="rounded-md px-2 py-1 text-[10px] font-semibold text-cyan-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
                                             >
-                                              <Trash2 className="h-3 w-3" />
-                                              Xóa
+                                              Xóa bộ lọc
                                             </button>
                                           </div>
                                         </div>
-                                      </div>
-                                    );
-                                  })
-                                ) : (
+                                      )}
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        void rebuildMasterFromSubtitleAudio()
+                                      }
+                                      disabled={
+                                        !subtitleAudioInput.length ||
+                                        subtitleAudioSyncing ||
+                                        subtitleAudioMasterBusy ||
+                                        Boolean(subtitleAudioRegeneratingId) ||
+                                        isMasterGenerating ||
+                                        isMediaProcessing
+                                      }
+                                      className="inline-flex items-center gap-2 rounded-lg bg-violet-400 px-3 py-2 text-xs font-bold text-slate-950 hover:bg-violet-300 disabled:cursor-not-allowed disabled:opacity-40"
+                                    >
+                                      {subtitleAudioMasterBusy ? (
+                                        <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+                                      ) : (
+                                        <RefreshCw className="h-3.5 w-3.5" />
+                                      )}
+                                      Tạo lại Master
+                                    </button>
+                                  </div>
+                                </div>
+                                {(subtitleAudioError ||
+                                  subtitleAudioSyncing) && (
+                                  <p
+                                    role={
+                                      subtitleAudioError ? "alert" : "status"
+                                    }
+                                    className={`rounded-lg border px-3 py-2 text-[11px] ${subtitleAudioError ? "border-rose-500/30 bg-rose-950/30 text-rose-200" : "border-slate-700 bg-slate-900 text-slate-400"}`}
+                                  >
+                                    {subtitleAudioError ||
+                                      "Đang đồng bộ danh sách câu phụ đề…"}
+                                  </p>
+                                )}
+                                <div className="overflow-hidden rounded-lg border border-cyan-500/30 bg-cyan-950/10">
                                   <div
                                     role="row"
-                                    className="grid w-full grid-cols-[3.5rem_minmax(0,1fr)_max-content_max-content]"
+                                    aria-label="Câu phụ đề đang nói"
+                                    className="grid w-full grid-cols-[3.5rem_minmax(0,1fr)_max-content_max-content] text-slate-300"
                                   >
                                     <div
                                       role="cell"
-                                      className="col-span-4 px-4 py-10 text-center text-xs text-slate-500"
+                                      className="px-2 py-1.5 font-mono text-cyan-300"
                                     >
-                                      {subtitleAudioInput.length
-                                        ? "Không có câu nào khớp bộ lọc hiện tại."
-                                        : "Chưa có câu phụ đề để tạo audio."}
+                                      {activeSubtitleAudioItem?.index ?? "—"}
                                     </div>
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                        </section>
-                      )}
-                      {timelineWorkspaceTab === "subtitle" && (
-                        <section className="space-y-3 rounded-xl border border-slate-800 bg-slate-950/60 p-3">
-                          <div className="flex flex-wrap items-center justify-between gap-3">
-                            <div>
-                              <h4 className="text-xs font-semibold text-white">
-                                Timeline phụ đề
-                              </h4>
-                              <p className="mt-1 text-[10px] text-slate-500">
-                                Khi phát, timeline bám theo video; khi dừng, bấm
-                                timeline để di chuyển playhead riêng · Ctrl+C/V
-                                sao chép/dán tại playhead · Delete xóa cue ·
-                                Ctrl+cuộn để zoom vào playhead · Shift+Z fit
-                                toàn timeline · Shift+cuộn để cuộn ngang
-                              </p>
-                            </div>
-                            <div className="flex items-center gap-2 text-[10px] text-slate-400">
-                              <span>{previewSubtitleCues.length} câu</span>
-                              <button
-                                type="button"
-                                disabled={!job}
-                                onClick={() => {
-                                  const duration = Math.max(
-                                    0.1,
-                                    job?.metadata?.durationSeconds ||
-                                      subtitleTimelineDuration,
-                                  );
-                                  const startTime = Math.min(
-                                    subtitleTimelineCursor,
-                                    Math.max(0, duration - 0.1),
-                                  );
-                                  const cue = {
-                                    startTime,
-                                    endTime: Math.min(duration, startTime + 3),
-                                    text: "Câu phụ đề mới",
-                                  };
-                                  setSelectedSubtitleCue(
-                                    previewSubtitleCues.length,
-                                  );
-                                  setSubtitlesEnabled(true);
-                                  updatePreviewSubtitleCues((cues) => [
-                                    ...cues,
-                                    cue,
-                                  ]);
-                                }}
-                                className="inline-flex items-center gap-1 rounded-md border border-cyan-500/30 px-2 py-1 text-cyan-200 hover:bg-cyan-950/40 disabled:cursor-not-allowed disabled:opacity-40"
-                              >
-                                <Plus className="h-3 w-3" />
-                                Câu
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  const nextNumber = textTracks.length + 1;
-                                  const track = {
-                                    id: `text-track-${crypto.randomUUID()}`,
-                                    name: `TEXT ${nextNumber}`,
-                                  };
-                                  setTextTracks((tracks) => [...tracks, track]);
-                                  setActiveTextTrackId(track.id);
-                                }}
-                                className="inline-flex items-center gap-1 rounded-md border border-violet-500/30 px-2 py-1 text-violet-200 hover:bg-violet-950/40"
-                              >
-                                <Plus className="h-3 w-3" />
-                                Timeline
-                              </button>
-                              <button
-                                type="button"
-                                disabled={
-                                  !textTracks.some(
-                                    (track) => track.id === activeTextTrackId,
-                                  )
-                                }
-                                onClick={deleteActiveTextTrack}
-                                title="Xóa timeline đang chọn và các clip trên timeline đó"
-                                aria-label="Xóa timeline đang chọn"
-                                className="inline-flex items-center gap-1 rounded-md border border-rose-500/30 px-2 py-1 text-rose-200 hover:bg-rose-950/30 disabled:cursor-not-allowed disabled:opacity-40"
-                              >
-                                <Trash2 className="h-3 w-3" />
-                                Xóa timeline
-                              </button>
-                              <button
-                                type="button"
-                                disabled={!job || !textTracks.length}
-                                onClick={() => addTextOverlayToTrack()}
-                                className="inline-flex items-center gap-1 rounded-md border border-violet-500/30 px-2 py-1 text-violet-200 hover:bg-violet-950/40 disabled:cursor-not-allowed disabled:opacity-40"
-                              >
-                                <Plus className="h-3 w-3" />
-                                Text
-                              </button>
-                              <button
-                                type="button"
-                                disabled={!job || !textTracks.length}
-                                onClick={() =>
-                                  addTextOverlayToTrack("character-card")
-                                }
-                                className="inline-flex items-center gap-1 rounded-md border border-amber-500/30 px-2 py-1 text-amber-200 hover:bg-amber-950/40 disabled:cursor-not-allowed disabled:opacity-40"
-                              >
-                                <Plus className="h-3 w-3" />
-                                Card nhân vật
-                              </button>
-                              <button
-                                type="button"
-                                disabled={
-                                  !job || !job.metadata || isMediaProcessing
-                                }
-                                onClick={() =>
-                                  void saveEndSceneForCurrentVideo(
-                                    !endSceneEnabled,
-                                  )
-                                }
-                                className="inline-flex items-center gap-1 rounded-md border border-orange-500/30 px-2 py-1 text-orange-200 hover:bg-orange-950/30 disabled:cursor-not-allowed disabled:opacity-40"
-                              >
-                                {endSceneEnabled
-                                  ? "Bỏ End Scene"
-                                  : "Add End Scene"}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={fitSubtitleTimelineToPanel}
-                                title="Fit timeline vừa panel và cuộn về đầu (Shift+Z)"
-                                aria-label="Fit timeline vừa panel và cuộn về đầu"
-                                className="rounded-md border border-slate-700 px-2 py-1 text-slate-300 hover:border-cyan-500/50"
-                              >
-                                Fit
-                              </button>
-                              <label className="flex items-center gap-2">
-                                Zoom
-                                <input
-                                  type="range"
-                                  min={subtitleTimelineMinZoom}
-                                  max={180}
-                                  step="any"
-                                  value={subtitleTimelineZoom}
-                                  onChange={(event) =>
-                                    changeSubtitleTimelineZoom(
-                                      Number(event.target.value),
-                                    )
-                                  }
-                                  className="w-20 accent-cyan-400"
-                                  aria-label="Zoom timeline phụ đề"
-                                />
-                              </label>
-                            </div>
-                          </div>
-                          {previewSubtitleCues.length > 0 && (
-                            <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-slate-800 bg-slate-950/50 px-2.5 py-2 text-[10px] text-slate-400">
-                              {renderSubtitleTimingAdjustment(
-                                "start",
-                                "Bắt đầu",
-                              )}
-                              {renderSubtitleTimingAdjustment(
-                                "end",
-                                "Kết thúc",
-                              )}
-                              {renderSubtitleTimingAdjustment(
-                                "move",
-                                "Di chuyển",
-                              )}
-                              <span className="text-slate-500">
-                                Chỉ kéo dài vào khoảng trống, không chồng lấn
-                                phụ đề kế bên
-                              </span>
-                            </div>
-                          )}
-                          {previewSubtitleCues.length === 0 &&
-                          textTracks.length === 0 &&
-                          !endSceneEnabled ? (
-                            <p className="rounded-lg border border-dashed border-slate-700 p-4 text-xs text-slate-500">
-                              Chọn file SRT để tạo các clip phụ đề trên
-                              timeline.
-                            </p>
-                          ) : (
-                            <div
-                              ref={subtitleTimelineScrollRef}
-                              data-video-dubbing-timeline
-                              tabIndex={0}
-                              aria-label="Timeline phụ đề và card nhân vật"
-                              className="max-h-64 overflow-auto overscroll-contain rounded-lg border border-slate-800 bg-slate-900/50"
-                            >
-                              <div
-                                style={{ width: `${subtitleTimelineWidth}px` }}
-                              >
-                                <div
-                                  className="relative h-7 cursor-crosshair border-b border-slate-700 bg-slate-950/80"
-                                  onClick={(event) => {
-                                    setSelectedSubtitleCue(null);
-                                    setSelectedTextOverlay(null);
-                                    const bounds =
-                                      event.currentTarget.getBoundingClientRect();
-                                    const position = Math.max(
-                                      0,
-                                      Math.min(
-                                        1,
-                                        (event.clientX - bounds.left) /
-                                          bounds.width,
-                                      ),
-                                    );
-                                    seekSubtitleTimeline(
-                                      position * subtitleTimelineDuration,
-                                    );
-                                  }}
-                                >
-                                  {subtitleTimelineTicks.map((tick) => (
-                                    <span
-                                      key={tick}
-                                      className="absolute top-1 text-[9px] tabular-nums text-slate-500"
-                                      style={{
-                                        left: `${(tick / subtitleTimelineDuration) * subtitleTimelineWidth}px`,
-                                      }}
+                                    <div
+                                      role="cell"
+                                      className="min-w-0 px-2 py-1"
                                     >
-                                      {formatElapsed(tick)}
-                                    </span>
-                                  ))}
-                                </div>
-                                <div
-                                  ref={subtitleTimelineTrackRef}
-                                  className="relative cursor-crosshair bg-slate-950/30"
-                                  style={{
-                                    height: `${Math.max(54, subtitleTimelineLaneEnds.length * 34 + (endSceneEnabled ? 34 : 0) + 10)}px`,
-                                  }}
-                                  onClick={(event) => {
-                                    if (event.target !== event.currentTarget)
-                                      return;
-                                    setSelectedSubtitleCue(null);
-                                    setSelectedTextOverlay(null);
-                                    const bounds =
-                                      event.currentTarget.getBoundingClientRect();
-                                    const position = Math.max(
-                                      0,
-                                      Math.min(
-                                        1,
-                                        (event.clientX - bounds.left) /
-                                          bounds.width,
-                                      ),
-                                    );
-                                    seekSubtitleTimeline(
-                                      position * subtitleTimelineDuration,
-                                    );
-                                  }}
-                                >
-                                  {subtitleTimelineTicks.map((tick) => (
-                                    <span
-                                      key={`grid-${tick}`}
-                                      className="pointer-events-none absolute inset-y-0 border-l border-slate-800/80"
-                                      style={{
-                                        left: `${(tick / subtitleTimelineDuration) * subtitleTimelineWidth}px`,
-                                      }}
-                                    />
-                                  ))}
-                                  <span
-                                    className="pointer-events-none absolute inset-y-0 z-20 border-l-2 border-rose-400"
-                                    style={{
-                                      left: `${(subtitleTimelineCursor / subtitleTimelineDuration) * subtitleTimelineWidth}px`,
-                                    }}
-                                  />
-                                  {subtitleTimelineItems.map(
-                                    ({ cue, index, lane }) => {
-                                      const active =
-                                        cue.startTime <=
-                                          subtitleTimelineCursor &&
-                                        cue.endTime >= subtitleTimelineCursor;
-                                      const left =
-                                        (cue.startTime /
-                                          subtitleTimelineDuration) *
-                                        subtitleTimelineWidth;
-                                      const width = Math.max(
-                                        14,
-                                        ((cue.endTime - cue.startTime) /
-                                          subtitleTimelineDuration) *
-                                          subtitleTimelineWidth,
-                                      );
-                                      return (
-                                        <div
-                                          key={`${cue.startTime}-${cue.endTime}-${index}`}
-                                          role="button"
-                                          tabIndex={0}
-                                          title={`${index + 1}. ${cue.text}\n${formatDuration(cue.startTime)} – ${formatDuration(cue.endTime)}`}
-                                          onClick={(event) => {
-                                            event.stopPropagation();
-                                            setSelectedTextOverlay(null);
-                                            setSelectedSubtitleCue(index);
-                                            seekSubtitleTimeline(cue.startTime);
+                                      <div className="flex min-w-0 items-center gap-2">
+                                        <span className="shrink-0 rounded bg-cyan-500/10 px-1.5 py-1 text-[9px] font-semibold text-cyan-200">
+                                          Đang nói
+                                        </span>
+                                        <input
+                                          type="text"
+                                          aria-label="Nội dung phụ đề đang nói"
+                                          placeholder="Không có câu phụ đề tại vị trí hiện tại"
+                                          value={
+                                            activeSubtitleAudioItem
+                                              ? (subtitleAudioDrafts[
+                                                  activeSubtitleAudioItem.id
+                                                ] ??
+                                                activeSubtitleAudioItem.text)
+                                              : ""
+                                          }
+                                          onChange={(event) => {
+                                            if (!activeSubtitleAudioItem)
+                                              return;
+                                            setSubtitleAudioDrafts(
+                                              (current) => ({
+                                                ...current,
+                                                [activeSubtitleAudioItem.id]:
+                                                  event.target.value,
+                                              }),
+                                            );
                                           }}
-                                          onKeyDown={(event) => {
-                                            if (
-                                              event.key === "Enter" ||
-                                              event.key === " "
-                                            ) {
-                                              event.preventDefault();
-                                              setSelectedSubtitleCue(index);
-                                              seekSubtitleTimeline(
-                                                cue.startTime,
+                                          onBlur={() => {
+                                            if (activeSubtitleAudioItem) {
+                                              commitSubtitleAudioCueText(
+                                                activeSubtitleAudioItem.id,
                                               );
                                             }
                                           }}
-                                          onPointerDown={(event) => {
-                                            setSelectedTextOverlay(null);
-                                            startSubtitleTimelineDrag(
-                                              event,
-                                              index,
-                                              cue.startTime,
-                                              cue.endTime,
-                                              "move",
-                                            );
-                                          }}
-                                          className={`absolute z-10 flex h-7 select-none items-center overflow-hidden rounded-md border px-1 text-[9px] text-white shadow-sm ${previewSubtitleCues.length ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"} ${selectedSubtitleCue === index ? "border-amber-200 bg-amber-500/80" : active ? "border-cyan-200 bg-cyan-500/80" : "border-cyan-500/50 bg-cyan-700/70 hover:bg-cyan-600/80"}`}
-                                          style={{
-                                            left: `${left}px`,
-                                            top: `${5 + lane * 34}px`,
-                                            width: `${width}px`,
-                                          }}
-                                        >
-                                          {previewSubtitleCues.length > 0 && (
-                                            <span
-                                              onClick={(event) =>
-                                                event.stopPropagation()
-                                              }
-                                              onPointerDown={(event) => {
-                                                setSelectedTextOverlay(null);
-                                                startSubtitleTimelineDrag(
-                                                  event,
-                                                  index,
-                                                  cue.startTime,
-                                                  cue.endTime,
-                                                  "start",
-                                                );
-                                              }}
-                                              className="absolute inset-y-0 left-0 z-20 w-1.5 cursor-ew-resize bg-cyan-100/80"
-                                              aria-label={`Chỉnh điểm bắt đầu câu ${index + 1}`}
-                                            />
-                                          )}
-                                          <span className="pointer-events-none truncate px-1">
-                                            {index + 1}. {cue.text}
+                                          disabled={
+                                            !activeSubtitleAudioItem ||
+                                            subtitleAudioSyncing ||
+                                            Boolean(
+                                              subtitleAudioRegeneratingId,
+                                            ) ||
+                                            subtitleAudioMasterBusy ||
+                                            isMasterGenerating ||
+                                            isMediaProcessing
+                                          }
+                                          className="h-8 min-w-0 flex-1 rounded-md border border-cyan-500/30 bg-slate-950 px-2 text-xs text-slate-100 outline-none focus:border-cyan-300 disabled:opacity-60"
+                                        />
+                                        {activeSubtitleAudioItem && (
+                                          <span className="shrink-0 text-[10px] text-slate-500">
+                                            {formatDuration(
+                                              activeSubtitleAudioItem.startTime,
+                                            )}{" "}
+                                            –{" "}
+                                            {formatDuration(
+                                              activeSubtitleAudioItem.endTime,
+                                            )}
                                           </span>
-                                          {previewSubtitleCues.length > 0 && (
-                                            <span
-                                              onClick={(event) =>
-                                                event.stopPropagation()
-                                              }
-                                              onPointerDown={(event) => {
-                                                setSelectedTextOverlay(null);
-                                                startSubtitleTimelineDrag(
-                                                  event,
-                                                  index,
-                                                  cue.startTime,
-                                                  cue.endTime,
-                                                  "end",
-                                                );
-                                              }}
-                                              className="absolute inset-y-0 right-0 z-20 w-1.5 cursor-ew-resize bg-cyan-100/80"
-                                              aria-label={`Chỉnh điểm kết thúc câu ${index + 1}`}
-                                            />
-                                          )}
-                                        </div>
-                                      );
-                                    },
-                                  )}
-                                  {endSceneEnabled && job?.metadata && (
-                                    <div
-                                      role="button"
-                                      tabIndex={0}
-                                      title={`End Scene · ${formatDuration(job.metadata.durationSeconds)} – ${formatDuration(job.metadata.durationSeconds + endSceneDurationSeconds)}`}
-                                      onClick={(event) => {
-                                        event.stopPropagation();
-                                        seekSubtitleTimeline(
-                                          job.metadata!.durationSeconds + 0.01,
-                                        );
-                                      }}
-                                      onKeyDown={(event) => {
-                                        if (
-                                          event.key === "Enter" ||
-                                          event.key === " "
-                                        ) {
-                                          event.preventDefault();
-                                          seekSubtitleTimeline(
-                                            job.metadata!.durationSeconds +
-                                              0.01,
-                                          );
-                                        }
-                                      }}
-                                      className="absolute z-10 flex h-7 cursor-pointer items-center overflow-hidden rounded-md border border-orange-300/70 bg-orange-600/80 px-2 text-[9px] font-semibold text-white"
-                                      style={{
-                                        left: `${(job.metadata.durationSeconds / subtitleTimelineDuration) * subtitleTimelineWidth}px`,
-                                        top: `${5 + subtitleTimelineLaneEnds.length * 34}px`,
-                                        width: `${Math.max(22, (endSceneDurationSeconds / subtitleTimelineDuration) * subtitleTimelineWidth)}px`,
-                                      }}
-                                    >
-                                      End Scene
-                                    </div>
-                                  )}
-                                </div>
-                                {textTracks.map((track) => (
-                                  <div
-                                    key={track.id}
-                                    onClick={() => {
-                                      setActiveTextTrackId(track.id);
-                                      setSelectedSubtitleCue(null);
-                                      setSelectedTextOverlay(null);
-                                    }}
-                                    className={`border-t border-slate-800 transition-colors ${activeTextTrackId === track.id ? "bg-violet-500/10 ring-1 ring-inset ring-violet-400/40" : "bg-violet-950/10 hover:bg-violet-500/5"}`}
-                                  >
-                                    <div className="flex h-7 items-center px-2">
-                                      <span className="text-[9px] font-semibold text-violet-300">
-                                        {track.name}
-                                      </span>
+                                        )}
+                                      </div>
                                     </div>
                                     <div
-                                      className="relative"
-                                      style={{
-                                        height: `${Math.max(
-                                          32,
-                                          (textTimelineLanes.countsByTrackId[
-                                            track.id
-                                          ] ?? 1) *
-                                            34 -
-                                            2,
-                                        )}px`,
-                                      }}
-                                      onClick={(event) => {
-                                        setActiveTextTrackId(track.id);
-                                        if (
-                                          event.target !== event.currentTarget
-                                        )
-                                          return;
-                                        setSelectedSubtitleCue(null);
-                                        setSelectedTextOverlay(null);
-                                        const bounds =
-                                          event.currentTarget.getBoundingClientRect();
-                                        const position = Math.max(
-                                          0,
-                                          Math.min(
-                                            1,
-                                            (event.clientX - bounds.left) /
-                                              bounds.width,
-                                          ),
-                                        );
-                                        seekSubtitleTimeline(
-                                          position * subtitleTimelineDuration,
-                                        );
-                                      }}
+                                      role="cell"
+                                      className="whitespace-nowrap px-2 py-1"
                                     >
                                       <span
-                                        className="pointer-events-none absolute inset-y-0 z-20 border-l-2 border-rose-400"
-                                        style={{
-                                          left: `${(subtitleTimelineCursor / subtitleTimelineDuration) * subtitleTimelineWidth}px`,
-                                        }}
+                                        className={`inline-flex items-center gap-1.5 text-[10px] ${activeSubtitleAudioRow?.status === "failed" ? "text-rose-300" : "text-slate-500"}`}
+                                      >
+                                        {activeSubtitleAudioRow?.status ===
+                                          "generating" && (
+                                          <LoaderCircle className="h-3 w-3 animate-spin" />
+                                        )}
+                                        {activeSubtitleAudioRow?.status ===
+                                        "failed"
+                                          ? activeSubtitleAudioRow.error ||
+                                            "Tạo audio thất bại"
+                                          : activeSubtitleAudioRow?.status ===
+                                              "generating"
+                                            ? "Đang tạo audio…"
+                                            : activeSubtitleAudioRow?.audioUrl
+                                              ? "Đã có audio"
+                                              : activeSubtitleAudioItem
+                                                ? "Chưa có audio"
+                                                : "—"}
+                                      </span>
+                                    </div>
+                                    <div role="cell" className="px-2 py-1" />
+                                    <div
+                                      role="cell"
+                                      className="col-span-4 flex flex-wrap items-center gap-1.5 border-t border-cyan-500/15 px-2 py-1.5"
+                                    >
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          previousSubtitleAudioItem &&
+                                          seekSubtitleTimeline(
+                                            previousSubtitleAudioItem.startTime,
+                                          )
+                                        }
+                                        disabled={
+                                          !previousSubtitleAudioItem ||
+                                          subtitleAudioSyncing ||
+                                          isMediaProcessing
+                                        }
+                                        className="rounded-md border border-slate-700 px-2 py-1 text-[10px] font-semibold text-slate-200 hover:border-cyan-500/50 disabled:cursor-not-allowed disabled:opacity-40"
+                                        title="Nhảy đến câu phụ đề trước"
+                                      >
+                                        Câu Trước
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          nextSubtitleAudioItem &&
+                                          seekSubtitleTimeline(
+                                            nextSubtitleAudioItem.startTime,
+                                          )
+                                        }
+                                        disabled={
+                                          !nextSubtitleAudioItem ||
+                                          subtitleAudioSyncing ||
+                                          isMediaProcessing
+                                        }
+                                        className="rounded-md border border-slate-700 px-2 py-1 text-[10px] font-semibold text-slate-200 hover:border-cyan-500/50 disabled:cursor-not-allowed disabled:opacity-40"
+                                        title="Nhảy đến câu phụ đề sau"
+                                      >
+                                        Câu Sau
+                                      </button>
+                                      <span
+                                        className="mx-1 h-5 border-l border-slate-700"
+                                        aria-hidden="true"
                                       />
-                                      {textOverlays
-                                        .map((cue, index) => ({ cue, index }))
-                                        .filter(
-                                          ({ cue }) =>
-                                            !cue.isTitle &&
-                                            (cue.trackId ||
-                                              DEFAULT_TEXT_TRACK_ID) ===
-                                              track.id,
-                                        )
-                                        .map(({ cue, index }) => {
-                                          const left =
-                                            (cue.startTime /
-                                              subtitleTimelineDuration) *
-                                            subtitleTimelineWidth;
-                                          const width = Math.max(
-                                            18,
-                                            ((cue.endTime - cue.startTime) /
-                                              subtitleTimelineDuration) *
-                                              subtitleTimelineWidth,
+                                      <span
+                                        className="text-[10px] text-slate-400"
+                                        title="Điều chỉnh điểm bắt đầu"
+                                      >
+                                        Trước
+                                      </span>
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          activeSubtitleAudioItem &&
+                                          adjustSubtitleAudioCueTiming(
+                                            activeSubtitleAudioItem.id,
+                                            "start",
+                                            -1,
+                                          )
+                                        }
+                                        disabled={
+                                          !activeSubtitleAudioItem ||
+                                          subtitleAudioSyncing ||
+                                          Boolean(
+                                            subtitleAudioRegeneratingId,
+                                          ) ||
+                                          subtitleAudioMasterBusy ||
+                                          isMasterGenerating ||
+                                          isMediaProcessing
+                                        }
+                                        aria-label={`Mở rộng phía trước ${subtitleAudioTimingStepMs} mili giây`}
+                                        title="Mở rộng thời gian phía trước"
+                                        className="rounded-md border border-cyan-500/30 px-2 py-1 text-xs font-bold text-cyan-200 hover:bg-cyan-950/40 disabled:cursor-not-allowed disabled:opacity-40"
+                                      >
+                                        +
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          activeSubtitleAudioItem &&
+                                          adjustSubtitleAudioCueTiming(
+                                            activeSubtitleAudioItem.id,
+                                            "start",
+                                            1,
+                                          )
+                                        }
+                                        disabled={
+                                          !activeSubtitleAudioItem ||
+                                          subtitleAudioSyncing ||
+                                          Boolean(
+                                            subtitleAudioRegeneratingId,
+                                          ) ||
+                                          subtitleAudioMasterBusy ||
+                                          isMasterGenerating ||
+                                          isMediaProcessing
+                                        }
+                                        aria-label={`Thu gọn phía trước ${subtitleAudioTimingStepMs} mili giây`}
+                                        title="Thu gọn thời gian phía trước"
+                                        className="rounded-md border border-slate-700 px-2 py-1 text-xs font-bold text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
+                                      >
+                                        −
+                                      </button>
+                                      <input
+                                        type="number"
+                                        min={1}
+                                        step={1}
+                                        value={subtitleAudioTimingStepMs}
+                                        onChange={(event) => {
+                                          const value = Number(
+                                            event.target.value,
                                           );
-                                          const lane =
-                                            textTimelineLanes.lanes[index] ?? 0;
-                                          return (
-                                            <div
-                                              key={`text-${index}`}
-                                              role="button"
-                                              tabIndex={0}
-                                              title={`${cue.text}${cue.kind === "character-card" ? ` · ${cue.characterRole ?? ""}` : ""}\n${formatDuration(cue.startTime)} – ${formatDuration(cue.endTime)}`}
-                                              onClick={(event) => {
-                                                event.stopPropagation();
-                                                setActiveTextTrackId(track.id);
-                                                setSelectedSubtitleCue(null);
-                                                setSelectedTextOverlay(index);
-                                                seekSubtitleTimeline(
-                                                  cue.startTime,
-                                                );
-                                              }}
-                                              onPointerDown={(event) => {
-                                                setActiveTextTrackId(track.id);
-                                                setSelectedSubtitleCue(null);
-                                                startSubtitleTimelineDrag(
-                                                  event,
-                                                  index,
-                                                  cue.startTime,
-                                                  cue.endTime,
-                                                  "move",
-                                                  "text",
-                                                );
-                                              }}
-                                              className={`absolute z-10 flex h-6 select-none items-center overflow-hidden rounded-md border px-1 text-[9px] text-white ${selectedTextOverlay === index ? "border-violet-200 bg-violet-500/90" : "border-violet-400/50 bg-violet-700/75"} cursor-grab active:cursor-grabbing`}
-                                              style={{
-                                                left: `${left}px`,
-                                                top: `${4 + lane * 34}px`,
-                                                width: `${width}px`,
-                                              }}
-                                            >
-                                              <span
-                                                onClick={(event) =>
-                                                  event.stopPropagation()
-                                                }
-                                                onPointerDown={(event) => {
-                                                  event.stopPropagation();
-                                                  setActiveTextTrackId(
-                                                    track.id,
-                                                  );
-                                                  startSubtitleTimelineDrag(
-                                                    event,
-                                                    index,
-                                                    cue.startTime,
-                                                    cue.endTime,
-                                                    "start",
-                                                    "text",
-                                                  );
-                                                }}
-                                                className="absolute inset-y-0 left-0 z-20 w-1.5 cursor-ew-resize bg-violet-100/80"
-                                              />
-                                              <span className="pointer-events-none truncate px-1">
-                                                {cue.kind === "character-card"
-                                                  ? `${cue.text} · ${cue.characterRole ?? ""}`
-                                                  : cue.text}
-                                              </span>
-                                              <span
-                                                onClick={(event) =>
-                                                  event.stopPropagation()
-                                                }
-                                                onPointerDown={(event) => {
-                                                  event.stopPropagation();
-                                                  setActiveTextTrackId(
-                                                    track.id,
-                                                  );
-                                                  startSubtitleTimelineDrag(
-                                                    event,
-                                                    index,
-                                                    cue.startTime,
-                                                    cue.endTime,
-                                                    "end",
-                                                    "text",
-                                                  );
-                                                }}
-                                                className="absolute inset-y-0 right-0 z-20 w-1.5 cursor-ew-resize bg-violet-100/80"
-                                              />
-                                            </div>
-                                          );
-                                        })}
+                                          if (
+                                            Number.isFinite(value) &&
+                                            value >= 1
+                                          ) {
+                                            setSubtitleAudioTimingStepMs(
+                                              Math.round(value),
+                                            );
+                                          }
+                                        }}
+                                        aria-label="Bước chỉnh thời gian câu đang nói (mili giây)"
+                                        className="h-7 w-16 rounded border border-slate-700 bg-slate-950 px-1 text-center text-[10px] tabular-nums text-slate-200"
+                                      />
+                                      <span className="-ml-1 text-[10px] text-slate-400">
+                                        ms
+                                      </span>
+                                      <span
+                                        className="mx-1 h-5 border-l border-slate-700"
+                                        aria-hidden="true"
+                                      />
+                                      <span
+                                        className="text-[10px] text-slate-400"
+                                        title="Điều chỉnh điểm kết thúc"
+                                      >
+                                        Sau
+                                      </span>
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          activeSubtitleAudioItem &&
+                                          adjustSubtitleAudioCueTiming(
+                                            activeSubtitleAudioItem.id,
+                                            "end",
+                                            -1,
+                                          )
+                                        }
+                                        disabled={
+                                          !activeSubtitleAudioItem ||
+                                          subtitleAudioSyncing ||
+                                          Boolean(
+                                            subtitleAudioRegeneratingId,
+                                          ) ||
+                                          subtitleAudioMasterBusy ||
+                                          isMasterGenerating ||
+                                          isMediaProcessing
+                                        }
+                                        aria-label={`Thu gọn phía sau ${subtitleAudioTimingStepMs} mili giây`}
+                                        title="Thu gọn thời gian phía sau"
+                                        className="rounded-md border border-slate-700 px-2 py-1 text-xs font-bold text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
+                                      >
+                                        −
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          activeSubtitleAudioItem &&
+                                          adjustSubtitleAudioCueTiming(
+                                            activeSubtitleAudioItem.id,
+                                            "end",
+                                            1,
+                                          )
+                                        }
+                                        disabled={
+                                          !activeSubtitleAudioItem ||
+                                          subtitleAudioSyncing ||
+                                          Boolean(
+                                            subtitleAudioRegeneratingId,
+                                          ) ||
+                                          subtitleAudioMasterBusy ||
+                                          isMasterGenerating ||
+                                          isMediaProcessing
+                                        }
+                                        aria-label={`Mở rộng phía sau ${subtitleAudioTimingStepMs} mili giây`}
+                                        title="Mở rộng thời gian phía sau"
+                                        className="rounded-md border border-cyan-500/30 px-2 py-1 text-xs font-bold text-cyan-200 hover:bg-cyan-950/40 disabled:cursor-not-allowed disabled:opacity-40"
+                                      >
+                                        +
+                                      </button>
+                                      <span
+                                        className="mx-1 h-5 border-l border-slate-700"
+                                        aria-hidden="true"
+                                      />
+                                      {activeSubtitleAudioRow?.audioUrl && (
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            void playSubtitleAudio(
+                                              activeSubtitleAudioRow,
+                                            )
+                                          }
+                                          aria-label={
+                                            subtitleAudioPlayingId ===
+                                            activeSubtitleAudioRow.id
+                                              ? "Dừng audio câu đang nói"
+                                              : "Phát audio câu đang nói"
+                                          }
+                                          title={
+                                            subtitleAudioPlayingId ===
+                                            activeSubtitleAudioRow.id
+                                              ? "Dừng phát"
+                                              : "Phát audio"
+                                          }
+                                          className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-violet-500/30 bg-violet-500/10 text-violet-200 hover:bg-violet-500/20"
+                                        >
+                                          {subtitleAudioPlayingId ===
+                                          activeSubtitleAudioRow.id ? (
+                                            <Pause className="h-3.5 w-3.5" />
+                                          ) : (
+                                            <Play className="h-3.5 w-3.5" />
+                                          )}
+                                        </button>
+                                      )}
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          if (activeSubtitleAudio) {
+                                            regenerateSubtitleAudioWithDraft(
+                                              activeSubtitleAudio,
+                                            );
+                                          }
+                                        }}
+                                        disabled={
+                                          !activeSubtitleAudio ||
+                                          !selectedVoice ||
+                                          subtitleAudioSyncing ||
+                                          Boolean(
+                                            subtitleAudioRegeneratingId,
+                                          ) ||
+                                          subtitleAudioMasterBusy ||
+                                          isMasterGenerating ||
+                                          isMediaProcessing
+                                        }
+                                        className="inline-flex items-center gap-1 rounded-md border border-violet-500/30 bg-violet-500/10 px-2 py-1 text-[10px] font-semibold text-violet-200 hover:bg-violet-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                                        title="Tạo lại TTS cho câu đang nói"
+                                      >
+                                        {subtitleAudioRegeneratingId ===
+                                        activeSubtitleAudioItem?.id ? (
+                                          <LoaderCircle className="h-3 w-3 animate-spin" />
+                                        ) : (
+                                          <RefreshCw className="h-3 w-3" />
+                                        )}
+                                        Tạo lại
+                                      </button>
                                     </div>
                                   </div>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-                          {selectedSubtitleCue !== null &&
-                            previewSubtitleCues[selectedSubtitleCue] && (
-                              <div className="grid gap-2 rounded-lg border border-cyan-500/20 bg-cyan-950/10 p-3 sm:grid-cols-2">
-                                <label className="space-y-1 text-[10px] text-slate-400 sm:col-span-2">
-                                  Nội dung câu {selectedSubtitleCue + 1}
-                                  <textarea
-                                    value={
-                                      previewSubtitleCues[selectedSubtitleCue]
-                                        .text
-                                    }
-                                    onChange={(event) =>
-                                      updateSelectedSubtitleCue({
-                                        text: event.target.value,
-                                      })
-                                    }
-                                    rows={2}
-                                    className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-white"
-                                  />
-                                </label>
-                                <label className="space-y-1 text-[10px] text-slate-400">
-                                  Bắt đầu (giây)
-                                  <input
-                                    type="number"
-                                    min={0}
-                                    max={
-                                      previewSubtitleCues[selectedSubtitleCue]
-                                        .endTime - 0.1
-                                    }
-                                    step={0.05}
-                                    value={
-                                      previewSubtitleCues[selectedSubtitleCue]
-                                        .startTime
-                                    }
-                                    onChange={(event) => {
-                                      const value = Number(event.target.value);
-                                      if (Number.isFinite(value))
-                                        updateSelectedSubtitleCue({
-                                          startTime: Math.max(
+                                </div>
+                                <div className="max-h-[70vh] overflow-auto rounded-lg border border-slate-800">
+                                  <div
+                                    role="table"
+                                    aria-label="Danh sách phụ đề và audio"
+                                    className="w-full text-xs"
+                                  >
+                                    <div role="rowgroup">
+                                      <div
+                                        role="row"
+                                        className="sticky top-0 z-10 grid w-full grid-cols-[3.5rem_minmax(0,1fr)_max-content_max-content] bg-slate-900 text-[10px] uppercase tracking-wider text-slate-500"
+                                      >
+                                        <div
+                                          role="columnheader"
+                                          className="px-2 py-2"
+                                        >
+                                          #
+                                        </div>
+                                        <div
+                                          role="columnheader"
+                                          className="px-2 py-2"
+                                        >
+                                          Phụ đề
+                                        </div>
+                                        <div
+                                          role="columnheader"
+                                          className="whitespace-nowrap px-2 py-2"
+                                        >
+                                          Audio
+                                        </div>
+                                        <div
+                                          role="columnheader"
+                                          className="whitespace-nowrap px-2 py-2 text-right"
+                                        >
+                                          Tác vụ
+                                        </div>
+                                      </div>
+                                    </div>
+                                    <div
+                                      role="rowgroup"
+                                      className="divide-y divide-slate-800/80"
+                                    >
+                                      {filteredSubtitleAudioInput.length ? (
+                                        filteredSubtitleAudioInput.map(
+                                          (item) => {
+                                            const audio =
+                                              subtitleAudioItems.find(
+                                                (entry) => entry.id === item.id,
+                                              );
+                                            const editedAfterAudio = Boolean(
+                                              audio?.audioUrl &&
+                                              audio.generatedText !== item.text,
+                                            );
+                                            const subtitleItem: SubtitleItem = {
+                                              ...item,
+                                              targetDuration: Math.max(
+                                                0.1,
+                                                item.endTime - item.startTime,
+                                              ),
+                                              status: "pending",
+                                            };
+                                            const subtitleCueIndex =
+                                              previewSubtitleCues.findIndex(
+                                                (cue) => cue.id === item.id,
+                                              );
+                                            const combineDisabled =
+                                              subtitleCueIndex <= 0 ||
+                                              subtitleAudioSyncing ||
+                                              Boolean(
+                                                subtitleAudioRegeneratingId,
+                                              ) ||
+                                              subtitleAudioMasterBusy ||
+                                              isMasterGenerating ||
+                                              isMediaProcessing;
+                                            return (
+                                              <div
+                                                key={item.id}
+                                                role="row"
+                                                className="grid w-full grid-cols-[3.5rem_minmax(0,1fr)_max-content_max-content] text-slate-300"
+                                              >
+                                                <div
+                                                  role="cell"
+                                                  onClick={() =>
+                                                    seekSubtitleTimeline(
+                                                      item.startTime,
+                                                    )
+                                                  }
+                                                  title={`Tua preview đến câu ${item.index}`}
+                                                  className="cursor-pointer px-2 py-1.5 font-mono text-slate-500 hover:bg-cyan-950/20"
+                                                >
+                                                  {item.index}
+                                                </div>
+                                                <div
+                                                  role="cell"
+                                                  onClick={() =>
+                                                    seekSubtitleTimeline(
+                                                      item.startTime,
+                                                    )
+                                                  }
+                                                  title={`Tua preview đến câu ${item.index}`}
+                                                  className="min-w-0 cursor-pointer px-2 py-1 hover:bg-cyan-950/20"
+                                                >
+                                                  <div className="flex min-w-0 items-center gap-2">
+                                                    <input
+                                                      type="text"
+                                                      aria-label={`Nội dung phụ đề câu ${item.index}`}
+                                                      value={
+                                                        subtitleAudioDrafts[
+                                                          item.id
+                                                        ] ?? item.text
+                                                      }
+                                                      onChange={(event) =>
+                                                        setSubtitleAudioDrafts(
+                                                          (current) => ({
+                                                            ...current,
+                                                            [item.id]:
+                                                              event.target
+                                                                .value,
+                                                          }),
+                                                        )
+                                                      }
+                                                      onBlur={() =>
+                                                        commitSubtitleAudioCueText(
+                                                          item.id,
+                                                        )
+                                                      }
+                                                      disabled={
+                                                        subtitleAudioSyncing ||
+                                                        Boolean(
+                                                          subtitleAudioRegeneratingId,
+                                                        ) ||
+                                                        subtitleAudioMasterBusy ||
+                                                        isMasterGenerating ||
+                                                        isMediaProcessing
+                                                      }
+                                                      className="h-8 min-w-0 flex-1 rounded-md border border-slate-700 bg-slate-950 px-2 text-xs text-slate-100 outline-none focus:border-violet-400"
+                                                    />
+                                                    <span className="shrink-0 text-[10px] text-slate-500">
+                                                      {formatDuration(
+                                                        item.startTime,
+                                                      )}{" "}
+                                                      –{" "}
+                                                      {formatDuration(
+                                                        item.endTime,
+                                                      )}
+                                                    </span>
+                                                    {editedAfterAudio && (
+                                                      <span
+                                                        className="shrink-0 text-[10px] text-amber-300"
+                                                        title="Audio vẫn dùng nội dung trước"
+                                                      >
+                                                        Audio cũ
+                                                      </span>
+                                                    )}
+                                                  </div>
+                                                </div>
+                                                <div
+                                                  role="cell"
+                                                  className="whitespace-nowrap px-2 py-1"
+                                                >
+                                                  {audio?.audioUrl ? (
+                                                    <div className="flex items-center gap-2">
+                                                      <button
+                                                        type="button"
+                                                        onClick={() =>
+                                                          void playSubtitleAudio(
+                                                            audio,
+                                                          )
+                                                        }
+                                                        aria-label={
+                                                          subtitleAudioPlayingId ===
+                                                          item.id
+                                                            ? `Dừng audio câu ${item.index}`
+                                                            : `Phát audio câu ${item.index}`
+                                                        }
+                                                        title={
+                                                          subtitleAudioPlayingId ===
+                                                          item.id
+                                                            ? "Dừng phát"
+                                                            : "Phát audio"
+                                                        }
+                                                        className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-violet-500/30 bg-violet-500/10 text-violet-200 hover:bg-violet-500/20"
+                                                      >
+                                                        {subtitleAudioPlayingId ===
+                                                        item.id ? (
+                                                          <Pause className="h-3.5 w-3.5" />
+                                                        ) : (
+                                                          <Play className="h-3.5 w-3.5" />
+                                                        )}
+                                                      </button>
+                                                      {audio.status ===
+                                                        "failed" && (
+                                                        <span
+                                                          className="max-w-36 truncate text-[10px] text-rose-300"
+                                                          title={audio.error}
+                                                        >
+                                                          {audio.error ||
+                                                            "Tạo audio thất bại"}
+                                                        </span>
+                                                      )}
+                                                    </div>
+                                                  ) : (
+                                                    <span
+                                                      className={`inline-flex items-center gap-1.5 text-[10px] ${audio?.status === "failed" ? "text-rose-300" : "text-slate-500"}`}
+                                                    >
+                                                      {audio?.status ===
+                                                        "generating" && (
+                                                        <LoaderCircle className="h-3 w-3 animate-spin" />
+                                                      )}
+                                                      {audio?.status ===
+                                                      "failed"
+                                                        ? audio.error ||
+                                                          "Tạo audio thất bại"
+                                                        : audio?.status ===
+                                                            "generating"
+                                                          ? "Đang tạo audio…"
+                                                          : "Chưa có audio"}
+                                                    </span>
+                                                  )}
+                                                </div>
+                                                <div
+                                                  role="cell"
+                                                  className="whitespace-nowrap px-2 py-1 text-right"
+                                                >
+                                                  <div className="flex flex-nowrap justify-end gap-1">
+                                                    <button
+                                                      type="button"
+                                                      onClick={() =>
+                                                        regenerateSubtitleAudioWithDraft(
+                                                          subtitleItem,
+                                                        )
+                                                      }
+                                                      disabled={
+                                                        !selectedVoice ||
+                                                        subtitleAudioSyncing ||
+                                                        Boolean(
+                                                          subtitleAudioRegeneratingId,
+                                                        ) ||
+                                                        subtitleAudioMasterBusy ||
+                                                        isMasterGenerating ||
+                                                        isMediaProcessing
+                                                      }
+                                                      className="inline-flex items-center gap-1 rounded-md border border-violet-500/30 bg-violet-500/10 px-1.5 py-1 text-[9px] font-semibold text-violet-200 hover:bg-violet-500/20 disabled:opacity-40"
+                                                      title={`Tạo lại audio câu ${item.index}`}
+                                                    >
+                                                      {subtitleAudioRegeneratingId ===
+                                                      item.id ? (
+                                                        <LoaderCircle className="h-3 w-3 animate-spin" />
+                                                      ) : (
+                                                        <RefreshCw className="h-3 w-3" />
+                                                      )}
+                                                      Tạo lại
+                                                    </button>
+                                                    <button
+                                                      type="button"
+                                                      onClick={() =>
+                                                        combineSubtitleAudioCueAbove(
+                                                          item.id,
+                                                          "merge",
+                                                        )
+                                                      }
+                                                      disabled={combineDisabled}
+                                                      className="rounded-md border border-amber-500/30 px-1.5 py-1 text-[9px] font-semibold text-amber-200 hover:bg-amber-950/30 disabled:cursor-not-allowed disabled:opacity-40"
+                                                      title="Gộp với câu phía trên, giữ nội dung câu phía trên và mở rộng thời gian"
+                                                    >
+                                                      Merge above
+                                                    </button>
+                                                    <button
+                                                      type="button"
+                                                      onClick={() =>
+                                                        combineSubtitleAudioCueAbove(
+                                                          item.id,
+                                                          "join",
+                                                        )
+                                                      }
+                                                      disabled={combineDisabled}
+                                                      className="rounded-md border border-cyan-500/30 px-1.5 py-1 text-[9px] font-semibold text-cyan-200 hover:bg-cyan-950/30 disabled:cursor-not-allowed disabled:opacity-40"
+                                                      title="Nối nội dung với câu phía trên và mở rộng thời gian"
+                                                    >
+                                                      Join above
+                                                    </button>
+                                                    <button
+                                                      type="button"
+                                                      onClick={() =>
+                                                        deleteSubtitleAudioCue(
+                                                          item.id,
+                                                        )
+                                                      }
+                                                      disabled={
+                                                        subtitleAudioSyncing ||
+                                                        Boolean(
+                                                          subtitleAudioRegeneratingId,
+                                                        ) ||
+                                                        subtitleAudioMasterBusy ||
+                                                        isMasterGenerating ||
+                                                        isMediaProcessing
+                                                      }
+                                                      className="inline-flex items-center gap-1 rounded-md border border-rose-500/30 bg-rose-500/10 px-1.5 py-1 text-[9px] font-semibold text-rose-200 hover:bg-rose-500/20 disabled:opacity-40"
+                                                      title={`Xóa câu ${item.index} và audio`}
+                                                    >
+                                                      <Trash2 className="h-3 w-3" />
+                                                      Xóa
+                                                    </button>
+                                                  </div>
+                                                </div>
+                                              </div>
+                                            );
+                                          },
+                                        )
+                                      ) : (
+                                        <div
+                                          role="row"
+                                          className="grid w-full grid-cols-[3.5rem_minmax(0,1fr)_max-content_max-content]"
+                                        >
+                                          <div
+                                            role="cell"
+                                            className="col-span-4 px-4 py-10 text-center text-xs text-slate-500"
+                                          >
+                                            {subtitleAudioInput.length
+                                              ? "Không có câu nào khớp bộ lọc hiện tại."
+                                              : "Chưa có câu phụ đề để tạo audio."}
+                                          </div>
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+                              </section>
+                            )}
+                            {timelineWorkspaceTab === "subtitle" && (
+                              <section className="space-y-3 rounded-xl border border-slate-800 bg-slate-950/60 p-3">
+                                <div className="flex flex-wrap items-center justify-between gap-3">
+                                  <div>
+                                    <h4 className="text-xs font-semibold text-white">
+                                      Timeline phụ đề
+                                    </h4>
+                                    <p className="mt-1 text-[10px] text-slate-500">
+                                      Khi phát, timeline bám theo video; khi
+                                      dừng, bấm timeline để di chuyển playhead
+                                      riêng · Ctrl+C/V sao chép/dán tại playhead
+                                      · Delete xóa cue · Ctrl+cuộn để zoom vào
+                                      playhead · Shift+Z fit toàn timeline ·
+                                      Shift+cuộn để cuộn ngang
+                                    </p>
+                                  </div>
+                                  <div className="flex items-center gap-2 text-[10px] text-slate-400">
+                                    <span>
+                                      {previewSubtitleCues.length} câu
+                                    </span>
+                                    <button
+                                      type="button"
+                                      disabled={!job}
+                                      onClick={() => {
+                                        const duration = Math.max(
+                                          0.1,
+                                          job?.metadata?.durationSeconds ||
+                                            subtitleTimelineDuration,
+                                        );
+                                        const startTime = Math.min(
+                                          subtitleTimelineCursor,
+                                          Math.max(0, duration - 0.1),
+                                        );
+                                        const cue = {
+                                          startTime,
+                                          endTime: Math.min(
+                                            duration,
+                                            startTime + 3,
+                                          ),
+                                          text: "Câu phụ đề mới",
+                                        };
+                                        setSelectedSubtitleCue(
+                                          previewSubtitleCues.length,
+                                        );
+                                        setSubtitlesEnabled(true);
+                                        updatePreviewSubtitleCues((cues) => [
+                                          ...cues,
+                                          cue,
+                                        ]);
+                                      }}
+                                      className="inline-flex items-center gap-1 rounded-md border border-cyan-500/30 px-2 py-1 text-cyan-200 hover:bg-cyan-950/40 disabled:cursor-not-allowed disabled:opacity-40"
+                                    >
+                                      <Plus className="h-3 w-3" />
+                                      Câu
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const nextNumber =
+                                          textTracks.length + 1;
+                                        const track = {
+                                          id: `text-track-${crypto.randomUUID()}`,
+                                          name: `TEXT ${nextNumber}`,
+                                        };
+                                        setTextTracks((tracks) => [
+                                          ...tracks,
+                                          track,
+                                        ]);
+                                        setActiveTextTrackId(track.id);
+                                      }}
+                                      className="inline-flex items-center gap-1 rounded-md border border-violet-500/30 px-2 py-1 text-violet-200 hover:bg-violet-950/40"
+                                    >
+                                      <Plus className="h-3 w-3" />
+                                      Timeline
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={
+                                        !textTracks.some(
+                                          (track) =>
+                                            track.id === activeTextTrackId,
+                                        )
+                                      }
+                                      onClick={deleteActiveTextTrack}
+                                      title="Xóa timeline đang chọn và các clip trên timeline đó"
+                                      aria-label="Xóa timeline đang chọn"
+                                      className="inline-flex items-center gap-1 rounded-md border border-rose-500/30 px-2 py-1 text-rose-200 hover:bg-rose-950/30 disabled:cursor-not-allowed disabled:opacity-40"
+                                    >
+                                      <Trash2 className="h-3 w-3" />
+                                      Xóa timeline
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={!job || !textTracks.length}
+                                      onClick={() => addTextOverlayToTrack()}
+                                      className="inline-flex items-center gap-1 rounded-md border border-violet-500/30 px-2 py-1 text-violet-200 hover:bg-violet-950/40 disabled:cursor-not-allowed disabled:opacity-40"
+                                    >
+                                      <Plus className="h-3 w-3" />
+                                      Text
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={!job || !textTracks.length}
+                                      onClick={() =>
+                                        addTextOverlayToTrack("character-card")
+                                      }
+                                      className="inline-flex items-center gap-1 rounded-md border border-amber-500/30 px-2 py-1 text-amber-200 hover:bg-amber-950/40 disabled:cursor-not-allowed disabled:opacity-40"
+                                    >
+                                      <Plus className="h-3 w-3" />
+                                      Card nhân vật
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={
+                                        !job ||
+                                        !job.metadata ||
+                                        isMediaProcessing
+                                      }
+                                      onClick={() =>
+                                        void saveEndSceneForCurrentVideo(
+                                          !endSceneEnabled,
+                                        )
+                                      }
+                                      className="inline-flex items-center gap-1 rounded-md border border-orange-500/30 px-2 py-1 text-orange-200 hover:bg-orange-950/30 disabled:cursor-not-allowed disabled:opacity-40"
+                                    >
+                                      {endSceneEnabled
+                                        ? "Bỏ End Scene"
+                                        : "Add End Scene"}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={fitSubtitleTimelineToPanel}
+                                      title="Fit timeline vừa panel và cuộn về đầu (Shift+Z)"
+                                      aria-label="Fit timeline vừa panel và cuộn về đầu"
+                                      className="rounded-md border border-slate-700 px-2 py-1 text-slate-300 hover:border-cyan-500/50"
+                                    >
+                                      Fit
+                                    </button>
+                                    <label className="flex items-center gap-2">
+                                      Zoom
+                                      <input
+                                        type="range"
+                                        min={subtitleTimelineMinZoom}
+                                        max={180}
+                                        step="any"
+                                        value={subtitleTimelineZoom}
+                                        onChange={(event) =>
+                                          changeSubtitleTimelineZoom(
+                                            Number(event.target.value),
+                                          )
+                                        }
+                                        className="w-20 accent-cyan-400"
+                                        aria-label="Zoom timeline phụ đề"
+                                      />
+                                    </label>
+                                  </div>
+                                </div>
+                                {previewSubtitleCues.length > 0 && (
+                                  <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-slate-800 bg-slate-950/50 px-2.5 py-2 text-[10px] text-slate-400">
+                                    {renderSubtitleTimingAdjustment(
+                                      "start",
+                                      "Bắt đầu",
+                                    )}
+                                    {renderSubtitleTimingAdjustment(
+                                      "end",
+                                      "Kết thúc",
+                                    )}
+                                    {renderSubtitleTimingAdjustment(
+                                      "move",
+                                      "Di chuyển",
+                                    )}
+                                    <span className="text-slate-500">
+                                      Chỉ kéo dài vào khoảng trống, không chồng
+                                      lấn phụ đề kế bên
+                                    </span>
+                                  </div>
+                                )}
+                                {previewSubtitleCues.length === 0 &&
+                                textTracks.length === 0 &&
+                                !endSceneEnabled ? (
+                                  <p className="rounded-lg border border-dashed border-slate-700 p-4 text-xs text-slate-500">
+                                    Chọn file SRT để tạo các clip phụ đề trên
+                                    timeline.
+                                  </p>
+                                ) : (
+                                  <div
+                                    ref={subtitleTimelineScrollRef}
+                                    data-video-dubbing-timeline
+                                    tabIndex={0}
+                                    aria-label="Timeline phụ đề và card nhân vật"
+                                    className="max-h-64 overflow-auto overscroll-contain rounded-lg border border-slate-800 bg-slate-900/50"
+                                  >
+                                    <div
+                                      style={{
+                                        width: `${subtitleTimelineWidth}px`,
+                                      }}
+                                    >
+                                      <div
+                                        className="relative h-7 cursor-crosshair border-b border-slate-700 bg-slate-950/80"
+                                        onClick={(event) => {
+                                          setSelectedSubtitleCue(null);
+                                          setSelectedTextOverlay(null);
+                                          const bounds =
+                                            event.currentTarget.getBoundingClientRect();
+                                          const position = Math.max(
                                             0,
                                             Math.min(
-                                              value,
-                                              previewSubtitleCues[
-                                                selectedSubtitleCue
-                                              ].endTime - 0.1,
+                                              1,
+                                              (event.clientX - bounds.left) /
+                                                bounds.width,
                                             ),
-                                          ),
-                                        });
-                                    }}
-                                    className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-white"
-                                  />
-                                </label>
-                                <label className="space-y-1 text-[10px] text-slate-400">
-                                  Kết thúc (giây)
-                                  <input
-                                    type="number"
-                                    min={
-                                      previewSubtitleCues[selectedSubtitleCue]
-                                        .startTime + 0.1
-                                    }
-                                    step={0.05}
-                                    value={
-                                      previewSubtitleCues[selectedSubtitleCue]
-                                        .endTime
-                                    }
-                                    onChange={(event) => {
-                                      const value = Number(event.target.value);
-                                      if (Number.isFinite(value))
-                                        updateSelectedSubtitleCue({
-                                          endTime: Math.max(
-                                            previewSubtitleCues[
-                                              selectedSubtitleCue
-                                            ].startTime + 0.1,
-                                            value,
-                                          ),
-                                        });
-                                    }}
-                                    className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-white"
-                                  />
-                                </label>
-                                {subtitleAudioError && (
-                                  <p
-                                    role="alert"
-                                    className="rounded-md border border-rose-500/30 bg-rose-950/20 px-2 py-1.5 text-[10px] text-rose-200 sm:col-span-2"
-                                  >
-                                    {subtitleAudioError}
-                                  </p>
-                                )}
-                                <div className="flex flex-wrap items-center gap-2 sm:col-span-2">
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      if (selectedSubtitleCueTtsItem) {
-                                        void regenerateSubtitleAudio(
-                                          selectedSubtitleCueTtsItem,
-                                        );
-                                      }
-                                    }}
-                                    disabled={
-                                      !selectedSubtitleCueTtsItem ||
-                                      !selectedVoice ||
-                                      subtitleAudioSyncing ||
-                                      Boolean(subtitleAudioRegeneratingId) ||
-                                      subtitleAudioMasterBusy ||
-                                      isMasterGenerating ||
-                                      isMediaProcessing
-                                    }
-                                    className="inline-flex items-center justify-center gap-1 rounded-md border border-violet-500/30 bg-violet-500/10 px-2 py-1.5 text-xs text-violet-200 hover:bg-violet-500/20 disabled:cursor-not-allowed disabled:opacity-40"
-                                    title="Tạo lại TTS cho câu đang chọn"
-                                  >
-                                    {subtitleAudioRegeneratingId ===
-                                    selectedSubtitleCueTtsItem?.id ? (
-                                      <LoaderCircle className="h-3 w-3 animate-spin" />
-                                    ) : (
-                                      <RefreshCw className="h-3 w-3" />
-                                    )}
-                                    Tạo lại TTS
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      void rebuildMasterFromSubtitleAudio()
-                                    }
-                                    disabled={
-                                      !subtitleAudioInput.length ||
-                                      subtitleAudioSyncing ||
-                                      Boolean(subtitleAudioRegeneratingId) ||
-                                      subtitleAudioMasterBusy ||
-                                      isMasterGenerating ||
-                                      isMediaProcessing
-                                    }
-                                    className="inline-flex items-center justify-center gap-1 rounded-md border border-violet-500/30 px-2 py-1.5 text-xs text-violet-200 hover:bg-violet-950/30 disabled:cursor-not-allowed disabled:opacity-40"
-                                    title="Tạo lại Master từ audio của các câu phụ đề"
-                                  >
-                                    {subtitleAudioMasterBusy ||
-                                    isMasterGenerating ? (
-                                      <LoaderCircle className="h-3 w-3 animate-spin" />
-                                    ) : (
-                                      <RefreshCw className="h-3 w-3" />
-                                    )}
-                                    Tạo lại Master
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      updatePreviewSubtitleCues((cues) =>
-                                        cues.filter(
-                                          (_, index) =>
-                                            index !== selectedSubtitleCue,
-                                        ),
-                                      );
-                                      setSelectedSubtitleCue(null);
-                                    }}
-                                    className="inline-flex items-center justify-center gap-1 rounded-md border border-rose-500/30 px-2 py-1.5 text-xs text-rose-200 hover:bg-rose-950/30"
-                                  >
-                                    <Trash2 className="h-3 w-3" />
-                                    Xóa câu
-                                  </button>
-                                </div>
-                              </div>
-                            )}
-                          {selectedTextOverlay !== null &&
-                            textOverlays[selectedTextOverlay] &&
-                            !textOverlays[selectedTextOverlay].isTitle &&
-                            (() => {
-                              const cue = textOverlays[selectedTextOverlay];
-                              const textStyleValue: TextStyleControlValue = {
-                                fontFamily: cue.fontFamily,
-                                fontSize: cue.fontSize,
-                                bold: cue.bold,
-                                underline: cue.underline ?? false,
-                                italic: cue.italic,
-                                textCase: cue.textCase ?? "none",
-                                color: cue.color,
-                                outlineEnabled: cue.outlineEnabled ?? false,
-                                outlineColor: cue.outlineColor ?? "#000000",
-                                outlineWidthPx: cue.outlineWidthPx ?? 2,
-                                characterSpacingPx: cue.characterSpacingPx ?? 0,
-                                lineSpacingPx: cue.lineSpacingPx ?? 0,
-                              };
-                              const cueTrackId =
-                                cue.trackId || DEFAULT_TEXT_TRACK_ID;
-                              const cueTrackName =
-                                textTracks.find(
-                                  (track) => track.id === cueTrackId,
-                                )?.name || DEFAULT_TEXT_TRACK.name;
-                              const cueTrackTextCount = textOverlays.filter(
-                                (item) =>
-                                  !item.isTitle &&
-                                  (item.trackId || DEFAULT_TEXT_TRACK_ID) ===
-                                    cueTrackId,
-                              ).length;
-                              return (
-                                <div className="grid gap-2 rounded-lg border border-violet-500/20 bg-violet-950/10 p-3 sm:grid-cols-2 xl:grid-cols-4">
-                                  <div className="flex flex-wrap items-center justify-between gap-2 sm:col-span-2 xl:col-span-4">
-                                    <p className="text-[10px] text-violet-200">
-                                      Style và vị trí chỉ áp dụng cho clip này
-                                      cho đến khi nhấn Apply to All (
-                                      {cueTrackName}).
-                                    </p>
-                                    <button
-                                      type="button"
-                                      disabled={cueTrackTextCount < 2}
-                                      onClick={applySelectedTextOverlayToTrack}
-                                      className="rounded-md border border-violet-400/40 px-2.5 py-1.5 text-xs font-semibold text-violet-100 hover:bg-violet-900/40 disabled:cursor-not-allowed disabled:opacity-40"
-                                      title={`Áp dụng style và vị trí cho ${cueTrackTextCount} clip trong ${cueTrackName}`}
-                                    >
-                                      Apply to All
-                                    </button>
-                                  </div>
-                                  <label className="space-y-1 text-[10px] text-slate-400 sm:col-span-2">
-                                    {cue.kind === "character-card"
-                                      ? "Tên nhân vật"
-                                      : "Nội dung"}
-                                    <textarea
-                                      value={cue.text}
-                                      onChange={(event) =>
-                                        updateSelectedTextOverlay({
-                                          text: event.target.value,
-                                        })
-                                      }
-                                      rows={2}
-                                      className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-white"
-                                    />
-                                  </label>
-                                  {cue.kind === "character-card" && (
-                                    <>
-                                      <label className="space-y-1 text-[10px] text-slate-400 sm:col-span-2">
-                                        Chức vụ
-                                        <textarea
-                                          value={cue.characterRole ?? ""}
-                                          onChange={(event) =>
-                                            updateSelectedTextOverlay({
-                                              characterRole: event.target.value,
-                                            })
-                                          }
-                                          rows={2}
-                                          className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-white"
-                                        />
-                                      </label>
-                                      <label className="space-y-1 text-[10px] text-slate-400">
-                                        Cỡ chữ chức vụ
-                                        <div className="flex items-center gap-2">
-                                          <input
-                                            type="range"
-                                            min={8}
-                                            max={160}
-                                            value={
-                                              cue.characterRoleFontSize ??
-                                              Math.max(
-                                                8,
-                                                Math.round(cue.fontSize * 0.7),
-                                              )
-                                            }
-                                            onChange={(event) =>
-                                              updateSelectedTextOverlay({
-                                                characterRoleFontSize: Number(
-                                                  event.target.value,
-                                                ),
-                                              })
-                                            }
-                                            className="w-full accent-violet-400"
-                                            aria-label="Cỡ chữ chức vụ"
+                                          );
+                                          seekSubtitleTimeline(
+                                            position * subtitleTimelineDuration,
+                                          );
+                                        }}
+                                      >
+                                        {subtitleTimelineTicks.map((tick) => (
+                                          <span
+                                            key={tick}
+                                            className="absolute top-1 text-[9px] tabular-nums text-slate-500"
+                                            style={{
+                                              left: `${(tick / subtitleTimelineDuration) * subtitleTimelineWidth}px`,
+                                            }}
+                                          >
+                                            {formatElapsed(tick)}
+                                          </span>
+                                        ))}
+                                      </div>
+                                      <div
+                                        ref={subtitleTimelineTrackRef}
+                                        className="relative cursor-crosshair bg-slate-950/30"
+                                        style={{
+                                          height: `${Math.max(54, subtitleTimelineLaneEnds.length * 34 + (endSceneEnabled ? 34 : 0) + 10)}px`,
+                                        }}
+                                        onClick={(event) => {
+                                          if (
+                                            event.target !== event.currentTarget
+                                          )
+                                            return;
+                                          setSelectedSubtitleCue(null);
+                                          setSelectedTextOverlay(null);
+                                          const bounds =
+                                            event.currentTarget.getBoundingClientRect();
+                                          const position = Math.max(
+                                            0,
+                                            Math.min(
+                                              1,
+                                              (event.clientX - bounds.left) /
+                                                bounds.width,
+                                            ),
+                                          );
+                                          seekSubtitleTimeline(
+                                            position * subtitleTimelineDuration,
+                                          );
+                                        }}
+                                      >
+                                        {subtitleTimelineTicks.map((tick) => (
+                                          <span
+                                            key={`grid-${tick}`}
+                                            className="pointer-events-none absolute inset-y-0 border-l border-slate-800/80"
+                                            style={{
+                                              left: `${(tick / subtitleTimelineDuration) * subtitleTimelineWidth}px`,
+                                            }}
                                           />
-                                          <input
-                                            type="number"
-                                            min={8}
-                                            max={160}
-                                            value={
-                                              cue.characterRoleFontSize ??
-                                              Math.max(
-                                                8,
-                                                Math.round(cue.fontSize * 0.7),
+                                        ))}
+                                        <span
+                                          className="pointer-events-none absolute inset-y-0 z-20 border-l-2 border-rose-400"
+                                          style={{
+                                            left: `${(subtitleTimelineCursor / subtitleTimelineDuration) * subtitleTimelineWidth}px`,
+                                          }}
+                                        />
+                                        {subtitleTimelineItems.map(
+                                          ({ cue, index, lane }) => {
+                                            const active =
+                                              cue.startTime <=
+                                                subtitleTimelineCursor &&
+                                              cue.endTime >=
+                                                subtitleTimelineCursor;
+                                            const left =
+                                              (cue.startTime /
+                                                subtitleTimelineDuration) *
+                                              subtitleTimelineWidth;
+                                            const width = Math.max(
+                                              14,
+                                              ((cue.endTime - cue.startTime) /
+                                                subtitleTimelineDuration) *
+                                                subtitleTimelineWidth,
+                                            );
+                                            return (
+                                              <div
+                                                key={`${cue.startTime}-${cue.endTime}-${index}`}
+                                                role="button"
+                                                tabIndex={0}
+                                                title={`${index + 1}. ${cue.text}\n${formatDuration(cue.startTime)} – ${formatDuration(cue.endTime)}`}
+                                                onClick={(event) => {
+                                                  event.stopPropagation();
+                                                  setSelectedTextOverlay(null);
+                                                  setSelectedSubtitleCue(index);
+                                                  seekSubtitleTimeline(
+                                                    cue.startTime,
+                                                  );
+                                                }}
+                                                onKeyDown={(event) => {
+                                                  if (
+                                                    event.key === "Enter" ||
+                                                    event.key === " "
+                                                  ) {
+                                                    event.preventDefault();
+                                                    setSelectedSubtitleCue(
+                                                      index,
+                                                    );
+                                                    seekSubtitleTimeline(
+                                                      cue.startTime,
+                                                    );
+                                                  }
+                                                }}
+                                                onPointerDown={(event) => {
+                                                  setSelectedTextOverlay(null);
+                                                  startSubtitleTimelineDrag(
+                                                    event,
+                                                    index,
+                                                    cue.startTime,
+                                                    cue.endTime,
+                                                    "move",
+                                                  );
+                                                }}
+                                                className={`absolute z-10 flex h-7 select-none items-center overflow-hidden rounded-md border px-1 text-[9px] text-white shadow-sm ${previewSubtitleCues.length ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"} ${selectedSubtitleCue === index ? "border-amber-200 bg-amber-500/80" : active ? "border-cyan-200 bg-cyan-500/80" : "border-cyan-500/50 bg-cyan-700/70 hover:bg-cyan-600/80"}`}
+                                                style={{
+                                                  left: `${left}px`,
+                                                  top: `${5 + lane * 34}px`,
+                                                  width: `${width}px`,
+                                                }}
+                                              >
+                                                {previewSubtitleCues.length >
+                                                  0 && (
+                                                  <span
+                                                    onClick={(event) =>
+                                                      event.stopPropagation()
+                                                    }
+                                                    onPointerDown={(event) => {
+                                                      setSelectedTextOverlay(
+                                                        null,
+                                                      );
+                                                      startSubtitleTimelineDrag(
+                                                        event,
+                                                        index,
+                                                        cue.startTime,
+                                                        cue.endTime,
+                                                        "start",
+                                                      );
+                                                    }}
+                                                    className="absolute inset-y-0 left-0 z-20 w-1.5 cursor-ew-resize bg-cyan-100/80"
+                                                    aria-label={`Chỉnh điểm bắt đầu câu ${index + 1}`}
+                                                  />
+                                                )}
+                                                <span className="pointer-events-none truncate px-1">
+                                                  {index + 1}. {cue.text}
+                                                </span>
+                                                {previewSubtitleCues.length >
+                                                  0 && (
+                                                  <span
+                                                    onClick={(event) =>
+                                                      event.stopPropagation()
+                                                    }
+                                                    onPointerDown={(event) => {
+                                                      setSelectedTextOverlay(
+                                                        null,
+                                                      );
+                                                      startSubtitleTimelineDrag(
+                                                        event,
+                                                        index,
+                                                        cue.startTime,
+                                                        cue.endTime,
+                                                        "end",
+                                                      );
+                                                    }}
+                                                    className="absolute inset-y-0 right-0 z-20 w-1.5 cursor-ew-resize bg-cyan-100/80"
+                                                    aria-label={`Chỉnh điểm kết thúc câu ${index + 1}`}
+                                                  />
+                                                )}
+                                              </div>
+                                            );
+                                          },
+                                        )}
+                                        {endSceneEnabled && job?.metadata && (
+                                          <div
+                                            role="button"
+                                            tabIndex={0}
+                                            title={`End Scene · ${formatDuration(job.metadata.durationSeconds)} – ${formatDuration(job.metadata.durationSeconds + endSceneDurationSeconds)}`}
+                                            onClick={(event) => {
+                                              event.stopPropagation();
+                                              seekSubtitleTimeline(
+                                                job.metadata!.durationSeconds +
+                                                  0.01,
+                                              );
+                                            }}
+                                            onKeyDown={(event) => {
+                                              if (
+                                                event.key === "Enter" ||
+                                                event.key === " "
+                                              ) {
+                                                event.preventDefault();
+                                                seekSubtitleTimeline(
+                                                  job.metadata!
+                                                    .durationSeconds + 0.01,
+                                                );
+                                              }
+                                            }}
+                                            className="absolute z-10 flex h-7 cursor-pointer items-center overflow-hidden rounded-md border border-orange-300/70 bg-orange-600/80 px-2 text-[9px] font-semibold text-white"
+                                            style={{
+                                              left: `${(job.metadata.durationSeconds / subtitleTimelineDuration) * subtitleTimelineWidth}px`,
+                                              top: `${5 + subtitleTimelineLaneEnds.length * 34}px`,
+                                              width: `${Math.max(22, (endSceneDurationSeconds / subtitleTimelineDuration) * subtitleTimelineWidth)}px`,
+                                            }}
+                                          >
+                                            End Scene
+                                          </div>
+                                        )}
+                                      </div>
+                                      {textTracks.map((track) => (
+                                        <div
+                                          key={track.id}
+                                          onClick={() => {
+                                            setActiveTextTrackId(track.id);
+                                            setSelectedSubtitleCue(null);
+                                            setSelectedTextOverlay(null);
+                                          }}
+                                          className={`border-t border-slate-800 transition-colors ${activeTextTrackId === track.id ? "bg-violet-500/10 ring-1 ring-inset ring-violet-400/40" : "bg-violet-950/10 hover:bg-violet-500/5"}`}
+                                        >
+                                          <div className="flex h-7 items-center px-2">
+                                            <span className="text-[9px] font-semibold text-violet-300">
+                                              {track.name}
+                                            </span>
+                                          </div>
+                                          <div
+                                            className="relative"
+                                            style={{
+                                              height: `${Math.max(
+                                                32,
+                                                (textTimelineLanes
+                                                  .countsByTrackId[track.id] ??
+                                                  1) *
+                                                  34 -
+                                                  2,
+                                              )}px`,
+                                            }}
+                                            onClick={(event) => {
+                                              setActiveTextTrackId(track.id);
+                                              if (
+                                                event.target !==
+                                                event.currentTarget
                                               )
+                                                return;
+                                              setSelectedSubtitleCue(null);
+                                              setSelectedTextOverlay(null);
+                                              const bounds =
+                                                event.currentTarget.getBoundingClientRect();
+                                              const position = Math.max(
+                                                0,
+                                                Math.min(
+                                                  1,
+                                                  (event.clientX -
+                                                    bounds.left) /
+                                                    bounds.width,
+                                                ),
+                                              );
+                                              seekSubtitleTimeline(
+                                                position *
+                                                  subtitleTimelineDuration,
+                                              );
+                                            }}
+                                          >
+                                            <span
+                                              className="pointer-events-none absolute inset-y-0 z-20 border-l-2 border-rose-400"
+                                              style={{
+                                                left: `${(subtitleTimelineCursor / subtitleTimelineDuration) * subtitleTimelineWidth}px`,
+                                              }}
+                                            />
+                                            {textOverlays
+                                              .map((cue, index) => ({
+                                                cue,
+                                                index,
+                                              }))
+                                              .filter(
+                                                ({ cue }) =>
+                                                  !cue.isTitle &&
+                                                  (cue.trackId ||
+                                                    DEFAULT_TEXT_TRACK_ID) ===
+                                                    track.id,
+                                              )
+                                              .map(({ cue, index }) => {
+                                                const left =
+                                                  (cue.startTime /
+                                                    subtitleTimelineDuration) *
+                                                  subtitleTimelineWidth;
+                                                const width = Math.max(
+                                                  18,
+                                                  ((cue.endTime -
+                                                    cue.startTime) /
+                                                    subtitleTimelineDuration) *
+                                                    subtitleTimelineWidth,
+                                                );
+                                                const lane =
+                                                  textTimelineLanes.lanes[
+                                                    index
+                                                  ] ?? 0;
+                                                return (
+                                                  <div
+                                                    key={`text-${index}`}
+                                                    role="button"
+                                                    tabIndex={0}
+                                                    title={`${cue.text}${cue.kind === "character-card" ? ` · ${cue.characterRole ?? ""}` : ""}\n${formatDuration(cue.startTime)} – ${formatDuration(cue.endTime)}`}
+                                                    onClick={(event) => {
+                                                      event.stopPropagation();
+                                                      setActiveTextTrackId(
+                                                        track.id,
+                                                      );
+                                                      setSelectedSubtitleCue(
+                                                        null,
+                                                      );
+                                                      setSelectedTextOverlay(
+                                                        index,
+                                                      );
+                                                      seekSubtitleTimeline(
+                                                        cue.startTime,
+                                                      );
+                                                    }}
+                                                    onPointerDown={(event) => {
+                                                      setActiveTextTrackId(
+                                                        track.id,
+                                                      );
+                                                      setSelectedSubtitleCue(
+                                                        null,
+                                                      );
+                                                      startSubtitleTimelineDrag(
+                                                        event,
+                                                        index,
+                                                        cue.startTime,
+                                                        cue.endTime,
+                                                        "move",
+                                                        "text",
+                                                      );
+                                                    }}
+                                                    className={`absolute z-10 flex h-6 select-none items-center overflow-hidden rounded-md border px-1 text-[9px] text-white ${selectedTextOverlay === index ? "border-violet-200 bg-violet-500/90" : "border-violet-400/50 bg-violet-700/75"} cursor-grab active:cursor-grabbing`}
+                                                    style={{
+                                                      left: `${left}px`,
+                                                      top: `${4 + lane * 34}px`,
+                                                      width: `${width}px`,
+                                                    }}
+                                                  >
+                                                    <span
+                                                      onClick={(event) =>
+                                                        event.stopPropagation()
+                                                      }
+                                                      onPointerDown={(
+                                                        event,
+                                                      ) => {
+                                                        event.stopPropagation();
+                                                        setActiveTextTrackId(
+                                                          track.id,
+                                                        );
+                                                        startSubtitleTimelineDrag(
+                                                          event,
+                                                          index,
+                                                          cue.startTime,
+                                                          cue.endTime,
+                                                          "start",
+                                                          "text",
+                                                        );
+                                                      }}
+                                                      className="absolute inset-y-0 left-0 z-20 w-1.5 cursor-ew-resize bg-violet-100/80"
+                                                    />
+                                                    <span className="pointer-events-none truncate px-1">
+                                                      {cue.kind ===
+                                                      "character-card"
+                                                        ? `${cue.text} · ${cue.characterRole ?? ""}`
+                                                        : cue.text}
+                                                    </span>
+                                                    <span
+                                                      onClick={(event) =>
+                                                        event.stopPropagation()
+                                                      }
+                                                      onPointerDown={(
+                                                        event,
+                                                      ) => {
+                                                        event.stopPropagation();
+                                                        setActiveTextTrackId(
+                                                          track.id,
+                                                        );
+                                                        startSubtitleTimelineDrag(
+                                                          event,
+                                                          index,
+                                                          cue.startTime,
+                                                          cue.endTime,
+                                                          "end",
+                                                          "text",
+                                                        );
+                                                      }}
+                                                      className="absolute inset-y-0 right-0 z-20 w-1.5 cursor-ew-resize bg-violet-100/80"
+                                                    />
+                                                  </div>
+                                                );
+                                              })}
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+
+                                {selectedTextOverlay !== null &&
+                                  textOverlays[selectedTextOverlay] &&
+                                  !textOverlays[selectedTextOverlay].isTitle &&
+                                  (() => {
+                                    const cue =
+                                      textOverlays[selectedTextOverlay];
+                                    const textStyleValue: TextStyleControlValue =
+                                      {
+                                        fontFamily: cue.fontFamily,
+                                        fontSize: cue.fontSize,
+                                        bold: cue.bold,
+                                        underline: cue.underline ?? false,
+                                        italic: cue.italic,
+                                        textCase: cue.textCase ?? "none",
+                                        color: cue.color,
+                                        outlineEnabled:
+                                          cue.outlineEnabled ?? false,
+                                        outlineColor:
+                                          cue.outlineColor ?? "#000000",
+                                        outlineWidthPx: cue.outlineWidthPx ?? 2,
+                                        characterSpacingPx:
+                                          cue.characterSpacingPx ?? 0,
+                                        lineSpacingPx: cue.lineSpacingPx ?? 0,
+                                      };
+                                    const cueTrackId =
+                                      cue.trackId || DEFAULT_TEXT_TRACK_ID;
+                                    const cueTrackName =
+                                      textTracks.find(
+                                        (track) => track.id === cueTrackId,
+                                      )?.name || DEFAULT_TEXT_TRACK.name;
+                                    const cueTrackTextCount =
+                                      textOverlays.filter(
+                                        (item) =>
+                                          !item.isTitle &&
+                                          (item.trackId ||
+                                            DEFAULT_TEXT_TRACK_ID) ===
+                                            cueTrackId,
+                                      ).length;
+                                    return (
+                                      <div className="grid gap-2 rounded-lg border border-violet-500/20 bg-violet-950/10 p-3 sm:grid-cols-2 xl:grid-cols-4">
+                                        <div className="flex flex-wrap items-center justify-between gap-2 sm:col-span-2 xl:col-span-4">
+                                          <p className="text-[10px] text-violet-200">
+                                            Style và vị trí chỉ áp dụng cho clip
+                                            này cho đến khi nhấn Apply to All (
+                                            {cueTrackName}).
+                                          </p>
+                                          <button
+                                            type="button"
+                                            disabled={cueTrackTextCount < 2}
+                                            onClick={
+                                              applySelectedTextOverlayToTrack
                                             }
+                                            className="rounded-md border border-violet-400/40 px-2.5 py-1.5 text-xs font-semibold text-violet-100 hover:bg-violet-900/40 disabled:cursor-not-allowed disabled:opacity-40"
+                                            title={`Áp dụng style và vị trí cho ${cueTrackTextCount} clip trong ${cueTrackName}`}
+                                          >
+                                            Apply to All
+                                          </button>
+                                        </div>
+                                        <label className="space-y-1 text-[10px] text-slate-400 sm:col-span-2">
+                                          {cue.kind === "character-card"
+                                            ? "Tên nhân vật"
+                                            : "Nội dung"}
+                                          <textarea
+                                            value={cue.text}
                                             onChange={(event) =>
                                               updateSelectedTextOverlay({
-                                                characterRoleFontSize: Math.max(
-                                                  8,
-                                                  Math.min(
-                                                    160,
-                                                    Number(
-                                                      event.target.value,
-                                                    ) || 8,
-                                                  ),
-                                                ),
+                                                text: event.target.value,
                                               })
                                             }
-                                            className="w-16 rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-center text-xs text-white"
+                                            rows={2}
+                                            className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-white"
+                                          />
+                                        </label>
+                                        {cue.kind === "character-card" && (
+                                          <>
+                                            <label className="space-y-1 text-[10px] text-slate-400 sm:col-span-2">
+                                              Chức vụ
+                                              <textarea
+                                                value={cue.characterRole ?? ""}
+                                                onChange={(event) =>
+                                                  updateSelectedTextOverlay({
+                                                    characterRole:
+                                                      event.target.value,
+                                                  })
+                                                }
+                                                rows={2}
+                                                className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-white"
+                                              />
+                                            </label>
+                                            <label className="space-y-1 text-[10px] text-slate-400">
+                                              Cỡ chữ chức vụ
+                                              <div className="flex items-center gap-2">
+                                                <input
+                                                  type="range"
+                                                  min={8}
+                                                  max={160}
+                                                  value={
+                                                    cue.characterRoleFontSize ??
+                                                    Math.max(
+                                                      8,
+                                                      Math.round(
+                                                        cue.fontSize * 0.7,
+                                                      ),
+                                                    )
+                                                  }
+                                                  onChange={(event) =>
+                                                    updateSelectedTextOverlay({
+                                                      characterRoleFontSize:
+                                                        Number(
+                                                          event.target.value,
+                                                        ),
+                                                    })
+                                                  }
+                                                  className="w-full accent-violet-400"
+                                                  aria-label="Cỡ chữ chức vụ"
+                                                />
+                                                <input
+                                                  type="number"
+                                                  min={8}
+                                                  max={160}
+                                                  value={
+                                                    cue.characterRoleFontSize ??
+                                                    Math.max(
+                                                      8,
+                                                      Math.round(
+                                                        cue.fontSize * 0.7,
+                                                      ),
+                                                    )
+                                                  }
+                                                  onChange={(event) =>
+                                                    updateSelectedTextOverlay({
+                                                      characterRoleFontSize:
+                                                        Math.max(
+                                                          8,
+                                                          Math.min(
+                                                            160,
+                                                            Number(
+                                                              event.target
+                                                                .value,
+                                                            ) || 8,
+                                                          ),
+                                                        ),
+                                                    })
+                                                  }
+                                                  className="w-16 rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-center text-xs text-white"
+                                                />
+                                              </div>
+                                            </label>
+                                          </>
+                                        )}
+                                        <div className="sm:col-span-2 xl:col-span-4">
+                                          <TextStyleControls
+                                            value={textStyleValue}
+                                            onChange={updateSelectedTextOverlay}
+                                            fontOptions={subtitleFontOptions}
                                           />
                                         </div>
-                                      </label>
-                                    </>
-                                  )}
-                                  <div className="sm:col-span-2 xl:col-span-4">
-                                    <TextStyleControls
-                                      value={textStyleValue}
-                                      onChange={updateSelectedTextOverlay}
-                                      fontOptions={subtitleFontOptions}
-                                    />
-                                  </div>
-                                  <label className="inline-flex items-center gap-2 text-xs text-slate-300 sm:col-span-2 xl:col-span-4">
-                                    <input
-                                      type="checkbox"
-                                      checked={cue.extendToVideoEnd ?? false}
-                                      onChange={(event) => {
-                                        const extendToVideoEnd =
-                                          event.target.checked;
-                                        const duration =
-                                          video?.job?.metadata?.durationSeconds;
-                                        updateSelectedTextOverlay({
-                                          extendToVideoEnd,
-                                          ...(extendToVideoEnd && duration
-                                            ? {
-                                                startTime: Math.min(
-                                                  cue.startTime,
-                                                  Math.max(0, duration - 0.1),
-                                                ),
-                                                endTime: duration,
-                                              }
-                                            : {}),
-                                        });
-                                      }}
-                                      className="accent-violet-400"
-                                    />
-                                    Hiển thị đến hết video (tự căn theo thời
-                                    lượng từng video trong hàng đợi)
-                                  </label>
-                                  <label className="space-y-1 text-[10px] text-slate-400">
-                                    Vị trí neo
-                                    <select
-                                      value={cue.position}
-                                      onChange={(event) =>
-                                        updateSelectedTextOverlay({
-                                          position: event.target
-                                            .value as VideoDubbingOverlayPosition,
-                                          xPercent: undefined,
-                                          yPercent: undefined,
-                                        })
-                                      }
-                                      className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-white"
-                                    >
-                                      {OVERLAY_POSITION_OPTIONS.map(
-                                        (option) => (
-                                          <option
-                                            key={option.value}
-                                            value={option.value}
+                                        <label className="inline-flex items-center gap-2 text-xs text-slate-300 sm:col-span-2 xl:col-span-4">
+                                          <input
+                                            type="checkbox"
+                                            checked={
+                                              cue.extendToVideoEnd ?? false
+                                            }
+                                            onChange={(event) => {
+                                              const extendToVideoEnd =
+                                                event.target.checked;
+                                              const duration =
+                                                video?.job?.metadata
+                                                  ?.durationSeconds;
+                                              updateSelectedTextOverlay({
+                                                extendToVideoEnd,
+                                                ...(extendToVideoEnd && duration
+                                                  ? {
+                                                      startTime: Math.min(
+                                                        cue.startTime,
+                                                        Math.max(
+                                                          0,
+                                                          duration - 0.1,
+                                                        ),
+                                                      ),
+                                                      endTime: duration,
+                                                    }
+                                                  : {}),
+                                              });
+                                            }}
+                                            className="accent-violet-400"
+                                          />
+                                          Hiển thị đến hết video (tự căn theo
+                                          thời lượng từng video trong hàng đợi)
+                                        </label>
+                                        <label className="space-y-1 text-[10px] text-slate-400">
+                                          Vị trí neo
+                                          <select
+                                            value={cue.position}
+                                            onChange={(event) =>
+                                              updateSelectedTextOverlay({
+                                                position: event.target
+                                                  .value as VideoDubbingOverlayPosition,
+                                                xPercent: undefined,
+                                                yPercent: undefined,
+                                              })
+                                            }
+                                            className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-white"
                                           >
-                                            {option.label}
-                                          </option>
-                                        ),
-                                      )}
-                                    </select>
-                                  </label>
-                                  <label className="space-y-1 text-[10px] text-slate-400">
-                                    Align
-                                    <select
-                                      value={
-                                        cue.textAlign ??
-                                        getSubtitleTextAlignment(cue.position)
-                                      }
-                                      onChange={(event) =>
-                                        updateSelectedTextOverlay({
-                                          textAlign: event.target.value as
-                                            | "left"
-                                            | "center"
-                                            | "right",
-                                        })
-                                      }
-                                      className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-white"
-                                    >
-                                      <option value="left">Left</option>
-                                      <option value="center">Center</option>
-                                      <option value="right">Right</option>
-                                    </select>
-                                  </label>
-                                  {(cue.xPercent !== undefined ||
-                                    cue.yPercent !== undefined) && (
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        updateSelectedTextOverlay({
-                                          xPercent: undefined,
-                                          yPercent: undefined,
-                                        })
-                                      }
-                                      className="self-end rounded-md border border-violet-500/30 px-2 py-1.5 text-xs text-violet-200"
-                                    >
-                                      Đặt lại vị trí neo
-                                    </button>
-                                  )}
-                                  <label className="inline-flex items-center gap-2 text-xs text-slate-300">
-                                    <input
-                                      type="checkbox"
-                                      checked={cue.backgroundTransparent}
-                                      onChange={(event) =>
-                                        updateSelectedTextOverlay({
-                                          backgroundTransparent:
-                                            event.target.checked,
-                                        })
-                                      }
-                                      className="accent-violet-400"
-                                    />
-                                    Nền trong suốt
-                                  </label>
-                                  {!cue.backgroundTransparent && (
-                                    <label className="space-y-1 text-[10px] text-slate-400">
-                                      Màu nền
-                                      <input
-                                        type="color"
-                                        value={cue.backgroundColor}
-                                        onChange={(event) =>
-                                          updateSelectedTextOverlay({
-                                            backgroundColor: event.target.value,
-                                          })
-                                        }
-                                        className="h-8 w-full rounded-md border border-slate-700 bg-slate-950"
-                                      />
-                                    </label>
-                                  )}
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setTextOverlays((items) =>
-                                        items.filter(
-                                          (_, index) =>
-                                            index !== selectedTextOverlay,
-                                        ),
-                                      );
-                                      setSelectedTextOverlay(null);
-                                    }}
-                                    className="inline-flex items-center justify-center gap-1 rounded-md border border-rose-500/30 px-2 py-1 text-xs text-rose-200"
-                                  >
-                                    <Trash2 className="h-3 w-3" />
-                                    Xóa text
-                                  </button>
-                                </div>
-                              );
-                            })()}
-                        </section>
-                      )}
-                      {timelineWorkspaceTab === "audio" && job && (
-                        <VideoDubbingAudioTimeline
-                          jobId={job.id}
-                          duration={job.metadata?.durationSeconds || 1}
-                          currentTime={subtitleTimelineCursor}
-                          zoom={subtitleTimelineZoom}
-                          onZoomChange={changeSubtitleTimelineZoom}
-                          onSeek={seekSubtitleTimeline}
-                          vocalsAvailable={Boolean(
-                            job.separation?.vocalsSizeBytes,
-                          )}
-                          instrumentalAvailable={Boolean(
-                            job.separation?.instrumentalSizeBytes,
-                          )}
-                          ttsMasterAvailable={Boolean(
-                            job.masterGeneration?.sizeBytes &&
-                            job.masterGeneration.durationSeconds !== undefined,
-                          )}
-                          ttsMasterVersion={
-                            job.masterGeneration?.audioVersion ||
-                            job.masterGeneration?.sizeBytes ||
-                            0
-                          }
-                          masterEdit={job.masterEdit}
-                          onSplitMaster={() =>
-                            requestMasterEdit(job.id, "split")
-                          }
-                          onMergeMaster={() =>
-                            requestMasterEdit(job.id, "merge")
-                          }
-                          onMoveMasterClip={(clips) =>
-                            requestMasterEdit(job.id, "clips", clips)
-                          }
-                          mixerSettings={mixerSettings}
-                          onToggleMute={(track) =>
-                            updateMixerSetting(track, {
-                              muted: !mixerSettings[track].muted,
-                            })
-                          }
-                        />
-                      )}
-                    </div>
-                  )}
-                </div>
-
-                <div
-                  className={`space-y-4 ${videoWorkspaceTab === "preview" ? "" : "hidden"}`}
-                >
-                  {!hasMasterAudio && job?.metadata?.audioCodec && (
-                    <p className="rounded-lg border border-amber-500/25 bg-amber-950/20 p-3 text-xs text-amber-200">
-                      TTS Master là tùy chọn. Nếu không có track vocals hoặc
-                      instrumental đang bật, Mix Audio sẽ dùng audio gốc của
-                      video.
-                    </p>
-                  )}
-                  {mixerError && (
-                    <p className="rounded-lg border border-rose-500/30 bg-rose-950/30 p-3 text-xs text-rose-200">
-                      {mixerError}
-                    </p>
-                  )}
-                  {previewError && (
-                    <p className="rounded-lg border border-rose-500/30 bg-rose-950/30 p-3 text-xs text-rose-200">
-                      {previewError}
-                    </p>
-                  )}
-                  <div className="flex flex-wrap items-center gap-3">
-                    {mixerSettingsSaved ? (
-                      <span className="text-[11px] text-emerald-300">
-                        Cấu hình mixer đã lưu cho job
-                      </span>
-                    ) : mixerTouchedRef.current ? (
-                      <span className="text-[11px] text-slate-400">
-                        Đang lưu cấu hình mixer…
-                      </span>
-                    ) : (
-                      <span className="text-[11px] text-slate-400">
-                        Cấu hình mặc định · thay đổi để lưu
-                      </span>
-                    )}
-                  </div>
-
-                  {hasFinalMix && job && (
-                    <div className="space-y-2 rounded-xl border border-emerald-500/25 bg-emerald-950/20 p-3.5">
-                      <p className="text-xs font-semibold text-emerald-300">
-                        {isFinalMixCurrent
-                          ? "Final mix đã xác minh"
-                          : "Final mix cũ vẫn được giữ; chưa khớp mixer settings hiện tại"}
-                      </p>
-                      <audio
-                        key={`${job.id}-${finalMix?.sizeBytes}`}
-                        controls
-                        preload="metadata"
-                        src={`/api/video-dubbing/jobs/${job.id}/final-mix-audio`}
-                        className="w-full"
-                      >
-                        Trình duyệt không hỗ trợ phát WAV.
-                      </audio>
-                    </div>
-                  )}
-
-                  <div className="space-y-4 border-t border-slate-800 pt-4">
-                    <div className="grid grid-cols-1 gap-4">
-                      <div className="space-y-3 rounded-xl border border-slate-800 bg-slate-950/50 p-4">
-                        <button
-                          type="button"
-                          aria-expanded={!logoTitleCollapsed}
-                          onClick={() =>
-                            setLogoTitleCollapsed((collapsed) => !collapsed)
-                          }
-                          className="flex w-full items-center justify-between text-left text-sm font-semibold text-slate-100"
-                        >
-                          Chèn logo và tiêu đề
-                          <ChevronDown
-                            className={`h-4 w-4 transition-transform ${logoTitleCollapsed ? "-rotate-90" : ""}`}
-                          />
-                        </button>
-                        {!logoTitleCollapsed && (
-                          <div className="space-y-3">
-                            <div className="flex flex-wrap items-center justify-between gap-3">
-                              <label className="flex items-center gap-2 text-sm font-semibold text-slate-100">
-                                <input
-                                  type="checkbox"
-                                  checked={logoEnabled}
-                                  disabled={
-                                    !job?.overlaySettings?.logoFileName ||
-                                    logoUploading
-                                  }
-                                  onChange={(event) =>
-                                    setLogoEnabled(event.target.checked)
-                                  }
-                                  className="accent-sky-400"
-                                />
-                                Bật logo
-                              </label>
-                              <input
-                                ref={logoInputRef}
-                                type="file"
-                                accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp"
-                                className="hidden"
-                                onChange={(event) => {
-                                  const file = event.target.files?.[0];
-                                  event.target.value = "";
-                                  if (file) void uploadOverlayLogo(file);
-                                }}
-                              />
-                              <button
-                                type="button"
-                                onClick={() => logoInputRef.current?.click()}
-                                disabled={
-                                  !job || logoUploading || isMediaProcessing
-                                }
-                                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-200 hover:border-sky-400/50 disabled:cursor-not-allowed disabled:opacity-50"
-                              >
-                                {logoUploading ? (
-                                  <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
-                                ) : (
-                                  <Upload className="h-3.5 w-3.5" />
+                                            {OVERLAY_POSITION_OPTIONS.map(
+                                              (option) => (
+                                                <option
+                                                  key={option.value}
+                                                  value={option.value}
+                                                >
+                                                  {option.label}
+                                                </option>
+                                              ),
+                                            )}
+                                          </select>
+                                        </label>
+                                        <label className="space-y-1 text-[10px] text-slate-400">
+                                          Align
+                                          <select
+                                            value={
+                                              cue.textAlign ??
+                                              getSubtitleTextAlignment(
+                                                cue.position,
+                                              )
+                                            }
+                                            onChange={(event) =>
+                                              updateSelectedTextOverlay({
+                                                textAlign: event.target
+                                                  .value as
+                                                  | "left"
+                                                  | "center"
+                                                  | "right",
+                                              })
+                                            }
+                                            className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-white"
+                                          >
+                                            <option value="left">Left</option>
+                                            <option value="center">
+                                              Center
+                                            </option>
+                                            <option value="right">Right</option>
+                                          </select>
+                                        </label>
+                                        {(cue.xPercent !== undefined ||
+                                          cue.yPercent !== undefined) && (
+                                          <button
+                                            type="button"
+                                            onClick={() =>
+                                              updateSelectedTextOverlay({
+                                                xPercent: undefined,
+                                                yPercent: undefined,
+                                              })
+                                            }
+                                            className="self-end rounded-md border border-violet-500/30 px-2 py-1.5 text-xs text-violet-200"
+                                          >
+                                            Đặt lại vị trí neo
+                                          </button>
+                                        )}
+                                        <label className="inline-flex items-center gap-2 text-xs text-slate-300">
+                                          <input
+                                            type="checkbox"
+                                            checked={cue.backgroundTransparent}
+                                            onChange={(event) =>
+                                              updateSelectedTextOverlay({
+                                                backgroundTransparent:
+                                                  event.target.checked,
+                                              })
+                                            }
+                                            className="accent-violet-400"
+                                          />
+                                          Nền trong suốt
+                                        </label>
+                                        {!cue.backgroundTransparent && (
+                                          <label className="space-y-1 text-[10px] text-slate-400">
+                                            Màu nền
+                                            <input
+                                              type="color"
+                                              value={cue.backgroundColor}
+                                              onChange={(event) =>
+                                                updateSelectedTextOverlay({
+                                                  backgroundColor:
+                                                    event.target.value,
+                                                })
+                                              }
+                                              className="h-8 w-full rounded-md border border-slate-700 bg-slate-950"
+                                            />
+                                          </label>
+                                        )}
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setTextOverlays((items) =>
+                                              items.filter(
+                                                (_, index) =>
+                                                  index !== selectedTextOverlay,
+                                              ),
+                                            );
+                                            setSelectedTextOverlay(null);
+                                          }}
+                                          className="inline-flex items-center justify-center gap-1 rounded-md border border-rose-500/30 px-2 py-1 text-xs text-rose-200"
+                                        >
+                                          <Trash2 className="h-3 w-3" />
+                                          Xóa text
+                                        </button>
+                                      </div>
+                                    );
+                                  })()}
+                              </section>
+                            )}
+                            {timelineWorkspaceTab === "audio" && job && (
+                              <VideoDubbingAudioTimeline
+                                jobId={job.id}
+                                duration={job.metadata?.durationSeconds || 1}
+                                currentTime={subtitleTimelineCursor}
+                                zoom={subtitleTimelineZoom}
+                                onZoomChange={changeSubtitleTimelineZoom}
+                                onSeek={seekSubtitleTimeline}
+                                vocalsAvailable={Boolean(
+                                  job.separation?.vocalsSizeBytes,
                                 )}
-                                {job?.overlaySettings?.logoFileName
-                                  ? "Thay logo"
-                                  : "Thêm logo"}
-                              </button>
+                                instrumentalAvailable={Boolean(
+                                  job.separation?.instrumentalSizeBytes,
+                                )}
+                                ttsMasterAvailable={Boolean(
+                                  job.masterGeneration?.sizeBytes &&
+                                  job.masterGeneration.durationSeconds !==
+                                    undefined,
+                                )}
+                                ttsMasterVersion={
+                                  job.masterGeneration?.audioVersion ||
+                                  job.masterGeneration?.sizeBytes ||
+                                  0
+                                }
+                                masterEdit={job.masterEdit}
+                                onSplitMaster={() =>
+                                  requestMasterEdit(job.id, "split")
+                                }
+                                onMergeMaster={() =>
+                                  requestMasterEdit(job.id, "merge")
+                                }
+                                onMoveMasterClip={(clips) =>
+                                  requestMasterEdit(job.id, "clips", clips)
+                                }
+                                mixerSettings={mixerSettings}
+                                onToggleMute={(track) =>
+                                  updateMixerSetting(track, {
+                                    muted: !mixerSettings[track].muted,
+                                  })
+                                }
+                              />
+                            )}
+                          </div>
+                        </div>
+                      ),
+                    },
+                    {
+                      id: "merged",
+                      label: "Merged Video",
+                      content:
+                        hasExportedVideo && job ? (
+                          <div className="space-y-3 rounded-xl border border-emerald-500/25 bg-emerald-950/20 p-3.5">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <span className="text-xs font-semibold text-emerald-300">
+                                {videoExport?.status === "completed" &&
+                                isFinalMixCurrent
+                                  ? "MP4 đã xuất"
+                                  : "MP4 trước đó vẫn được giữ"}
+                              </span>
+                              <span className="text-xs text-slate-400">
+                                {job.exportedVideoFileName ||
+                                  `${job.fileName.replace(/\.[^.]+$/, "")}_merged.mp4`}{" "}
+                                · {formatFileSize(videoExport?.sizeBytes || 0)}
+                                {videoExport?.durationSeconds !== undefined &&
+                                  ` · ${formatDuration(videoExport.durationSeconds)}`}
+                              </span>
                             </div>
-                            {job?.overlaySettings?.logoFileName ? (
-                              <div className="flex items-center gap-3">
-                                <img
-                                  src={`/api/video-dubbing/jobs/${job.id}/logo`}
-                                  alt="Logo chèn vào video"
-                                  className="max-h-12 max-w-24 rounded border border-slate-700 bg-slate-900 object-contain p-1"
-                                />
-                                <span className="text-xs text-slate-400">
-                                  {job.overlaySettings.logoFileName}
-                                </span>
-                              </div>
-                            ) : (
-                              <p className="text-xs text-slate-500">
-                                Chọn logo PNG, JPG hoặc WebP (tối đa 20 MB).
+                            {videoExport?.status === "completed" && (
+                              <p className="text-xs text-slate-400">
+                                Thời gian export:{" "}
+                                {formatElapsed(videoExport.elapsedSeconds)}
                               </p>
                             )}
-                            <label className="block space-y-1.5 text-xs text-slate-300">
-                              <span className="flex justify-between gap-2">
-                                <span>Kích thước theo chiều rộng video</span>
-                                <span>{logoWidthPercent}%</span>
-                              </span>
-                              <input
-                                type="range"
-                                min="5"
-                                max="40"
-                                value={logoWidthPercent}
-                                onChange={(event) =>
-                                  setLogoWidthPercent(
-                                    Number(event.target.value),
-                                  )
-                                }
-                                disabled={!job?.overlaySettings?.logoFileName}
-                                className="w-full accent-sky-400"
-                              />
-                            </label>
-                            <label className="block space-y-1.5 text-xs text-slate-300">
-                              <span className="flex justify-between gap-2">
-                                <span>Padding cách mép video</span>
-                                <span>{logoPaddingPx} px</span>
-                              </span>
-                              <input
-                                type="range"
-                                min="0"
-                                max="200"
-                                step="4"
-                                value={logoPaddingPx}
-                                onChange={(event) =>
-                                  setLogoPaddingPx(Number(event.target.value))
-                                }
-                                disabled={!job?.overlaySettings?.logoFileName}
-                                className="w-full accent-sky-400"
-                              />
-                            </label>
-                            <label className="flex items-center justify-between gap-3 text-xs text-slate-300">
-                              Vị trí logo
-                              <select
-                                value={logoPosition}
-                                onChange={(event) =>
-                                  setLogoPosition(
-                                    event.target
-                                      .value as VideoDubbingOverlayPosition,
-                                  )
-                                }
-                                disabled={!job?.overlaySettings?.logoFileName}
-                                className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-2 text-xs text-slate-100"
-                              >
-                                {OVERLAY_POSITION_OPTIONS.map((option) => (
-                                  <option
-                                    key={option.value}
-                                    value={option.value}
-                                  >
-                                    {option.label}
-                                  </option>
-                                ))}
-                              </select>
-                            </label>
-                            <p className="text-[11px] text-slate-500">
-                              Mặc định: trên trái.
+                            <video
+                              key={`merged-${job.id}-${videoExport?.completedAtMs}`}
+                              controls
+                              playsInline
+                              preload="metadata"
+                              src={`/api/video-dubbing/jobs/${job.id}/exported-video?v=${videoExport?.sizeBytes || 0}-${videoExport?.completedAtMs || 0}`}
+                              className="max-h-[min(65vh,760px)] w-full rounded-lg bg-black"
+                              aria-label="Merged Video"
+                            />
+                            <a
+                              href={`/api/video-dubbing/jobs/${job.id}/download`}
+                              download={
+                                job.exportedVideoFileName ||
+                                `${job.fileName.replace(/\.[^.]+$/, "")}_merged.mp4`
+                              }
+                              className="inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-500/40 px-4 py-2.5 text-sm font-bold text-emerald-200 hover:bg-emerald-950/60"
+                            >
+                              Tải MP4
+                            </a>
+                          </div>
+                        ) : (
+                          <div className="flex min-h-64 flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-slate-700 bg-slate-950/60 p-6 text-center">
+                            <Film className="h-8 w-8 text-slate-600" />
+                            <p className="text-sm font-semibold text-slate-300">
+                              Chưa có video đã merge
                             </p>
-                            <div className="border-t border-slate-800 pt-3">
-                              <div className="flex flex-wrap items-center justify-between gap-3">
-                                <label className="flex items-center gap-2 text-sm font-semibold text-slate-100">
-                                  <input
-                                    type="checkbox"
-                                    checked={Boolean(
-                                      titleOverlay &&
-                                      titleOverlay.enabled !== false,
-                                    )}
-                                    disabled={!titleOverlay}
-                                    onChange={(event) => {
-                                      if (titleOverlayIndex >= 0) {
-                                        setTextOverlays((items) =>
-                                          items.map((item, index) =>
-                                            index === titleOverlayIndex
-                                              ? {
-                                                  ...item,
-                                                  enabled: event.target.checked,
-                                                }
-                                              : item,
-                                          ),
-                                        );
+                            <p className="text-xs text-slate-500">
+                              Video hoàn tất sẽ xuất hiện tại tab này.
+                            </p>
+                          </div>
+                        ),
+                    },
+                    {
+                      id: "end-scene",
+                      label: "End Scene",
+                      content: (
+                        <div className="space-y-4">
+                          <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1.4fr)_minmax(280px,0.8fr)]">
+                            <div
+                              ref={endScenePreviewContainerRef}
+                              className="flex min-w-0 justify-center"
+                            >
+                              <div
+                                ref={endSceneStageRef}
+                                className="relative shrink-0 overflow-hidden rounded-lg border border-slate-700 bg-black"
+                                style={{
+                                  width: `${endScenePreviewSize.width}px`,
+                                  height: `${endScenePreviewSize.height}px`,
+                                  maxWidth: "100%",
+                                }}
+                              >
+                                {endSceneTextOverlays.map((cue, index) => {
+                                  const textAlign = cue.textAlign ?? "center";
+                                  const horizontalTransform =
+                                    textAlign === "left"
+                                      ? "0%"
+                                      : textAlign === "right"
+                                        ? "-100%"
+                                        : "-50%";
+                                  const verticalTransform =
+                                    cue.position.startsWith("top-")
+                                      ? "0%"
+                                      : cue.position.startsWith("bottom-")
+                                        ? "-100%"
+                                        : "-50%";
+                                  return (
+                                    <div
+                                      key={cue.id ?? `end-scene-text-${index}`}
+                                      className={`absolute z-30 touch-none ${
+                                        selectedEndSceneTextIndex === index
+                                          ? "outline outline-1 outline-dashed outline-orange-300"
+                                          : ""
+                                      }`}
+                                      style={{
+                                        left: `${cue.xPercent ?? 50}%`,
+                                        top: `${cue.yPercent ?? 50}%`,
+                                        transform: `translate(${horizontalTransform}, ${verticalTransform})`,
+                                      }}
+                                      onPointerDown={(event) =>
+                                        startEndSceneTextDrag(event, index)
                                       }
-                                    }}
-                                    className="accent-violet-400"
-                                  />
-                                  Bật tiêu đề
-                                </label>
+                                    >
+                                      <SubtitleOverlayRenderer
+                                        text={cue.text}
+                                        scale={endSceneOverlayScale}
+                                        fontSize={cue.fontSize}
+                                        fontFamily={cue.fontFamily}
+                                        fontWeight={cue.bold}
+                                        fontStyle={cue.italic}
+                                        underline={cue.underline ?? false}
+                                        textCase={cue.textCase ?? "none"}
+                                        outlineEnabled={
+                                          cue.outlineEnabled ?? false
+                                        }
+                                        outlineColor={
+                                          cue.outlineColor ?? "#000000"
+                                        }
+                                        outlineWidthPx={cue.outlineWidthPx ?? 2}
+                                        characterSpacingPx={
+                                          cue.characterSpacingPx ?? 0
+                                        }
+                                        lineSpacingPx={cue.lineSpacingPx ?? 0}
+                                        color={cue.color}
+                                        backgroundMode={
+                                          cue.backgroundTransparent
+                                            ? "none"
+                                            : "color"
+                                        }
+                                        backgroundColor={cue.backgroundColor}
+                                        paddingPx={cue.paddingPx}
+                                        position={cue.position}
+                                        textAlign={textAlign}
+                                        wrap={false}
+                                      />
+                                    </div>
+                                  );
+                                })}
+                                {endSceneTextOverlays.length === 0 && (
+                                  <p className="absolute inset-0 flex items-center justify-center text-xs text-slate-600">
+                                    Màn hình đen · Chưa có text
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                            <div className="min-w-0 space-y-3">
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <div>
+                                  <h4 className="text-sm font-semibold text-white">
+                                    End Scene
+                                  </h4>
+                                  <p className="mt-1 text-[10px] text-slate-400">
+                                    Style được lưu trong project; việc thêm vào
+                                    timeline áp dụng riêng cho video này.
+                                  </p>
+                                </div>
                                 <button
                                   type="button"
-                                  onClick={createTitleOverlay}
-                                  disabled={!job || isMediaProcessing}
-                                  className="inline-flex items-center gap-1.5 rounded-lg border border-violet-500/30 bg-violet-950/20 px-3 py-2 text-xs font-semibold text-violet-100 hover:bg-violet-950/40 disabled:cursor-not-allowed disabled:opacity-50"
+                                  disabled={
+                                    !job || !job.metadata || isMediaProcessing
+                                  }
+                                  onClick={() =>
+                                    void saveEndSceneForCurrentVideo(
+                                      !endSceneEnabled,
+                                    )
+                                  }
+                                  className={`rounded-md border px-2.5 py-1.5 text-xs font-semibold disabled:opacity-40 ${
+                                    endSceneEnabled
+                                      ? "border-orange-400/50 bg-orange-500/15 text-orange-200"
+                                      : "border-slate-700 text-slate-300 hover:border-orange-400/50"
+                                  }`}
                                 >
-                                  <Plus className="h-3.5 w-3.5" />
-                                  {titleOverlay
-                                    ? "Chỉnh tiêu đề"
-                                    : "Tạo Tiêu Đề"}
+                                  {endSceneEnabled
+                                    ? "Bỏ End Scene khỏi video"
+                                    : "Add End Scene vào video"}
                                 </button>
                               </div>
-                              <p className="mt-2 text-[11px] text-slate-500">
-                                Tiêu đề luôn hiển thị từ đầu đến hết video. Kéo
-                                tiêu đề trực tiếp trên preview để đặt cạnh logo.
-                              </p>
-                            </div>
-                            {titleOverlay &&
-                              selectedTextOverlay === titleOverlayIndex && (
-                                <div className="grid gap-3 rounded-lg border border-violet-500/20 bg-violet-950/10 p-3 sm:grid-cols-2">
-                                  <label className="space-y-1 text-[10px] text-slate-400 sm:col-span-2">
-                                    Nội dung tiêu đề
-                                    <textarea
-                                      value={titleOverlay.text}
-                                      onChange={(event) =>
-                                        updateSelectedTextOverlay({
-                                          text: event.target.value,
-                                        })
-                                      }
-                                      rows={2}
-                                      className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-white"
-                                    />
-                                  </label>
-                                  <div className="sm:col-span-2">
-                                    <TextStyleControls
-                                      value={{
-                                        fontFamily: titleOverlay.fontFamily,
-                                        fontSize: titleOverlay.fontSize,
-                                        bold: titleOverlay.bold,
-                                        underline:
-                                          titleOverlay.underline ?? false,
-                                        italic: titleOverlay.italic,
-                                        textCase:
-                                          titleOverlay.textCase ?? "none",
-                                        color: titleOverlay.color,
-                                        outlineEnabled:
-                                          titleOverlay.outlineEnabled ?? false,
-                                        outlineColor:
-                                          titleOverlay.outlineColor ??
-                                          "#000000",
-                                        outlineWidthPx:
-                                          titleOverlay.outlineWidthPx ?? 2,
-                                        characterSpacingPx:
-                                          titleOverlay.characterSpacingPx ?? 0,
-                                        lineSpacingPx:
-                                          titleOverlay.lineSpacingPx ?? 0,
-                                      }}
-                                      onChange={updateSelectedTextOverlay}
-                                      fontOptions={subtitleFontOptions}
-                                    />
-                                  </div>
-                                  <label className="space-y-1 text-[10px] text-slate-400">
-                                    Vị trí neo
-                                    <select
-                                      value={titleOverlay.position}
-                                      onChange={(event) =>
-                                        updateSelectedTextOverlay({
-                                          position: event.target
-                                            .value as VideoDubbingOverlayPosition,
-                                          xPercent: undefined,
-                                          yPercent: undefined,
-                                        })
-                                      }
-                                      className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-white"
-                                    >
-                                      {OVERLAY_POSITION_OPTIONS.map(
-                                        (option) => (
-                                          <option
-                                            key={option.value}
-                                            value={option.value}
-                                          >
-                                            {option.label}
-                                          </option>
+                              <label className="flex items-center justify-between gap-3 rounded-lg border border-slate-800 bg-slate-950/60 p-2.5 text-xs text-slate-300">
+                                Thời lượng End Scene (giây)
+                                <input
+                                  type="number"
+                                  min={1}
+                                  max={120}
+                                  step={0.5}
+                                  value={endSceneDurationSeconds}
+                                  onChange={(event) => {
+                                    const value = Number(event.target.value);
+                                    if (
+                                      !Number.isFinite(value) ||
+                                      value < 1 ||
+                                      value > 120
+                                    )
+                                      return;
+                                    setEndSceneDurationSeconds(value);
+                                    setEndSceneTextOverlays((items) =>
+                                      items.map((cue) => ({
+                                        ...cue,
+                                        startTime: Math.min(
+                                          cue.startTime,
+                                          value - 0.1,
                                         ),
-                                      )}
-                                    </select>
-                                  </label>
-                                  {(titleOverlay.xPercent !== undefined ||
-                                    titleOverlay.yPercent !== undefined) && (
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        updateSelectedTextOverlay({
-                                          xPercent: undefined,
-                                          yPercent: undefined,
-                                        })
-                                      }
-                                      className="self-end rounded-md border border-violet-500/30 px-2 py-1.5 text-xs text-violet-200"
-                                    >
-                                      Đặt lại vị trí neo
-                                    </button>
-                                  )}
-                                  <label className="inline-flex items-center gap-2 text-xs text-slate-300">
-                                    <input
-                                      type="checkbox"
-                                      checked={
-                                        titleOverlay.backgroundTransparent
-                                      }
-                                      onChange={(event) =>
-                                        updateSelectedTextOverlay({
-                                          backgroundTransparent:
-                                            event.target.checked,
-                                        })
-                                      }
-                                      className="accent-violet-400"
-                                    />
-                                    Nền trong suốt
-                                  </label>
-                                  {!titleOverlay.backgroundTransparent && (
-                                    <label className="space-y-1 text-[10px] text-slate-400">
-                                      Màu nền
-                                      <input
-                                        type="color"
-                                        value={titleOverlay.backgroundColor}
+                                        endTime: value,
+                                      })),
+                                    );
+                                  }}
+                                  className="w-24 rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-right text-xs text-white"
+                                />
+                              </label>
+                              <label className="flex items-center justify-between gap-3 rounded-lg border border-slate-800 bg-slate-950/60 p-2.5 text-xs text-slate-300">
+                                Tỉ lệ khung hình preview
+                                <select
+                                  value={endSceneAspectRatio}
+                                  onChange={(event) =>
+                                    setEndSceneAspectRatio(
+                                      event.target
+                                        .value as VideoDubbingEndSceneAspectRatio,
+                                    )
+                                  }
+                                  className="rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-white"
+                                >
+                                  {END_SCENE_ASPECT_RATIOS.map((ratio) => (
+                                    <option key={ratio} value={ratio}>
+                                      {ratio}
+                                    </option>
+                                  ))}
+                                </select>
+                              </label>
+                              <div className="flex flex-wrap gap-2">
+                                <button
+                                  type="button"
+                                  onClick={addEndSceneText}
+                                  className="inline-flex items-center gap-1 rounded-md border border-orange-500/30 px-2.5 py-1.5 text-xs text-orange-200 hover:bg-orange-950/30"
+                                >
+                                  <Plus className="h-3 w-3" />
+                                  Thêm text
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={!selectedEndSceneCue}
+                                  onClick={removeSelectedEndSceneText}
+                                  className="inline-flex items-center gap-1 rounded-md border border-rose-500/30 px-2.5 py-1.5 text-xs text-rose-200 hover:bg-rose-950/30 disabled:opacity-40"
+                                >
+                                  <Trash2 className="h-3 w-3" />
+                                  Xóa text
+                                </button>
+                              </div>
+                              <div className="max-h-28 space-y-1 overflow-y-auto rounded-lg border border-slate-800 bg-slate-950/50 p-1.5">
+                                {endSceneTextOverlays.map((cue, index) => (
+                                  <button
+                                    key={cue.id ?? index}
+                                    type="button"
+                                    aria-pressed={
+                                      selectedEndSceneTextIndex === index
+                                    }
+                                    onClick={() =>
+                                      setSelectedEndSceneTextIndex(index)
+                                    }
+                                    className={`w-full truncate rounded-md px-2 py-1.5 text-left text-xs ${
+                                      selectedEndSceneTextIndex === index
+                                        ? "bg-orange-500/20 text-orange-100"
+                                        : "text-slate-300 hover:bg-slate-800"
+                                    }`}
+                                  >
+                                    {cue.text || `Text ${index + 1}`}
+                                  </button>
+                                ))}
+                                {!endSceneTextOverlays.length && (
+                                  <p className="px-2 py-2 text-[10px] text-slate-500">
+                                    Chưa có text trong End Scene.
+                                  </p>
+                                )}
+                              </div>
+                              {selectedEndSceneCue &&
+                                selectedEndSceneTextIndex !== null && (
+                                  <div className="space-y-3 rounded-lg border border-slate-800 bg-slate-950/50 p-2.5">
+                                    <label className="block space-y-1 text-[10px] text-slate-400">
+                                      Nội dung
+                                      <textarea
+                                        rows={2}
+                                        value={selectedEndSceneCue.text}
                                         onChange={(event) =>
-                                          updateSelectedTextOverlay({
-                                            backgroundColor: event.target.value,
-                                          })
+                                          updateEndSceneText(
+                                            selectedEndSceneTextIndex,
+                                            { text: event.target.value },
+                                          )
                                         }
-                                        className="h-8 w-full rounded-md border border-slate-700 bg-slate-950"
+                                        className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-white"
                                       />
                                     </label>
-                                  )}
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setTextOverlays((items) =>
-                                        items.filter(
-                                          (_, index) =>
-                                            index !== titleOverlayIndex,
-                                        ),
-                                      );
-                                      setSelectedTextOverlay(null);
-                                    }}
-                                    className="inline-flex items-center justify-center gap-1 justify-self-start rounded-md border border-rose-500/30 px-2 py-1 text-xs text-rose-200"
-                                  >
-                                    <Trash2 className="h-3 w-3" />
-                                    Xóa tiêu đề
-                                  </button>
-                                </div>
-                              )}
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="space-y-3 rounded-xl border border-slate-800 bg-slate-950/50 p-4">
-                        <label className="flex items-center gap-2 text-sm font-semibold text-slate-100">
-                          <input
-                            type="checkbox"
-                            checked={subtitlesEnabled}
-                            disabled={
-                              !srt?.analysis?.items.length &&
-                              !job?.overlaySettings?.subtitles.length
-                            }
-                            onChange={(event) =>
-                              setSubtitlesEnabled(event.target.checked)
-                            }
-                            className="accent-sky-400"
-                          />
-                          Chèn phụ đề SRT
-                        </label>
-                        <p className="text-xs text-slate-400">
-                          {srt?.analysis
-                            ? `${srt.fileName} · ${srt.analysis.subtitleCount} dòng`
-                            : job?.overlaySettings?.subtitles.length
-                              ? `${job.overlaySettings.subtitles.length} dòng phụ đề đã lưu`
-                              : "Chọn và phân tích tệp SRT ở phần phụ đề trước khi xuất."}
-                        </p>
-                        <TextStyleControls
-                          value={subtitleTextStyleValue}
-                          onChange={updateSubtitleTextStyle}
-                          fontOptions={subtitleFontOptions}
-                          minFontSize={12}
-                          maxFontSize={72}
-                          disabled={
-                            !srt?.analysis?.items.length &&
-                            !job?.overlaySettings?.subtitles.length
-                          }
-                        />
-                        <div className="grid gap-3 sm:grid-cols-2">
-                          <label className="flex items-center justify-between gap-2 text-xs text-slate-300">
-                            Kiểu nền phụ đề
-                            <select
-                              value={subtitleBackgroundMode}
-                              onChange={(event) => {
-                                setSubtitleBackgroundMode(
-                                  event.target.value as
-                                    | "none"
-                                    | "color"
-                                    | "image",
-                                );
-                                if (
-                                  event.target.value === "image" &&
-                                  !subtitleBackgroundImage &&
-                                  subtitleBackgrounds.length > 0
-                                ) {
-                                  setSubtitleBackgroundImage(
-                                    subtitleBackgrounds[0],
-                                  );
-                                }
-                              }}
-                              disabled={
-                                !srt?.analysis?.items.length &&
-                                !job?.overlaySettings?.subtitles.length
-                              }
-                              className="min-w-0 rounded-lg border border-slate-700 bg-slate-900 px-2 py-2 text-xs text-slate-100"
-                            >
-                              <option value="none">
-                                Không nền / Trong suốt
-                              </option>
-                              <option value="color">Màu nền</option>
-                              <option value="image">Nền ảnh 3-slice</option>
-                            </select>
-                          </label>
-                          {subtitleBackgroundMode === "color" && (
-                            <label className="flex items-center justify-between gap-2 text-xs text-slate-300">
-                              Màu nền
-                              <input
-                                type="color"
-                                value={subtitleBackgroundColor}
-                                onChange={(event) =>
-                                  setSubtitleBackgroundColor(event.target.value)
-                                }
-                                disabled={
-                                  !srt?.analysis?.items.length &&
-                                  !job?.overlaySettings?.subtitles.length
-                                }
-                                className="h-8 w-12 cursor-pointer rounded border border-slate-700 bg-slate-900 p-1 disabled:cursor-not-allowed"
-                              />
-                            </label>
-                          )}
-                          {subtitleBackgroundMode === "image" && (
-                            <div className="flex items-center justify-between gap-2 text-xs text-slate-300">
-                              <span>Ảnh nền</span>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setSubtitleBackgroundPickerOpen(true)
-                                }
-                                disabled={
-                                  (!srt?.analysis?.items.length &&
-                                    !job?.overlaySettings?.subtitles.length) ||
-                                  subtitleBackgrounds.length === 0
-                                }
-                                className="flex min-w-0 items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-2 py-2 text-xs text-slate-100 hover:border-sky-500/50 disabled:cursor-not-allowed disabled:opacity-50"
-                              >
-                                <span className="max-w-32 truncate">
-                                  {subtitleBackgroundImage?.replace(
-                                    /\.(png|webp)$/i,
-                                    "",
-                                  ) || "Chọn nền"}
-                                </span>
-                                <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-400" />
-                              </button>
+                                    <TextStyleControls
+                                      value={endSceneTextStyleValue}
+                                      onChange={updateSelectedEndSceneStyle}
+                                      fontOptions={subtitleFontOptions}
+                                      disabled={!selectedEndSceneCue}
+                                      maxFontSize={160}
+                                    />
+                                    <div className="grid grid-cols-2 gap-2 text-[10px] text-slate-400">
+                                      <label className="flex items-center justify-between gap-2">
+                                        Căn chữ
+                                        <select
+                                          value={
+                                            selectedEndSceneCue.textAlign ??
+                                            "center"
+                                          }
+                                          onChange={(event) =>
+                                            updateEndSceneText(
+                                              selectedEndSceneTextIndex,
+                                              {
+                                                textAlign: event.target
+                                                  .value as
+                                                  | "left"
+                                                  | "center"
+                                                  | "right",
+                                              },
+                                            )
+                                          }
+                                          className="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-white"
+                                        >
+                                          <option value="left">Trái</option>
+                                          <option value="center">Giữa</option>
+                                          <option value="right">Phải</option>
+                                        </select>
+                                      </label>
+                                      <label className="flex items-center justify-between gap-2">
+                                        Vị trí dọc
+                                        <select
+                                          value={
+                                            selectedEndSceneCue.position.startsWith(
+                                              "top-",
+                                            )
+                                              ? "top"
+                                              : selectedEndSceneCue.position.startsWith(
+                                                    "bottom-",
+                                                  )
+                                                ? "bottom"
+                                                : "middle"
+                                          }
+                                          onChange={(event) => {
+                                            const vertical = event.target.value;
+                                            const horizontal =
+                                              selectedEndSceneCue.position.endsWith(
+                                                "-left",
+                                              )
+                                                ? "left"
+                                                : selectedEndSceneCue.position.endsWith(
+                                                      "-right",
+                                                    )
+                                                  ? "right"
+                                                  : "center";
+                                            updateEndSceneText(
+                                              selectedEndSceneTextIndex,
+                                              {
+                                                position:
+                                                  `${vertical}-${horizontal}` as VideoDubbingOverlayPosition,
+                                              },
+                                            );
+                                          }}
+                                          className="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-white"
+                                        >
+                                          <option value="top">Trên</option>
+                                          <option value="middle">Giữa</option>
+                                          <option value="bottom">Dưới</option>
+                                        </select>
+                                      </label>
+                                      <label className="flex items-center justify-between gap-2">
+                                        Màu nền
+                                        <input
+                                          type="color"
+                                          value={
+                                            selectedEndSceneCue.backgroundColor
+                                          }
+                                          disabled={
+                                            selectedEndSceneCue.backgroundTransparent
+                                          }
+                                          onChange={(event) =>
+                                            updateEndSceneText(
+                                              selectedEndSceneTextIndex,
+                                              {
+                                                backgroundColor:
+                                                  event.target.value,
+                                              },
+                                            )
+                                          }
+                                          className="h-7 w-10 rounded border border-slate-700 bg-slate-950 disabled:opacity-40"
+                                        />
+                                      </label>
+                                      <label className="flex items-center gap-2">
+                                        <input
+                                          type="checkbox"
+                                          checked={
+                                            selectedEndSceneCue.backgroundTransparent
+                                          }
+                                          onChange={(event) =>
+                                            updateEndSceneText(
+                                              selectedEndSceneTextIndex,
+                                              {
+                                                backgroundTransparent:
+                                                  event.target.checked,
+                                              },
+                                            )
+                                          }
+                                          className="accent-orange-400"
+                                        />
+                                        Nền trong suốt
+                                      </label>
+                                    </div>
+                                  </div>
+                                )}
                             </div>
-                          )}
+                          </div>
                         </div>
-                        <label className="block space-y-1.5 text-xs text-slate-300">
-                          <span className="flex justify-between gap-2">
-                            <span>Padding nền phụ đề</span>
-                            <span>{subtitlePaddingPx} px</span>
-                          </span>
-                          <input
-                            type="range"
-                            min="0"
-                            max="40"
-                            value={subtitlePaddingPx}
-                            onChange={(event) =>
-                              setSubtitlePaddingPx(Number(event.target.value))
-                            }
-                            disabled={
-                              !srt?.analysis?.items.length &&
-                              !job?.overlaySettings?.subtitles.length
-                            }
-                            className="w-full accent-sky-400"
-                          />
-                        </label>
-                        <label className="block space-y-1.5 text-xs text-slate-300">
-                          <span className="flex justify-between gap-2">
-                            <span>Khoảng cách phụ đề tới mép video</span>
-                            <span>{subtitleMarginPx} px</span>
-                          </span>
-                          <input
-                            type="range"
-                            min="0"
-                            max="200"
-                            step="4"
-                            value={subtitleMarginPx}
-                            onChange={(event) =>
-                              (() => {
-                                const value = Number(event.target.value);
-                                setSubtitleMarginPx(value);
-                                if (job?.id)
-                                  scheduleSubtitleMarginSave(job.id, value);
-                              })()
-                            }
-                            onPointerUp={flushSubtitleMarginSave}
-                            onKeyUp={flushSubtitleMarginSave}
-                            disabled={
-                              !srt?.analysis?.items.length &&
-                              !job?.overlaySettings?.subtitles.length
-                            }
-                            className="w-full accent-sky-400"
-                          />
-                        </label>
-                        <label className="flex items-center justify-between gap-3 text-xs text-slate-300">
-                          Vị trí phụ đề
-                          <select
-                            value={subtitlePosition}
-                            onChange={(event) =>
-                              setSubtitlePosition(
-                                event.target
-                                  .value as VideoDubbingOverlayPosition,
-                              )
-                            }
-                            disabled={
-                              !srt?.analysis?.items.length &&
-                              !job?.overlaySettings?.subtitles.length
-                            }
-                            className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-2 text-xs text-slate-100"
-                          >
-                            {OVERLAY_POSITION_OPTIONS.map((option) => (
-                              <option key={option.value} value={option.value}>
-                                {option.label}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                        <p className="text-[11px] text-slate-500">
-                          Mặc định: dưới giữa.
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                </div>
+                      ),
+                    },
+                  ]}
+                  defaultTab="preview"
+                />
               </div>
-            )}
-          </section>
-        ) : (
-          <section className="min-h-72 rounded-2xl border border-cyan-500/25 bg-slate-900/80 p-4 sm:p-5">
-            <div
-              role="tablist"
-              aria-label="Video preview"
-              className="flex gap-1 rounded-xl border border-slate-800 bg-slate-950/70 p-1"
-            >
-              <button
-                type="button"
-                role="tab"
-                aria-selected={videoWorkspaceTab === "preview"}
-                onClick={() => setVideoWorkspaceTab("preview")}
-                className={`flex-1 rounded-lg px-3 py-2 text-xs font-semibold ${videoWorkspaceTab === "preview" ? "bg-cyan-400 text-slate-950" : "text-slate-300 hover:bg-slate-800"}`}
-              >
-                Video Mixer Preview
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={videoWorkspaceTab === "merged"}
-                onClick={() => setVideoWorkspaceTab("merged")}
-                className={`flex-1 rounded-lg px-3 py-2 text-xs font-semibold ${videoWorkspaceTab === "merged" ? "bg-emerald-400 text-slate-950" : "text-slate-300 hover:bg-slate-800"}`}
-              >
-                Merged Video
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={videoWorkspaceTab === "end-scene"}
-                onClick={() => setVideoWorkspaceTab("end-scene")}
-                className={`flex-1 rounded-lg px-3 py-2 text-xs font-semibold ${videoWorkspaceTab === "end-scene" ? "bg-orange-400 text-slate-950" : "text-slate-300 hover:bg-slate-800"}`}
-              >
-                End Scene
-              </button>
-            </div>
-            <div className="flex min-h-64 flex-col items-center justify-center gap-3 p-6 text-center">
-              <Film className="h-9 w-9 text-cyan-400" />
-              <h3 className="font-semibold text-white">
-                {videoWorkspaceTab === "preview"
-                  ? "Chưa có video preview"
-                  : videoWorkspaceTab === "merged"
-                    ? "Chưa có video đã merge"
-                    : "End Scene cần video hoàn tất"}
-              </h3>
-              <p className="max-w-md text-sm text-slate-400">
-                Chọn video nguồn và chạy hàng đợi để xem mixer preview; video
-                export hoàn tất sẽ xuất hiện trong tab Merged Video. End Scene
-                được cấu hình khi video đã hoàn tất.
-              </p>
             </div>
           </section>
         )}
