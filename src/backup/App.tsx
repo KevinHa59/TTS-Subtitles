@@ -104,7 +104,9 @@ import FileTransferPage from "./components/FileTransferPage";
 import { copyAudioToClipboard } from "./utils/clipboardAudio";
 import { useTheme } from "./context/ThemeContext";
 
-const VoiceEffectsPage = React.lazy(() => import("./components/VoiceEffectsPage"));
+const VoiceEffectsPage = React.lazy(
+  () => import("./components/VoiceEffectsPage"),
+);
 
 export interface ProjectPreset {
   id: string;
@@ -201,7 +203,8 @@ export default function App() {
 
   const { theme, setTheme, themes } = useTheme();
   const [activeTab, setActiveTab] = useState<AppTab>(getInitialTab);
-  const [showAudioCleanupModal, setShowAudioCleanupModal] = useState<boolean>(false);
+  const [showAudioCleanupModal, setShowAudioCleanupModal] =
+    useState<boolean>(false);
   const [showThemeModal, setShowThemeModal] = useState<boolean>(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState<boolean>(false);
   const [moreMenuOpen, setMoreMenuOpen] = useState<boolean>(false);
@@ -214,26 +217,26 @@ export default function App() {
         tab === "subtitle-ocr"
           ? "/subtitle-ocr"
           : tab === "subtitle-editor"
-          ? "/subtitle-editor"
-          : tab === "srt-from-text"
-          ? "/srt-from-text"
-          : tab === "join-split-video"
-          ? "/join-split-video"
-          : tab === "voice-effects"
-          ? "/voice-effects"
-          : tab === "file-transfer"
-          ? "/file-transfer"
-          : tab === "video-dubbing"
-          ? "/video-dubbing"
-          : tab === "voice-clone"
-          ? "/voice-clone"
-          : tab === "story"
-          ? "/story"
-          : tab === "bgm"
-          ? "/bgm"
-          : tab === "single"
-          ? "/single"
-          : "/";
+            ? "/subtitle-editor"
+            : tab === "srt-from-text"
+              ? "/srt-from-text"
+              : tab === "join-split-video"
+                ? "/join-split-video"
+                : tab === "voice-effects"
+                  ? "/voice-effects"
+                  : tab === "file-transfer"
+                    ? "/file-transfer"
+                    : tab === "video-dubbing"
+                      ? "/video-dubbing"
+                      : tab === "voice-clone"
+                        ? "/voice-clone"
+                        : tab === "story"
+                          ? "/story"
+                          : tab === "bgm"
+                            ? "/bgm"
+                            : tab === "single"
+                              ? "/single"
+                              : "/";
       if (window.location.pathname !== path) {
         window.history.pushState({}, "", path);
       }
@@ -261,7 +264,10 @@ export default function App() {
 
   useEffect(() => {
     const handlePointerDown = (event: MouseEvent) => {
-      if (headerRef.current && !headerRef.current.contains(event.target as Node)) {
+      if (
+        headerRef.current &&
+        !headerRef.current.contains(event.target as Node)
+      ) {
         setMoreMenuOpen(false);
       }
     };
@@ -385,9 +391,9 @@ export default function App() {
   );
 
   // Voice sorting by name (Requirement 2)
-  const [voiceSortOrder, setVoiceSortOrder] = useState<
-    "none" | "asc" | "desc"
-  >("none");
+  const [voiceSortOrder, setVoiceSortOrder] = useState<"none" | "asc" | "desc">(
+    "none",
+  );
 
   // Notification sound & panel (Requirement 3)
   const [soundNotificationEnabled, setSoundNotificationEnabled] =
@@ -449,7 +455,9 @@ export default function App() {
   // Clipboard Audio states
   const [copiedMasterAudio, setCopiedMasterAudio] = useState<boolean>(false);
   const [copiedSingleAudio, setCopiedSingleAudio] = useState<boolean>(false);
-  const [copiedSentenceIndex, setCopiedSentenceIndex] = useState<number | null>(null);
+  const [copiedSentenceIndex, setCopiedSentenceIndex] = useState<number | null>(
+    null,
+  );
 
   const handleCopyMasterAudio = async () => {
     if (!activeJob?.id) return;
@@ -493,7 +501,8 @@ export default function App() {
       .then((data) => {
         if (data.voices && Array.isArray(data.voices)) {
           setVoices(data.voices);
-          if (data.defaultModel && !selectedVoiceId) setSelectedVoiceId(data.defaultModel);
+          if (data.defaultModel && !selectedVoiceId)
+            setSelectedVoiceId(data.defaultModel);
         }
         if (typeof data.espeakAvailable === "boolean") {
           setEspeakStatus({
@@ -962,7 +971,10 @@ export default function App() {
   };
 
   // Seek master audio to any position (Requirement 1)
-  const handleSeekMaster = (targetSeconds: number, autoPlay: boolean = false) => {
+  const handleSeekMaster = (
+    targetSeconds: number,
+    autoPlay: boolean = false,
+  ) => {
     if (!activeJob?.masterAudio) return;
     const maxDur = masterDuration || activeJob.masterAudio.duration || 100;
     const clamped = Math.max(0, Math.min(targetSeconds, maxDur));
@@ -1386,7 +1398,8 @@ export default function App() {
             speedPriority: item.speedPriority || "balanced",
             padSilence:
               typeof item.padSilence === "boolean" ? item.padSilence : true,
-            trimStartMs: typeof item.trimStartMs === "number" ? item.trimStartMs : 0,
+            trimStartMs:
+              typeof item.trimStartMs === "number" ? item.trimStartMs : 0,
             trimEndMs: typeof item.trimEndMs === "number" ? item.trimEndMs : 0,
             outputFormat: item.outputFormat === "wav" ? "wav" : "mp3",
             normalizeNumbers:
@@ -1401,7 +1414,9 @@ export default function App() {
               typeof item.soundOnlyUnfocused === "boolean"
                 ? item.soundOnlyUnfocused
                 : true,
-            customPronunciationRules: Array.isArray(item.customPronunciationRules)
+            customPronunciationRules: Array.isArray(
+              item.customPronunciationRules,
+            )
               ? item.customPronunciationRules
               : [],
           });
@@ -1654,15 +1669,28 @@ export default function App() {
   const femaleVoicesCount = voices.filter((v) => v.gender === "female").length;
   const maleVoicesCount = voices.filter((v) => v.gender === "male").length;
   const recommendedVoicesCount = voices.filter((v) => v.recommended).length;
-  const vieneuVoicesCount = voices.filter((v) => v.id.startsWith("vieneu:") || v.engine === "vieneu").length;
-  const piperVoicesCount = voices.filter((v) => !v.id.startsWith("vieneu:") && v.engine !== "vieneu").length;
+  const vieneuVoicesCount = voices.filter(
+    (v) => v.id.startsWith("vieneu:") || v.engine === "vieneu",
+  ).length;
+  const piperVoicesCount = voices.filter(
+    (v) => !v.id.startsWith("vieneu:") && v.engine !== "vieneu",
+  ).length;
 
   const filteredVoices = voices.filter((v) => {
     if (voiceGenderFilter === "recommended" && !v.recommended) return false;
     if (voiceGenderFilter === "female" && v.gender !== "female") return false;
     if (voiceGenderFilter === "male" && v.gender !== "male") return false;
-    if (voiceGenderFilter === "vieneu" && !v.id.startsWith("vieneu:") && v.engine !== "vieneu") return false;
-    if (voiceGenderFilter === "piper" && (v.id.startsWith("vieneu:") || v.engine === "vieneu")) return false;
+    if (
+      voiceGenderFilter === "vieneu" &&
+      !v.id.startsWith("vieneu:") &&
+      v.engine !== "vieneu"
+    )
+      return false;
+    if (
+      voiceGenderFilter === "piper" &&
+      (v.id.startsWith("vieneu:") || v.engine === "vieneu")
+    )
+      return false;
     if (voiceSearchQuery.trim()) {
       const q = voiceSearchQuery.toLowerCase();
       return (
@@ -1741,155 +1769,160 @@ export default function App() {
       <audio ref={singleAudioRef} />
 
       {/* Header - Desktop App Menu / Title Bar */}
-      <header ref={headerRef} className="relative z-40 w-full shrink-0 select-none">
+      <header
+        ref={headerRef}
+        className="relative z-40 w-full shrink-0 select-none"
+      >
         <div className="h-10 sm:h-11 border-b border-slate-800 bg-slate-900 flex items-stretch justify-between px-3 rounded-none w-full">
-        {/* Logo & Brand */}
-        <div className="flex items-center gap-2.5 shrink-0 pr-3">
-          <div className="w-6 h-6 rounded-none bg-gradient-to-br from-amber-500 via-orange-500 to-rose-600 flex items-center justify-center text-slate-950 font-black text-xs tracking-tighter shrink-0">
-            TTS
+          {/* Logo & Brand */}
+          <div className="flex items-center gap-2.5 shrink-0 pr-3">
+            <div className="w-6 h-6 rounded-none bg-gradient-to-br from-amber-500 via-orange-500 to-rose-600 flex items-center justify-center text-slate-950 font-black text-xs tracking-tighter shrink-0">
+              TTS
+            </div>
+            <div className="flex items-center gap-2">
+              <h1 className="font-bold text-xs sm:text-sm text-white tracking-tight uppercase whitespace-nowrap">
+                Piper TTS Studio
+              </h1>
+              <span className="text-[10px] text-amber-400 font-mono font-medium hidden md:inline px-1.5 py-0.2 bg-amber-500/10 border border-amber-500/20 rounded-none">
+                Desktop
+              </span>
+              {/* Active mode indicator badge on mobile view */}
+              <span className="lg:hidden text-[10px] font-medium px-2 py-0.5 rounded-none bg-amber-500/15 text-amber-400 border border-amber-500/30 truncate max-w-[125px] sm:max-w-none">
+                {activeTab === "subtitles" && "Đồng Bộ SRT"}
+                {activeTab === "single" && "Đọc Đoạn Văn"}
+                {activeTab === "story" && "Kể Truyện"}
+                {activeTab === "bgm" && "Tạo Nhạc Nền"}
+                {activeTab === "voice-clone" && "Clone Giọng"}
+                {activeTab === "video-dubbing" && "Video Dubbing"}
+                {activeTab === "subtitle-ocr" && "OCR Phụ Đề"}
+                {activeTab === "subtitle-editor" && "Dịch & Sửa SRT"}
+                {activeTab === "join-split-video" && "Join / Split Video"}
+                {activeTab === "voice-effects" && "Voice Effects"}
+                {activeTab === "file-transfer" && "Transfer"}
+              </span>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <h1 className="font-bold text-xs sm:text-sm text-white tracking-tight uppercase whitespace-nowrap">
-              Piper TTS Studio
-            </h1>
-            <span className="text-[10px] text-amber-400 font-mono font-medium hidden md:inline px-1.5 py-0.2 bg-amber-500/10 border border-amber-500/20 rounded-none">
-              Desktop
-            </span>
-            {/* Active mode indicator badge on mobile view */}
-            <span className="lg:hidden text-[10px] font-medium px-2 py-0.5 rounded-none bg-amber-500/15 text-amber-400 border border-amber-500/30 truncate max-w-[125px] sm:max-w-none">
-              {activeTab === "subtitles" && "Đồng Bộ SRT"}
-              {activeTab === "single" && "Đọc Đoạn Văn"}
-              {activeTab === "story" && "Kể Truyện"}
-              {activeTab === "bgm" && "Tạo Nhạc Nền"}
-              {activeTab === "voice-clone" && "Clone Giọng"}
-              {activeTab === "video-dubbing" && "Video Dubbing"}
-              {activeTab === "subtitle-ocr" && "OCR Phụ Đề"}
-              {activeTab === "subtitle-editor" && "Dịch & Sửa SRT"}
-              {activeTab === "join-split-video" && "Join / Split Video"}
-              {activeTab === "voice-effects" && "Voice Effects"}
-              {activeTab === "file-transfer" && "Transfer"}
-            </span>
+
+          {/* Desktop Navigation (>= lg screens: docked desktop tab bar) */}
+          <div className="hidden lg:flex items-stretch h-full shrink-0 flex-nowrap">
+            <nav className="flex items-stretch h-full border-l border-slate-800 text-xs shrink-0 flex-nowrap">
+              <button
+                type="button"
+                onClick={() => handleNavigateTab("subtitles")}
+                className={`px-3.5 h-full border-r border-slate-800 font-semibold transition-colors flex items-center gap-1.5 whitespace-nowrap cursor-pointer rounded-none text-xs ${
+                  activeTab === "subtitles"
+                    ? "bg-slate-800 text-amber-400 border-b-2 border-b-amber-500 font-bold"
+                    : "text-slate-400 hover:text-white hover:bg-slate-800/50"
+                }`}
+              >
+                <FileText className="w-3.5 h-3.5 text-amber-400" />
+                <span>Đồng Bộ Phụ Đề (SRT)</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleNavigateTab("video-dubbing")}
+                className={`px-3.5 h-full border-r border-slate-800 font-semibold transition-colors flex items-center gap-1.5 whitespace-nowrap cursor-pointer rounded-none text-xs ${
+                  activeTab === "video-dubbing"
+                    ? "bg-slate-800 text-amber-400 border-b-2 border-b-amber-500 font-bold"
+                    : "text-slate-400 hover:text-white hover:bg-slate-800/50"
+                }`}
+              >
+                <Film className="w-3.5 h-3.5" />
+                <span>Video Dubbing</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleNavigateTab("subtitle-ocr")}
+                className={`px-3.5 h-full border-r border-slate-800 font-semibold transition-colors flex items-center gap-1.5 whitespace-nowrap cursor-pointer rounded-none text-xs ${
+                  activeTab === "subtitle-ocr"
+                    ? "bg-slate-800 text-cyan-400 border-b-2 border-b-cyan-500 font-bold"
+                    : "text-slate-400 hover:text-white hover:bg-slate-800/50"
+                }`}
+              >
+                <Captions className="w-3.5 h-3.5" />
+                <span>OCR Phụ Đề</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleNavigateTab("voice-clone")}
+                className={`px-3.5 h-full border-r border-slate-800 font-semibold transition-colors flex items-center gap-1.5 whitespace-nowrap cursor-pointer rounded-none text-xs ${
+                  activeTab === "voice-clone"
+                    ? "bg-slate-800 text-amber-400 border-b-2 border-b-amber-500 font-bold"
+                    : "text-amber-400 hover:text-amber-200 hover:bg-slate-800/50"
+                }`}
+                title="Trang huấn luyện và Clone giọng nói tiếng Việt bằng Google Colab (/voice-clone)"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>Clone Giọng</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setMoreMenuOpen((open) => !open)}
+                aria-expanded={moreMenuOpen}
+                aria-haspopup="menu"
+                className={`px-3.5 h-full border-r border-slate-800 font-semibold transition-colors flex items-center gap-1.5 whitespace-nowrap cursor-pointer rounded-none text-xs ${
+                  moreMenuOpen ||
+                  activeTab === "subtitle-editor" ||
+                  activeTab === "single" ||
+                  activeTab === "story" ||
+                  activeTab === "bgm" ||
+                  activeTab === "voice-effects" ||
+                  activeTab === "srt-from-text" ||
+                  activeTab === "join-split-video" ||
+                  activeTab === "file-transfer"
+                    ? "bg-slate-800 text-amber-400 border-b-2 border-b-amber-500 font-bold"
+                    : "text-slate-400 hover:text-white hover:bg-slate-800/50"
+                }`}
+              >
+                <span>Thêm Công Cụ...</span>
+                <ChevronDown
+                  className={`h-3 w-3 transition-transform ${moreMenuOpen ? "rotate-180" : ""}`}
+                />
+              </button>
+            </nav>
+          </div>
+
+          {/* Desktop Quick Header Actions & Mobile Hamburger */}
+          <div className="flex items-center gap-1 shrink-0">
+            <button
+              type="button"
+              onClick={() => setShowThemeModal(true)}
+              className="p-1.5 text-amber-400 hover:text-amber-300 hover:bg-slate-800 rounded-none transition-colors flex items-center gap-1 text-xs font-semibold cursor-pointer"
+              title="Đổi giao diện / Theme (Desktop Dark, Zinc, Light, OLED High Contrast)"
+            >
+              <Sliders className="w-3.5 h-3.5" />
+              <span className="hidden xl:inline text-[11px]">Theme</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowSetupModal(true)}
+              className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-none transition-colors hidden sm:inline-flex cursor-pointer"
+              title="Cài đặt hệ thống (Setup)"
+            >
+              <Settings className="w-4 h-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowAudioCleanupModal(true)}
+              className="p-1.5 text-rose-400/80 hover:text-rose-300 hover:bg-slate-800 rounded-none transition-colors hidden sm:inline-flex cursor-pointer"
+              title="Dọn dẹp audio rác"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setMobileMenuOpen((prev) => !prev)}
+              aria-label="Mở menu chuyển tab và tính năng"
+              className="p-1.5 text-slate-300 hover:text-white hover:bg-slate-800 lg:hidden rounded-none transition-colors"
+            >
+              {mobileMenuOpen ? (
+                <X className="w-5 h-5 text-amber-400" />
+              ) : (
+                <Menu className="w-5 h-5 text-slate-200" />
+              )}
+            </button>
           </div>
         </div>
-
-        {/* Desktop Navigation (>= lg screens: docked desktop tab bar) */}
-        <div className="hidden lg:flex items-stretch h-full shrink-0 flex-nowrap">
-          <nav className="flex items-stretch h-full border-l border-slate-800 text-xs shrink-0 flex-nowrap">
-            <button
-              type="button"
-              onClick={() => handleNavigateTab("subtitles")}
-              className={`px-3.5 h-full border-r border-slate-800 font-semibold transition-colors flex items-center gap-1.5 whitespace-nowrap cursor-pointer rounded-none text-xs ${
-                activeTab === "subtitles"
-                  ? "bg-slate-800 text-amber-400 border-b-2 border-b-amber-500 font-bold"
-                  : "text-slate-400 hover:text-white hover:bg-slate-800/50"
-              }`}
-            >
-              <FileText className="w-3.5 h-3.5 text-amber-400" />
-              <span>Đồng Bộ Phụ Đề (SRT)</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => handleNavigateTab("video-dubbing")}
-              className={`px-3.5 h-full border-r border-slate-800 font-semibold transition-colors flex items-center gap-1.5 whitespace-nowrap cursor-pointer rounded-none text-xs ${
-                activeTab === "video-dubbing"
-                  ? "bg-slate-800 text-amber-400 border-b-2 border-b-amber-500 font-bold"
-                  : "text-slate-400 hover:text-white hover:bg-slate-800/50"
-              }`}
-            >
-              <Film className="w-3.5 h-3.5" />
-              <span>Video Dubbing</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => handleNavigateTab("subtitle-ocr")}
-              className={`px-3.5 h-full border-r border-slate-800 font-semibold transition-colors flex items-center gap-1.5 whitespace-nowrap cursor-pointer rounded-none text-xs ${
-                activeTab === "subtitle-ocr"
-                  ? "bg-slate-800 text-cyan-400 border-b-2 border-b-cyan-500 font-bold"
-                  : "text-slate-400 hover:text-white hover:bg-slate-800/50"
-              }`}
-            >
-              <Captions className="w-3.5 h-3.5" />
-              <span>OCR Phụ Đề</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => handleNavigateTab("voice-clone")}
-              className={`px-3.5 h-full border-r border-slate-800 font-semibold transition-colors flex items-center gap-1.5 whitespace-nowrap cursor-pointer rounded-none text-xs ${
-                activeTab === "voice-clone"
-                  ? "bg-slate-800 text-amber-400 border-b-2 border-b-amber-500 font-bold"
-                  : "text-amber-400 hover:text-amber-200 hover:bg-slate-800/50"
-              }`}
-              title="Trang huấn luyện và Clone giọng nói tiếng Việt bằng Google Colab (/voice-clone)"
-            >
-              <Sparkles className="w-3.5 h-3.5" />
-              <span>Clone Giọng</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setMoreMenuOpen((open) => !open)}
-              aria-expanded={moreMenuOpen}
-              aria-haspopup="menu"
-              className={`px-3.5 h-full border-r border-slate-800 font-semibold transition-colors flex items-center gap-1.5 whitespace-nowrap cursor-pointer rounded-none text-xs ${
-                moreMenuOpen ||
-                activeTab === "subtitle-editor" ||
-                activeTab === "single" ||
-                activeTab === "story" ||
-                activeTab === "bgm" ||
-                activeTab === "voice-effects" ||
-                activeTab === "srt-from-text" ||
-                activeTab === "join-split-video" ||
-                activeTab === "file-transfer"
-                  ? "bg-slate-800 text-amber-400 border-b-2 border-b-amber-500 font-bold"
-                  : "text-slate-400 hover:text-white hover:bg-slate-800/50"
-              }`}
-            >
-              <span>Thêm Công Cụ...</span>
-              <ChevronDown className={`h-3 w-3 transition-transform ${moreMenuOpen ? "rotate-180" : ""}`} />
-            </button>
-          </nav>
-        </div>
-
-        {/* Desktop Quick Header Actions & Mobile Hamburger */}
-        <div className="flex items-center gap-1 shrink-0">
-          <button
-            type="button"
-            onClick={() => setShowThemeModal(true)}
-            className="p-1.5 text-amber-400 hover:text-amber-300 hover:bg-slate-800 rounded-none transition-colors flex items-center gap-1 text-xs font-semibold cursor-pointer"
-            title="Đổi giao diện / Theme (Desktop Dark, Zinc, Light, OLED High Contrast)"
-          >
-            <Sliders className="w-3.5 h-3.5" />
-            <span className="hidden xl:inline text-[11px]">Theme</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setShowSetupModal(true)}
-            className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-none transition-colors hidden sm:inline-flex cursor-pointer"
-            title="Cài đặt hệ thống (Setup)"
-          >
-            <Settings className="w-4 h-4" />
-          </button>
-          <button
-            type="button"
-            onClick={() => setShowAudioCleanupModal(true)}
-            className="p-1.5 text-rose-400/80 hover:text-rose-300 hover:bg-slate-800 rounded-none transition-colors hidden sm:inline-flex cursor-pointer"
-            title="Dọn dẹp audio rác"
-          >
-            <Trash2 className="w-4 h-4" />
-          </button>
-          <button
-            type="button"
-            onClick={() => setMobileMenuOpen((prev) => !prev)}
-            aria-label="Mở menu chuyển tab và tính năng"
-            className="p-1.5 text-slate-300 hover:text-white hover:bg-slate-800 lg:hidden rounded-none transition-colors"
-          >
-            {mobileMenuOpen ? (
-              <X className="w-5 h-5 text-amber-400" />
-            ) : (
-              <Menu className="w-5 h-5 text-slate-200" />
-            )}
-          </button>
-        </div>
-      </div>
 
         {/* Mobile Dropdown Menu: Chứa toàn bộ menu chức năng khi ở mobile view */}
         {mobileMenuOpen && (
@@ -1918,7 +1951,9 @@ export default function App() {
                     }`}
                   >
                     <div className="flex items-center gap-2.5">
-                      <FileText className={`w-4 h-4 ${activeTab === "subtitles" ? "text-slate-950" : "text-amber-400"}`} />
+                      <FileText
+                        className={`w-4 h-4 ${activeTab === "subtitles" ? "text-slate-950" : "text-amber-400"}`}
+                      />
                       <span>Đồng Bộ Phụ Đề (SRT)</span>
                     </div>
                     {activeTab === "subtitles" && (
@@ -1941,7 +1976,9 @@ export default function App() {
                     }`}
                   >
                     <div className="flex items-center gap-2.5">
-                      <Film className={`w-4 h-4 ${activeTab === "video-dubbing" ? "text-slate-950" : "text-amber-400"}`} />
+                      <Film
+                        className={`w-4 h-4 ${activeTab === "video-dubbing" ? "text-slate-950" : "text-amber-400"}`}
+                      />
                       <span>Video Dubbing</span>
                     </div>
                     {activeTab === "video-dubbing" && (
@@ -1964,7 +2001,9 @@ export default function App() {
                     }`}
                   >
                     <div className="flex items-center gap-2.5">
-                      <Captions className={`w-4 h-4 ${activeTab === "subtitle-ocr" ? "text-slate-950" : "text-cyan-300"}`} />
+                      <Captions
+                        className={`w-4 h-4 ${activeTab === "subtitle-ocr" ? "text-slate-950" : "text-cyan-300"}`}
+                      />
                       <span>Trích xuất phụ đề cứng</span>
                     </div>
                     {activeTab === "subtitle-ocr" && (
@@ -1987,7 +2026,9 @@ export default function App() {
                     }`}
                   >
                     <div className="flex items-center gap-2.5">
-                      <Captions className={`w-4 h-4 ${activeTab === "subtitle-editor" ? "text-slate-950" : "text-violet-300"}`} />
+                      <Captions
+                        className={`w-4 h-4 ${activeTab === "subtitle-editor" ? "text-slate-950" : "text-violet-300"}`}
+                      />
                       <span>Dịch & sửa phụ đề</span>
                     </div>
                     {activeTab === "subtitle-editor" && (
@@ -2010,7 +2051,9 @@ export default function App() {
                     }`}
                   >
                     <div className="flex items-center gap-2.5">
-                      <Zap className={`w-4 h-4 ${activeTab === "single" ? "text-slate-950" : "text-amber-400"}`} />
+                      <Zap
+                        className={`w-4 h-4 ${activeTab === "single" ? "text-slate-950" : "text-amber-400"}`}
+                      />
                       <span>Đọc Đoạn Văn Nhanh</span>
                     </div>
                     {activeTab === "single" && (
@@ -2033,7 +2076,9 @@ export default function App() {
                     }`}
                   >
                     <div className="flex items-center gap-2.5">
-                      <BookOpen className={`w-4 h-4 ${activeTab === "story" ? "text-slate-950" : "text-amber-400"}`} />
+                      <BookOpen
+                        className={`w-4 h-4 ${activeTab === "story" ? "text-slate-950" : "text-amber-400"}`}
+                      />
                       <span>Kể Truyện</span>
                     </div>
                     {activeTab === "story" && (
@@ -2056,7 +2101,9 @@ export default function App() {
                     }`}
                   >
                     <div className="flex items-center gap-2.5">
-                      <Music className={`w-4 h-4 ${activeTab === "bgm" ? "text-slate-950" : "text-amber-400"}`} />
+                      <Music
+                        className={`w-4 h-4 ${activeTab === "bgm" ? "text-slate-950" : "text-amber-400"}`}
+                      />
                       <span>Tạo Nhạc Nền</span>
                     </div>
                     {activeTab === "bgm" && (
@@ -2079,7 +2126,9 @@ export default function App() {
                     }`}
                   >
                     <div className="flex items-center gap-2.5">
-                      <Sparkles className={`w-4 h-4 ${activeTab === "voice-clone" ? "text-slate-950" : "text-amber-400"}`} />
+                      <Sparkles
+                        className={`w-4 h-4 ${activeTab === "voice-clone" ? "text-slate-950" : "text-amber-400"}`}
+                      />
                       <span>Clone Giọng (Colab)</span>
                     </div>
                     {activeTab === "voice-clone" && (
@@ -2096,7 +2145,6 @@ export default function App() {
                   Công cụ tiện ích
                 </div>
                 <div className="grid grid-cols-2 gap-2">
-
                   <button
                     type="button"
                     onClick={() => {
@@ -2173,7 +2221,9 @@ export default function App() {
               <Captions className="h-4 w-4" />
               <span>
                 Dịch & Sửa SRT
-                <span className={`mt-0.5 block text-xs ${activeTab === "subtitle-editor" ? "text-slate-800" : "text-slate-500"}`}>
+                <span
+                  className={`mt-0.5 block text-xs ${activeTab === "subtitle-editor" ? "text-slate-800" : "text-slate-500"}`}
+                >
                   Dịch và chỉnh sửa phụ đề
                 </span>
               </span>
@@ -2194,7 +2244,9 @@ export default function App() {
               <Zap className="h-4 w-4" />
               <span>
                 Đọc Đoạn Văn Nhanh
-                <span className={`mt-0.5 block text-xs ${activeTab === "single" ? "text-slate-800" : "text-slate-500"}`}>
+                <span
+                  className={`mt-0.5 block text-xs ${activeTab === "single" ? "text-slate-800" : "text-slate-500"}`}
+                >
                   Tạo giọng đọc từ văn bản
                 </span>
               </span>
@@ -2215,7 +2267,9 @@ export default function App() {
               <BookOpen className="h-4 w-4" />
               <span>
                 Kể Truyện
-                <span className={`mt-0.5 block text-xs ${activeTab === "story" ? "text-slate-800" : "text-slate-500"}`}>
+                <span
+                  className={`mt-0.5 block text-xs ${activeTab === "story" ? "text-slate-800" : "text-slate-500"}`}
+                >
                   Kể chuyện đa nhân vật
                 </span>
               </span>
@@ -2236,7 +2290,9 @@ export default function App() {
               <Music className="h-4 w-4" />
               <span>
                 Tạo Nhạc Nền
-                <span className={`mt-0.5 block text-xs ${activeTab === "bgm" ? "text-slate-800" : "text-slate-500"}`}>
+                <span
+                  className={`mt-0.5 block text-xs ${activeTab === "bgm" ? "text-slate-800" : "text-slate-500"}`}
+                >
                   Tạo nhạc nền và âm thanh AI
                 </span>
               </span>
@@ -2257,7 +2313,9 @@ export default function App() {
               <Sparkles className="h-4 w-4" />
               <span>
                 Voice Effects
-                <span className={`mt-0.5 block text-xs ${activeTab === "voice-effects" ? "text-slate-800" : "text-slate-500"}`}>
+                <span
+                  className={`mt-0.5 block text-xs ${activeTab === "voice-effects" ? "text-slate-800" : "text-slate-500"}`}
+                >
                   Tạo và lưu preset giọng nói
                 </span>
               </span>
@@ -2278,7 +2336,9 @@ export default function App() {
               <Captions className="h-4 w-4" />
               <span>
                 SRT from Text
-                <span className={`mt-0.5 block text-xs ${activeTab === "srt-from-text" ? "text-slate-800" : "text-slate-500"}`}>
+                <span
+                  className={`mt-0.5 block text-xs ${activeTab === "srt-from-text" ? "text-slate-800" : "text-slate-500"}`}
+                >
                   Tách văn bản thành nhiều file SRT
                 </span>
               </span>
@@ -2299,7 +2359,9 @@ export default function App() {
               <Scissors className="h-4 w-4" />
               <span>
                 join-split-video
-                <span className={`mt-0.5 block text-xs ${activeTab === "join-split-video" ? "text-slate-800" : "text-slate-500"}`}>
+                <span
+                  className={`mt-0.5 block text-xs ${activeTab === "join-split-video" ? "text-slate-800" : "text-slate-500"}`}
+                >
                   Nối, cắt và xuất video
                 </span>
               </span>
@@ -2320,7 +2382,9 @@ export default function App() {
               <UploadCloud className="h-4 w-4" />
               <span>
                 Transfer File
-                <span className={`mt-0.5 block text-xs ${activeTab === "file-transfer" ? "text-slate-800" : "text-slate-500"}`}>
+                <span
+                  className={`mt-0.5 block text-xs ${activeTab === "file-transfer" ? "text-slate-800" : "text-slate-500"}`}
+                >
                   Gửi và nhận file qua mạng LAN
                 </span>
               </span>
@@ -2995,7 +3059,9 @@ export default function App() {
                           <div className="space-y-1">
                             <label className="text-[11px] text-slate-300 flex items-center justify-between">
                               <span>Đầu câu (ms):</span>
-                              <span className="text-amber-400 font-mono font-semibold">{trimStartMs}ms</span>
+                              <span className="text-amber-400 font-mono font-semibold">
+                                {trimStartMs}ms
+                              </span>
                             </label>
                             <input
                               type="number"
@@ -3003,7 +3069,11 @@ export default function App() {
                               max="2000"
                               step="10"
                               value={trimStartMs}
-                              onChange={(e) => setTrimStartMs(Math.max(0, parseInt(e.target.value) || 0))}
+                              onChange={(e) =>
+                                setTrimStartMs(
+                                  Math.max(0, parseInt(e.target.value) || 0),
+                                )
+                              }
                               className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1 text-slate-100 font-mono text-xs focus:ring-1 focus:ring-amber-500"
                               placeholder="0"
                             />
@@ -3013,7 +3083,9 @@ export default function App() {
                           <div className="space-y-1">
                             <label className="text-[11px] text-slate-300 flex items-center justify-between">
                               <span>Cuối câu (ms):</span>
-                              <span className="text-amber-400 font-mono font-semibold">{trimEndMs}ms</span>
+                              <span className="text-amber-400 font-mono font-semibold">
+                                {trimEndMs}ms
+                              </span>
                             </label>
                             <input
                               type="number"
@@ -3021,7 +3093,11 @@ export default function App() {
                               max="2000"
                               step="10"
                               value={trimEndMs}
-                              onChange={(e) => setTrimEndMs(Math.max(0, parseInt(e.target.value) || 0))}
+                              onChange={(e) =>
+                                setTrimEndMs(
+                                  Math.max(0, parseInt(e.target.value) || 0),
+                                )
+                              }
                               className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1 text-slate-100 font-mono text-xs focus:ring-1 focus:ring-amber-500"
                               placeholder="0"
                             />
@@ -3030,10 +3106,15 @@ export default function App() {
 
                         {/* Quick preset buttons for common trim values */}
                         <div className="flex items-center gap-1 pt-0.5 flex-wrap">
-                          <span className="text-[10px] text-slate-500">Mẫu:</span>
+                          <span className="text-[10px] text-slate-500">
+                            Mẫu:
+                          </span>
                           <button
                             type="button"
-                            onClick={() => { setTrimStartMs(0); setTrimEndMs(0); }}
+                            onClick={() => {
+                              setTrimStartMs(0);
+                              setTrimEndMs(0);
+                            }}
                             className={`px-1.5 py-0.5 rounded text-[10px] transition-colors cursor-pointer ${
                               trimStartMs === 0 && trimEndMs === 0
                                 ? "bg-amber-500 text-slate-950 font-bold"
@@ -3044,7 +3125,10 @@ export default function App() {
                           </button>
                           <button
                             type="button"
-                            onClick={() => { setTrimStartMs(50); setTrimEndMs(80); }}
+                            onClick={() => {
+                              setTrimStartMs(50);
+                              setTrimEndMs(80);
+                            }}
                             className={`px-1.5 py-0.5 rounded text-[10px] transition-colors cursor-pointer ${
                               trimStartMs === 50 && trimEndMs === 80
                                 ? "bg-amber-500 text-slate-950 font-bold"
@@ -3055,7 +3139,10 @@ export default function App() {
                           </button>
                           <button
                             type="button"
-                            onClick={() => { setTrimStartMs(100); setTrimEndMs(150); }}
+                            onClick={() => {
+                              setTrimStartMs(100);
+                              setTrimEndMs(150);
+                            }}
                             className={`px-1.5 py-0.5 rounded text-[10px] transition-colors cursor-pointer ${
                               trimStartMs === 100 && trimEndMs === 150
                                 ? "bg-amber-500 text-slate-950 font-bold"
@@ -3066,7 +3153,10 @@ export default function App() {
                           </button>
                           <button
                             type="button"
-                            onClick={() => { setTrimStartMs(150); setTrimEndMs(200); }}
+                            onClick={() => {
+                              setTrimStartMs(150);
+                              setTrimEndMs(200);
+                            }}
                             className={`px-1.5 py-0.5 rounded text-[10px] transition-colors cursor-pointer ${
                               trimStartMs === 150 && trimEndMs === 200
                                 ? "bg-amber-500 text-slate-950 font-bold"
@@ -3078,7 +3168,11 @@ export default function App() {
                         </div>
 
                         <span className="text-[10px] text-slate-400 block leading-tight">
-                          Thứ tự xử lý: <strong>1. TTS ➔ 2. Trim ➔ 3. Co giãn tốc độ</strong>. Cắt bỏ khoảng lặng thừa ở đầu và đuôi trước khi đo thời lượng để âm thanh dứt khoát và đúng nhịp phụ đề hơn.
+                          Thứ tự xử lý:{" "}
+                          <strong>1. TTS ➔ 2. Trim ➔ 3. Co giãn tốc độ</strong>.
+                          Cắt bỏ khoảng lặng thừa ở đầu và đuôi trước khi đo
+                          thời lượng để âm thanh dứt khoát và đúng nhịp phụ đề
+                          hơn.
                         </span>
                       </div>
 
@@ -3184,7 +3278,10 @@ export default function App() {
                         Tự động sửa số có dấu chấm (5.000 ➔ 5000)
                       </span>
                       <p className="text-[10px] text-slate-400 leading-relaxed">
-                        Sửa lỗi &ldquo;5.000&rdquo; bị đọc thành &ldquo;5 không không không&rdquo;, đọc đúng &ldquo;năm nghìn&rdquo;, số thập phân (3.5 ➔ 3 phẩy 5) và tiền tệ (5.000đ ➔ 5000 đồng).
+                        Sửa lỗi &ldquo;5.000&rdquo; bị đọc thành &ldquo;5 không
+                        không không&rdquo;, đọc đúng &ldquo;năm nghìn&rdquo;, số
+                        thập phân (3.5 ➔ 3 phẩy 5) và tiền tệ (5.000đ ➔ 5000
+                        đồng).
                       </p>
                     </div>
                   </label>
@@ -3193,10 +3290,16 @@ export default function App() {
                   <div className="p-2.5 bg-slate-950/50 rounded-xl border border-slate-800/80 text-[11px] text-slate-400 space-y-1">
                     <div className="flex items-center justify-between text-slate-300 font-medium">
                       <span>Phát âm chữ &ldquo;R&rdquo; (Giọng Hoài My):</span>
-                      <span className="text-[10px] text-amber-400">Giọng Bắc</span>
+                      <span className="text-[10px] text-amber-400">
+                        Giọng Bắc
+                      </span>
                     </div>
                     <p className="text-[10px] leading-relaxed">
-                      Giọng Hoài My nói tiếng Hà Nội nên các âm &ldquo;r/d/gi&rdquo; tự nhiên đồng âm. Để đọc chuẩn &ldquo;R&rdquo; rung uốn lưỡi, hãy chọn giọng <strong>Việt Thảo (Miền Nam)</strong> hoặc mở <strong>Từ điển</strong> để thay thế.
+                      Giọng Hoài My nói tiếng Hà Nội nên các âm
+                      &ldquo;r/d/gi&rdquo; tự nhiên đồng âm. Để đọc chuẩn
+                      &ldquo;R&rdquo; rung uốn lưỡi, hãy chọn giọng{" "}
+                      <strong>Việt Thảo (Miền Nam)</strong> hoặc mở{" "}
+                      <strong>Từ điển</strong> để thay thế.
                     </p>
                   </div>
                 </div>
@@ -3648,7 +3751,9 @@ export default function App() {
                         {copiedMasterAudio ? (
                           <>
                             <Check className="w-4 h-4 text-emerald-400 stroke-[3]" />
-                            <span className="text-emerald-400 font-bold">Đã copy!</span>
+                            <span className="text-emerald-400 font-bold">
+                              Đã copy!
+                            </span>
                           </>
                         ) : (
                           <>
@@ -3695,7 +3800,9 @@ export default function App() {
                           type="button"
                           onClick={() => handlePlayMasterAudio()}
                           className="w-12 h-12 rounded-2xl bg-gradient-to-r from-amber-500 to-amber-400 hover:from-amber-400 hover:to-amber-300 text-slate-950 flex items-center justify-center shrink-0 shadow-lg shadow-amber-500/30 transition-transform active:scale-95 cursor-pointer font-bold"
-                          title={masterPlaying ? "Tạm dừng" : "Phát Master Audio"}
+                          title={
+                            masterPlaying ? "Tạm dừng" : "Phát Master Audio"
+                          }
                         >
                           {masterPlaying ? (
                             <Pause className="w-6 h-6 fill-current" />
@@ -3943,10 +4050,10 @@ export default function App() {
                               isCurrentActiveSentence
                                 ? "bg-amber-500/20 border-l-4 border-l-amber-400 font-semibold ring-1 ring-amber-500/40 shadow-inner"
                                 : item.warning
-                                ? "bg-amber-500/5 hover:bg-slate-800/40"
-                                : item.status === "failed"
-                                ? "bg-rose-500/5 hover:bg-slate-800/40"
-                                : "hover:bg-slate-800/30"
+                                  ? "bg-amber-500/5 hover:bg-slate-800/40"
+                                  : item.status === "failed"
+                                    ? "bg-rose-500/5 hover:bg-slate-800/40"
+                                    : "hover:bg-slate-800/30"
                             }`}
                           >
                             {/* Index */}
@@ -3963,181 +4070,185 @@ export default function App() {
                               )}
                             </td>
 
-                          {/* Timeline */}
-                          <td className="py-2.5 px-3 font-mono text-[11px] text-slate-300">
-                            <div>{formatSecondsToSrtTime(item.startTime)}</div>
-                            <div className="text-slate-400 text-[10px]">
-                              ➔ {formatSecondsToSrtTime(item.endTime)}
-                            </div>
-                          </td>
+                            {/* Timeline */}
+                            <td className="py-2.5 px-3 font-mono text-[11px] text-slate-300">
+                              <div>
+                                {formatSecondsToSrtTime(item.startTime)}
+                              </div>
+                              <div className="text-slate-400 text-[10px]">
+                                ➔ {formatSecondsToSrtTime(item.endTime)}
+                              </div>
+                            </td>
 
-                          {/* Text & Warning */}
-                          <td className="py-2.5 px-3">
-                            <p className="text-slate-200 font-medium leading-relaxed">
-                              {item.text}
-                            </p>
-                            {item.warning && (
-                              <p className="text-[10px] text-amber-400/90 mt-0.5 flex items-center gap-1">
-                                <AlertTriangle className="w-3 h-3 shrink-0" />
-                                <span>{item.warning}</span>
+                            {/* Text & Warning */}
+                            <td className="py-2.5 px-3">
+                              <p className="text-slate-200 font-medium leading-relaxed">
+                                {item.text}
                               </p>
-                            )}
-                            {item.error && (
-                              <p className="text-[10px] text-rose-400 mt-0.5 flex items-center gap-1">
-                                <AlertTriangle className="w-3 h-3 shrink-0" />
-                                <span>{item.error}</span>
-                              </p>
-                            )}
-                          </td>
+                              {item.warning && (
+                                <p className="text-[10px] text-amber-400/90 mt-0.5 flex items-center gap-1">
+                                  <AlertTriangle className="w-3 h-3 shrink-0" />
+                                  <span>{item.warning}</span>
+                                </p>
+                              )}
+                              {item.error && (
+                                <p className="text-[10px] text-rose-400 mt-0.5 flex items-center gap-1">
+                                  <AlertTriangle className="w-3 h-3 shrink-0" />
+                                  <span>{item.error}</span>
+                                </p>
+                              )}
+                            </td>
 
-                          {/* Target Duration */}
-                          <td className="py-2.5 px-3 text-right font-mono text-slate-300">
-                            {item.targetDuration.toFixed(2)}s
-                          </td>
+                            {/* Target Duration */}
+                            <td className="py-2.5 px-3 text-right font-mono text-slate-300">
+                              {item.targetDuration.toFixed(2)}s
+                            </td>
 
-                          {/* Original Duration */}
-                          <td className="py-2.5 px-3 text-right font-mono text-slate-400">
-                            {item.originalDuration
-                              ? `${item.originalDuration.toFixed(2)}s`
-                              : "—"}
-                          </td>
+                            {/* Original Duration */}
+                            <td className="py-2.5 px-3 text-right font-mono text-slate-400">
+                              {item.originalDuration
+                                ? `${item.originalDuration.toFixed(2)}s`
+                                : "—"}
+                            </td>
 
-                          {/* Applied Speed */}
-                          <td className="py-2.5 px-3 text-center font-mono">
-                            {item.appliedSpeed ? (
-                              <span
-                                className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                                  item.appliedSpeed > 1.05
-                                    ? "bg-amber-500/20 text-amber-300 border border-amber-500/30"
-                                    : item.appliedSpeed < 0.98
-                                    ? "bg-sky-500/20 text-sky-300 border border-sky-500/30"
-                                    : "bg-slate-800 text-slate-300"
-                                }`}
-                                title={
-                                  item.appliedSpeed < 0.98
-                                    ? `Giảm tốc ${item.appliedSpeed.toFixed(2)}x để khớp thời lượng phụ đề dài hơn`
-                                    : item.appliedSpeed > 1.05
-                                    ? `Tăng tốc ${item.appliedSpeed.toFixed(2)}x để kịp thời lượng phụ đề`
-                                    : "Tốc độ gốc (1.00x)"
-                                }
-                              >
-                                {item.appliedSpeed.toFixed(2)}x
-                              </span>
-                            ) : (
-                              "—"
-                            )}
-                          </td>
-
-                          {/* Final Duration */}
-                          <td className="py-2.5 px-3 text-right font-mono text-slate-200 font-semibold">
-                            {item.finalDuration
-                              ? `${item.finalDuration.toFixed(2)}s`
-                              : "—"}
-                          </td>
-
-                          {/* Status Badge */}
-                          <td className="py-2.5 px-3 text-center">
-                            {item.status === "completed" && (
-                              <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-400">
-                                <CheckCircle2 className="w-3 h-3" />
-                                <span>Hoàn thành</span>
-                              </span>
-                            )}
-                            {item.status === "generating" && (
-                              <span className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-400 animate-pulse">
-                                <RefreshCw className="w-3 h-3 animate-spin" />
-                                <span>Đang tạo...</span>
-                              </span>
-                            )}
-                            {item.status === "adjusting" && (
-                              <span className="inline-flex items-center gap-1 text-[11px] font-medium text-sky-400">
-                                <Sliders className="w-3 h-3" />
-                                <span>Chỉnh tốc độ</span>
-                              </span>
-                            )}
-                            {item.status === "failed" && (
-                              <span className="inline-flex items-center gap-1 text-[11px] font-medium text-rose-400">
-                                <AlertTriangle className="w-3 h-3" />
-                                <span>Thất bại</span>
-                              </span>
-                            )}
-                            {item.status === "pending" && (
-                              <span className="text-[11px] text-slate-400">
-                                Chờ xử lý
-                              </span>
-                            )}
-                          </td>
-
-                          {/* Audio Preview (Single Item & Master Timeline Jump) */}
-                          <td className="py-2.5 px-3 text-center">
-                            {activeJob && item.status === "completed" ? (
-                              <div className="flex items-center justify-center gap-1.5">
-                                <button
-                                  type="button"
-                                  onClick={() => handlePlayItemAudio(item)}
-                                  className={`inline-flex items-center justify-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-                                    playingItemIndex === item.index
-                                      ? "bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/30 scale-105 ring-2 ring-amber-400/50"
-                                      : "bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700 hover:border-amber-500/40"
+                            {/* Applied Speed */}
+                            <td className="py-2.5 px-3 text-center font-mono">
+                              {item.appliedSpeed ? (
+                                <span
+                                  className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                                    item.appliedSpeed > 1.05
+                                      ? "bg-amber-500/20 text-amber-300 border border-amber-500/30"
+                                      : item.appliedSpeed < 0.98
+                                        ? "bg-sky-500/20 text-sky-300 border border-sky-500/30"
+                                        : "bg-slate-800 text-slate-300"
                                   }`}
                                   title={
-                                    playingItemIndex === item.index
-                                      ? "Dừng phát câu lẻ"
-                                      : "Nghe thử câu thoại lẻ này"
+                                    item.appliedSpeed < 0.98
+                                      ? `Giảm tốc ${item.appliedSpeed.toFixed(2)}x để khớp thời lượng phụ đề dài hơn`
+                                      : item.appliedSpeed > 1.05
+                                        ? `Tăng tốc ${item.appliedSpeed.toFixed(2)}x để kịp thời lượng phụ đề`
+                                        : "Tốc độ gốc (1.00x)"
                                   }
                                 >
-                                  {playingItemIndex === item.index ? (
-                                    <>
-                                      <Pause className="w-3.5 h-3.5 fill-current text-slate-950" />
-                                      <span>Dừng</span>
-                                    </>
-                                  ) : (
-                                    <>
-                                      <Play className="w-3.5 h-3.5 fill-current text-amber-400 ml-0.5" />
-                                      <span>Nghe</span>
-                                    </>
-                                  )}
-                                </button>
+                                  {item.appliedSpeed.toFixed(2)}x
+                                </span>
+                              ) : (
+                                "—"
+                              )}
+                            </td>
 
-                                {activeJob.masterAudio && (
+                            {/* Final Duration */}
+                            <td className="py-2.5 px-3 text-right font-mono text-slate-200 font-semibold">
+                              {item.finalDuration
+                                ? `${item.finalDuration.toFixed(2)}s`
+                                : "—"}
+                            </td>
+
+                            {/* Status Badge */}
+                            <td className="py-2.5 px-3 text-center">
+                              {item.status === "completed" && (
+                                <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-400">
+                                  <CheckCircle2 className="w-3 h-3" />
+                                  <span>Hoàn thành</span>
+                                </span>
+                              )}
+                              {item.status === "generating" && (
+                                <span className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-400 animate-pulse">
+                                  <RefreshCw className="w-3 h-3 animate-spin" />
+                                  <span>Đang tạo...</span>
+                                </span>
+                              )}
+                              {item.status === "adjusting" && (
+                                <span className="inline-flex items-center gap-1 text-[11px] font-medium text-sky-400">
+                                  <Sliders className="w-3 h-3" />
+                                  <span>Chỉnh tốc độ</span>
+                                </span>
+                              )}
+                              {item.status === "failed" && (
+                                <span className="inline-flex items-center gap-1 text-[11px] font-medium text-rose-400">
+                                  <AlertTriangle className="w-3 h-3" />
+                                  <span>Thất bại</span>
+                                </span>
+                              )}
+                              {item.status === "pending" && (
+                                <span className="text-[11px] text-slate-400">
+                                  Chờ xử lý
+                                </span>
+                              )}
+                            </td>
+
+                            {/* Audio Preview (Single Item & Master Timeline Jump) */}
+                            <td className="py-2.5 px-3 text-center">
+                              {activeJob && item.status === "completed" ? (
+                                <div className="flex items-center justify-center gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => handlePlayItemAudio(item)}
+                                    className={`inline-flex items-center justify-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                                      playingItemIndex === item.index
+                                        ? "bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/30 scale-105 ring-2 ring-amber-400/50"
+                                        : "bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700 hover:border-amber-500/40"
+                                    }`}
+                                    title={
+                                      playingItemIndex === item.index
+                                        ? "Dừng phát câu lẻ"
+                                        : "Nghe thử câu thoại lẻ này"
+                                    }
+                                  >
+                                    {playingItemIndex === item.index ? (
+                                      <>
+                                        <Pause className="w-3.5 h-3.5 fill-current text-slate-950" />
+                                        <span>Dừng</span>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <Play className="w-3.5 h-3.5 fill-current text-amber-400 ml-0.5" />
+                                        <span>Nghe</span>
+                                      </>
+                                    )}
+                                  </button>
+
+                                  {activeJob.masterAudio && (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        handlePlayMasterFromSentence(item)
+                                      }
+                                      className={`p-1.5 rounded-lg border transition-all cursor-pointer ${
+                                        isCurrentActiveSentence && masterPlaying
+                                          ? "bg-amber-500 text-slate-950 border-amber-400 font-bold shadow-md scale-105"
+                                          : "bg-slate-900 hover:bg-slate-800 text-amber-400 hover:text-amber-300 border-slate-700"
+                                      }`}
+                                      title={`Tua Master Audio tới câu ${item.index} (${formatSecondsDisplay(item.startTime)}) và phát`}
+                                    >
+                                      <Play className="w-3.5 h-3.5 fill-current" />
+                                    </button>
+                                  )}
+
                                   <button
                                     type="button"
                                     onClick={() =>
-                                      handlePlayMasterFromSentence(item)
+                                      handleCopySentenceAudio(item)
                                     }
-                                    className={`p-1.5 rounded-lg border transition-all cursor-pointer ${
-                                      isCurrentActiveSentence && masterPlaying
-                                        ? "bg-amber-500 text-slate-950 border-amber-400 font-bold shadow-md scale-105"
-                                        : "bg-slate-900 hover:bg-slate-800 text-amber-400 hover:text-amber-300 border-slate-700"
-                                    }`}
-                                    title={`Tua Master Audio tới câu ${item.index} (${formatSecondsDisplay(item.startTime)}) và phát`}
+                                    className="p-1.5 rounded-lg border border-slate-700 bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-amber-400 transition-colors cursor-pointer"
+                                    title={`Sao chép audio câu ${item.index} vào clipboard`}
                                   >
-                                    <Play className="w-3.5 h-3.5 fill-current" />
+                                    {copiedSentenceIndex === item.index ? (
+                                      <Check className="w-3.5 h-3.5 text-emerald-400 stroke-[3]" />
+                                    ) : (
+                                      <Copy className="w-3.5 h-3.5" />
+                                    )}
                                   </button>
-                                )}
-
-                                <button
-                                  type="button"
-                                  onClick={() => handleCopySentenceAudio(item)}
-                                  className="p-1.5 rounded-lg border border-slate-700 bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-amber-400 transition-colors cursor-pointer"
-                                  title={`Sao chép audio câu ${item.index} vào clipboard`}
-                                >
-                                  {copiedSentenceIndex === item.index ? (
-                                    <Check className="w-3.5 h-3.5 text-emerald-400 stroke-[3]" />
-                                  ) : (
-                                    <Copy className="w-3.5 h-3.5" />
-                                  )}
-                                </button>
-                              </div>
-                            ) : (
-                              <span className="text-slate-600 font-mono text-[11px]">
-                                —
-                              </span>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
+                                </div>
+                              ) : (
+                                <span className="text-slate-600 font-mono text-[11px]">
+                                  —
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -4496,7 +4607,9 @@ export default function App() {
                       {copiedSingleAudio ? (
                         <>
                           <Check className="w-3.5 h-3.5 text-emerald-400 stroke-[3]" />
-                          <span className="text-emerald-400 font-bold">Đã copy!</span>
+                          <span className="text-emerald-400 font-bold">
+                            Đã copy!
+                          </span>
                         </>
                       ) : (
                         <>
@@ -4526,7 +4639,15 @@ export default function App() {
                 </span>
               </h3>
               <p className="leading-relaxed">
-                Piper TTS Studio chạy <span className="text-amber-300 font-semibold">100% Offline</span> với mô hình ONNX nội suy âm thanh chất lượng cao. Đang kích hoạt giọng <strong className="text-white">{selectedVoice.name}</strong> ({selectedVoice.gender === "female" ? "Nữ" : "Nam"}, {selectedVoice.tag || "Tiếng Việt"}).
+                Piper TTS Studio chạy{" "}
+                <span className="text-amber-300 font-semibold">
+                  100% Offline
+                </span>{" "}
+                với mô hình ONNX nội suy âm thanh chất lượng cao. Đang kích hoạt
+                giọng{" "}
+                <strong className="text-white">{selectedVoice.name}</strong> (
+                {selectedVoice.gender === "female" ? "Nữ" : "Nam"},{" "}
+                {selectedVoice.tag || "Tiếng Việt"}).
               </p>
               <div className="p-3 bg-slate-950 rounded-none border border-slate-800 text-[11px] space-y-1">
                 <div className="text-slate-300 font-medium">
@@ -4556,13 +4677,19 @@ export default function App() {
 
         {activeTab === "bgm" && (
           <div className="flex-1 min-h-0 w-full overflow-y-auto">
-            <BgmGeneratorTab voices={voices} onOpenSetup={() => setShowSetupModal(true)} />
+            <BgmGeneratorTab
+              voices={voices}
+              onOpenSetup={() => setShowSetupModal(true)}
+            />
           </div>
         )}
 
         {activeTab === "voice-clone" && (
           <div className="flex-1 min-h-0 w-full overflow-hidden flex flex-col">
-            <VoiceClonePage onVoiceInstalled={() => loadVoices()} onOpenSetup={() => setShowSetupModal(true)} />
+            <VoiceClonePage
+              onVoiceInstalled={() => loadVoices()}
+              onOpenSetup={() => setShowSetupModal(true)}
+            />
           </div>
         )}
         {activeTab === "subtitle-ocr" && (
@@ -4593,13 +4720,23 @@ export default function App() {
         {activeTab === "voice-effects" && (
           <div className="flex-1 min-h-0 w-full overflow-hidden flex flex-col">
             <React.Suspense
-              fallback={<div className="p-8 text-center text-sm text-slate-400">Đang tải trang Voice Effects...</div>}
+              fallback={
+                <div className="p-8 text-center text-sm text-slate-400">
+                  Đang tải trang Voice Effects...
+                </div>
+              }
             >
               <VoiceEffectsPage />
             </React.Suspense>
           </div>
         )}
-        <div className={activeTab === "video-dubbing" ? "flex-1 min-h-0 w-full overflow-hidden flex flex-col" : "hidden"}>
+        <div
+          className={
+            activeTab === "video-dubbing"
+              ? "flex-1 min-h-0 w-full overflow-hidden flex flex-col"
+              : "hidden"
+          }
+        >
           <VideoDubbingTab />
         </div>
       </main>
@@ -4802,7 +4939,8 @@ export default function App() {
                       const isCurrent = v.id === selectedVoiceId;
                       const isPreviewing = previewVoiceId === v.id;
                       const isLoadingPreview = previewLoadingVoiceId === v.id;
-                      const isVieNeu = v.id.startsWith("vieneu:") || v.engine === "vieneu";
+                      const isVieNeu =
+                        v.id.startsWith("vieneu:") || v.engine === "vieneu";
 
                       return (
                         <tr
@@ -5390,7 +5528,8 @@ export default function App() {
             </div>
 
             <p className="text-xs text-slate-400">
-              Mã nguồn Node.js TypeScript nạp trực tiếp mô hình giọng đọc đã chọn với PiperTTS:
+              Mã nguồn Node.js TypeScript nạp trực tiếp mô hình giọng đọc đã
+              chọn với PiperTTS:
             </p>
 
             <div className="relative bg-slate-950 rounded-xl border border-slate-800 p-4 font-mono text-xs text-emerald-300 overflow-x-auto">
@@ -5447,7 +5586,10 @@ const { audio, sampleRate } = await tts.synthesize("Xin chào! Đây là Piper T
         </div>
       )}
 
-      <SubtitleTranslationSetupModal open={showSetupModal} onClose={() => setShowSetupModal(false)} />
+      <SubtitleTranslationSetupModal
+        open={showSetupModal}
+        onClose={() => setShowSetupModal(false)}
+      />
 
       {/* ========================================================= */}
       {/* FLOATING AI STUDIO COMPLETION PANEL (Requirement 3)       */}
@@ -5567,8 +5709,8 @@ const { audio, sampleRate } = await tts.synthesize("Xin chào! Đây là Piper T
                   <code className="text-emerald-400 font-mono bg-slate-900 px-1 py-0.5 rounded">
                     5000
                   </code>{" "}
-                  để Piper phát âm chuẩn <strong>&ldquo;năm nghìn&rdquo;</strong>
-                  .
+                  để Piper phát âm chuẩn{" "}
+                  <strong>&ldquo;năm nghìn&rdquo;</strong>.
                 </p>
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pt-1 font-mono text-[11px]">
                   <div className="p-2 bg-slate-900/80 rounded border border-slate-800 text-slate-300">
@@ -5705,9 +5847,7 @@ const { audio, sampleRate } = await tts.synthesize("Xin chào! Đây là Piper T
                           <span className="text-slate-500">➔</span>
                           <span
                             className={
-                              r.active
-                                ? "text-emerald-300"
-                                : "text-slate-500"
+                              r.active ? "text-emerald-300" : "text-slate-500"
                             }
                           >
                             &ldquo;{r.to}&rdquo;
@@ -5834,232 +5974,229 @@ const { audio, sampleRate } = await tts.synthesize("Xin chào! Đây là Piper T
           className="h-14 sm:h-16 shrink-0 border-t border-slate-800 bg-slate-900/95 px-3 flex items-center justify-between w-full z-30 select-none rounded-none"
         >
           <div className="w-full flex flex-col md:flex-row items-stretch md:items-center justify-between gap-2 sm:gap-4">
-              {/* Vùng Trái: Thông tin Giọng đọc & Phụ đề & Trạng thái */}
-              <div className="flex items-center justify-between md:justify-start gap-3 shrink-0">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-9 h-9 rounded-xl bg-amber-500/15 text-amber-400 border border-amber-500/25 flex items-center justify-center shrink-0">
-                    <Radio className="w-4 h-4" />
-                  </div>
-                  <div className="leading-tight">
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setShowVoiceModal(true)}
-                        className="text-xs font-bold text-white hover:text-amber-300 truncate max-w-[150px] sm:max-w-[220px] transition-colors cursor-pointer text-left flex items-center gap-1.5 group"
-                        title="Bấm để mở bảng chọn giọng đọc"
-                      >
-                        <span className="truncate group-hover:underline">
-                          {selectedVoice.name}
-                        </span>
-                        <span className="text-[10px] text-amber-400 font-semibold bg-amber-500/15 px-1.5 py-0.2 rounded border border-amber-500/30 group-hover:bg-amber-500/25 shrink-0">
-                          Đổi giọng
-                        </span>
-                      </button>
-                      <span
-                        className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                          activeJob?.status === "running"
-                            ? "bg-amber-500/20 text-amber-300 border border-amber-500/30 animate-pulse"
-                            : activeJob?.status === "completed"
-                              ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
-                              : activeJob?.status === "paused"
-                                ? "bg-sky-500/20 text-sky-300 border border-sky-500/30"
-                                : "bg-slate-800 text-slate-300 border border-slate-700"
-                        }`}
-                      >
-                        {activeJob?.status === "running" &&
-                          "Đang chạy song song"}
-                        {activeJob?.status === "completed" && "Hoàn thành 100%"}
-                        {activeJob?.status === "paused" && "Đang tạm dừng"}
-                        {(!activeJob || activeJob?.status === "idle") &&
-                          "Sẵn sàng"}
-                      </span>
-                    </div>
-                    <div className="text-[11px] text-slate-400 font-mono mt-0.5 flex items-center gap-2">
-                      <span className="text-amber-400 font-semibold">
-                        {subtitles.length} câu
-                      </span>
-                      <span>·</span>
-                      <span>
-                        Batch{" "}
-                        {activeJob?.options.batchSize ?? effectiveBatchSize}{" "}
-                        câu/đợt
-                      </span>
-                      {uploadedFileName && (
-                        <>
-                          <span>·</span>
-                          <span
-                            className="truncate max-w-[120px] text-slate-300 hidden sm:inline"
-                            title={uploadedFileName}
-                          >
-                            {uploadedFileName}
-                          </span>
-                        </>
-                      )}
-                    </div>
-                  </div>
+            {/* Vùng Trái: Thông tin Giọng đọc & Phụ đề & Trạng thái */}
+            <div className="flex items-center justify-between md:justify-start gap-3 shrink-0">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-amber-500/15 text-amber-400 border border-amber-500/25 flex items-center justify-center shrink-0">
+                  <Radio className="w-4 h-4" />
                 </div>
-              </div>
-
-              {/* Vùng Giữa: Progress Bar & Phần Trăm Hoàn Thành (Requirement 2) */}
-              <div className="flex-1 min-w-0 max-w-2xl mx-auto w-full space-y-1.5 px-0 md:px-4">
-                <div className="flex items-center justify-between text-xs font-mono">
+                <div className="leading-tight">
                   <div className="flex items-center gap-2">
-                    <span className="text-sm sm:text-base font-extrabold text-amber-400">
-                      {completionPercent}%
-                    </span>
-                    <span className="text-slate-400 text-[11px]">
-                      ({completedSentencesCount}/{totalSentencesCount} câu hoàn
-                      tất)
+                    <button
+                      type="button"
+                      onClick={() => setShowVoiceModal(true)}
+                      className="text-xs font-bold text-white hover:text-amber-300 truncate max-w-[150px] sm:max-w-[220px] transition-colors cursor-pointer text-left flex items-center gap-1.5 group"
+                      title="Bấm để mở bảng chọn giọng đọc"
+                    >
+                      <span className="truncate group-hover:underline">
+                        {selectedVoice.name}
+                      </span>
+                      <span className="text-[10px] text-amber-400 font-semibold bg-amber-500/15 px-1.5 py-0.2 rounded border border-amber-500/30 group-hover:bg-amber-500/25 shrink-0">
+                        Đổi giọng
+                      </span>
+                    </button>
+                    <span
+                      className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                        activeJob?.status === "running"
+                          ? "bg-amber-500/20 text-amber-300 border border-amber-500/30 animate-pulse"
+                          : activeJob?.status === "completed"
+                            ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+                            : activeJob?.status === "paused"
+                              ? "bg-sky-500/20 text-sky-300 border border-sky-500/30"
+                              : "bg-slate-800 text-slate-300 border border-slate-700"
+                      }`}
+                    >
+                      {activeJob?.status === "running" && "Đang chạy song song"}
+                      {activeJob?.status === "completed" && "Hoàn thành 100%"}
+                      {activeJob?.status === "paused" && "Đang tạm dừng"}
+                      {(!activeJob || activeJob?.status === "idle") &&
+                        "Sẵn sàng"}
                     </span>
                   </div>
-                  <div className="text-[11px] text-slate-400">
-                    {activeJob?.status === "running" && (
-                      <span className="text-amber-400 font-medium">
-                        {activeJob.overallProgress.estimatedRemainingMs !==
-                        undefined
-                          ? `Còn ~${(activeJob.overallProgress.estimatedRemainingMs / 1000).toFixed(0)}s`
-                          : `Đã chạy ${(activeJob.overallProgress.elapsedMs / 1000).toFixed(1)}s`}
-                      </span>
-                    )}
-                    {activeJob?.status === "completed" && (
-                      <span className="text-emerald-400 flex items-center gap-1 font-semibold">
-                        <CheckCircle2 className="w-3.5 h-3.5" />
-                        Master audio sẵn sàng
-                      </span>
-                    )}
-                    {(!activeJob || activeJob?.status === "idle") && (
-                      <span className="text-slate-400">Chờ bắt đầu xử lý</span>
+                  <div className="text-[11px] text-slate-400 font-mono mt-0.5 flex items-center gap-2">
+                    <span className="text-amber-400 font-semibold">
+                      {subtitles.length} câu
+                    </span>
+                    <span>·</span>
+                    <span>
+                      Batch {activeJob?.options.batchSize ?? effectiveBatchSize}{" "}
+                      câu/đợt
+                    </span>
+                    {uploadedFileName && (
+                      <>
+                        <span>·</span>
+                        <span
+                          className="truncate max-w-[120px] text-slate-300 hidden sm:inline"
+                          title={uploadedFileName}
+                        >
+                          {uploadedFileName}
+                        </span>
+                      </>
                     )}
                   </div>
                 </div>
-
-                {/* Thanh Tiến Độ Hoàn Thành (Progress Bar) */}
-                <div className="w-full bg-slate-900 rounded-full h-3 overflow-hidden p-0.5 border border-slate-700/80 shadow-inner relative">
-                  <div
-                    className={`h-full rounded-full transition-all duration-300 relative ${
-                      activeJob?.status === "completed"
-                        ? "bg-gradient-to-r from-emerald-500 to-emerald-400 shadow-[0_0_14px_rgba(16,185,129,0.5)]"
-                        : "bg-gradient-to-r from-amber-500 via-amber-400 to-emerald-400 shadow-[0_0_14px_rgba(245,158,11,0.5)]"
-                    }`}
-                    style={{
-                      width: `${Math.min(100, Math.max(0, completionPercent))}%`,
-                    }}
-                  >
-                    {activeJob?.status === "running" && (
-                      <div className="absolute inset-0 bg-white/25 animate-pulse" />
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              {/* Vùng Phải: Nút Bắt Đầu Xử Lý & Các Điều Khiển Phụ (Requirement 2) */}
-              <div className="flex items-center justify-end gap-2 shrink-0">
-                {activeJob?.status === "running" ? (
-                  <>
-                    <button
-                      type="button"
-                      onClick={handlePauseResume}
-                      className="px-3.5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
-                      title="Tạm dừng tiến trình"
-                    >
-                      <Pause className="w-4 h-4 text-amber-400" />
-                      <span className="hidden sm:inline">Tạm dừng</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleCancelJob}
-                      className="px-3 py-2.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
-                      title="Hủy bỏ tiến trình"
-                    >
-                      <Square className="w-3.5 h-3.5 text-rose-400 fill-current" />
-                      <span className="hidden sm:inline">Hủy</span>
-                    </button>
-                    <div className="px-4 py-2.5 bg-amber-500/20 border border-amber-500/40 text-amber-300 rounded-xl text-xs font-bold flex items-center gap-2 shadow-sm">
-                      <RefreshCw className="w-4 h-4 animate-spin text-amber-400" />
-                      <span>Đang xử lý ({completionPercent}%)</span>
-                    </div>
-                  </>
-                ) : activeJob?.status === "paused" ? (
-                  <>
-                    <button
-                      type="button"
-                      onClick={handlePauseResume}
-                      className="px-4 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-lg shadow-emerald-500/20 transition-colors cursor-pointer"
-                    >
-                      <Play className="w-4 h-4 fill-current" />
-                      <span>Tiếp tục</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleCancelJob}
-                      className="px-3.5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
-                    >
-                      <Square className="w-3.5 h-3.5 text-rose-400" />
-                      <span>Hủy</span>
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    {activeJob?.status === "completed" &&
-                      activeJob.masterAudio && (
-                        <div className="flex items-center gap-2">
-                          {masterPlaying && currentMasterItem?.item && (
-                            <span className="hidden lg:inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs font-mono font-medium max-w-[240px] truncate">
-                              <Volume2 className="w-3.5 h-3.5 animate-pulse shrink-0" />
-                              <span className="truncate">
-                                Câu {currentMasterItem.item.index}:{" "}
-                                {currentMasterItem.item.text}
-                              </span>
-                            </span>
-                          )}
-                          <button
-                            type="button"
-                            onClick={() => handlePlayMasterAudio()}
-                            className="px-3.5 py-2.5 bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-emerald-500/40 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-md"
-                            title="Nghe file master hoàn chỉnh"
-                          >
-                            {masterPlaying ? (
-                              <>
-                                <Pause className="w-4 h-4 fill-current" />
-                                <span>
-                                  Dừng (
-                                  {formatSecondsDisplay(masterCurrentTime)})
-                                </span>
-                              </>
-                            ) : (
-                              <>
-                                <Play className="w-4 h-4 fill-current text-emerald-400" />
-                                <span>Nghe Master</span>
-                              </>
-                            )}
-                          </button>
-                        </div>
-                      )}
-
-                    {/* Nút Bắt Đầu Xử Lý Chính */}
-                    <button
-                      type="button"
-                      disabled={subtitles.length === 0}
-                      onClick={handleStartProcessing}
-                      className="px-5 sm:px-6 py-2.5 bg-gradient-to-r from-amber-500 to-amber-400 hover:from-amber-400 hover:to-amber-300 active:scale-95 text-slate-950 font-black rounded-xl text-xs sm:text-sm flex items-center gap-2 shadow-xl shadow-amber-500/25 disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none transition-all cursor-pointer"
-                    >
-                      {activeJob?.status === "completed" ? (
-                        <>
-                          <RotateCcw className="w-4 h-4" />
-                          <span>Chạy Lại ({subtitles.length} câu)</span>
-                        </>
-                      ) : (
-                        <>
-                          <Play className="w-4 h-4 fill-current ml-0.5" />
-                          <span>Bắt Đầu Xử Lý ({subtitles.length} câu)</span>
-                        </>
-                      )}
-                    </button>
-                  </>
-                )}
               </div>
             </div>
+
+            {/* Vùng Giữa: Progress Bar & Phần Trăm Hoàn Thành (Requirement 2) */}
+            <div className="flex-1 min-w-0 max-w-2xl mx-auto w-full space-y-1.5 px-0 md:px-4">
+              <div className="flex items-center justify-between text-xs font-mono">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm sm:text-base font-extrabold text-amber-400">
+                    {completionPercent}%
+                  </span>
+                  <span className="text-slate-400 text-[11px]">
+                    ({completedSentencesCount}/{totalSentencesCount} câu hoàn
+                    tất)
+                  </span>
+                </div>
+                <div className="text-[11px] text-slate-400">
+                  {activeJob?.status === "running" && (
+                    <span className="text-amber-400 font-medium">
+                      {activeJob.overallProgress.estimatedRemainingMs !==
+                      undefined
+                        ? `Còn ~${(activeJob.overallProgress.estimatedRemainingMs / 1000).toFixed(0)}s`
+                        : `Đã chạy ${(activeJob.overallProgress.elapsedMs / 1000).toFixed(1)}s`}
+                    </span>
+                  )}
+                  {activeJob?.status === "completed" && (
+                    <span className="text-emerald-400 flex items-center gap-1 font-semibold">
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      Master audio sẵn sàng
+                    </span>
+                  )}
+                  {(!activeJob || activeJob?.status === "idle") && (
+                    <span className="text-slate-400">Chờ bắt đầu xử lý</span>
+                  )}
+                </div>
+              </div>
+
+              {/* Thanh Tiến Độ Hoàn Thành (Progress Bar) */}
+              <div className="w-full bg-slate-900 rounded-full h-3 overflow-hidden p-0.5 border border-slate-700/80 shadow-inner relative">
+                <div
+                  className={`h-full rounded-full transition-all duration-300 relative ${
+                    activeJob?.status === "completed"
+                      ? "bg-gradient-to-r from-emerald-500 to-emerald-400 shadow-[0_0_14px_rgba(16,185,129,0.5)]"
+                      : "bg-gradient-to-r from-amber-500 via-amber-400 to-emerald-400 shadow-[0_0_14px_rgba(245,158,11,0.5)]"
+                  }`}
+                  style={{
+                    width: `${Math.min(100, Math.max(0, completionPercent))}%`,
+                  }}
+                >
+                  {activeJob?.status === "running" && (
+                    <div className="absolute inset-0 bg-white/25 animate-pulse" />
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Vùng Phải: Nút Bắt Đầu Xử Lý & Các Điều Khiển Phụ (Requirement 2) */}
+            <div className="flex items-center justify-end gap-2 shrink-0">
+              {activeJob?.status === "running" ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={handlePauseResume}
+                    className="px-3.5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+                    title="Tạm dừng tiến trình"
+                  >
+                    <Pause className="w-4 h-4 text-amber-400" />
+                    <span className="hidden sm:inline">Tạm dừng</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleCancelJob}
+                    className="px-3 py-2.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+                    title="Hủy bỏ tiến trình"
+                  >
+                    <Square className="w-3.5 h-3.5 text-rose-400 fill-current" />
+                    <span className="hidden sm:inline">Hủy</span>
+                  </button>
+                  <div className="px-4 py-2.5 bg-amber-500/20 border border-amber-500/40 text-amber-300 rounded-xl text-xs font-bold flex items-center gap-2 shadow-sm">
+                    <RefreshCw className="w-4 h-4 animate-spin text-amber-400" />
+                    <span>Đang xử lý ({completionPercent}%)</span>
+                  </div>
+                </>
+              ) : activeJob?.status === "paused" ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={handlePauseResume}
+                    className="px-4 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-lg shadow-emerald-500/20 transition-colors cursor-pointer"
+                  >
+                    <Play className="w-4 h-4 fill-current" />
+                    <span>Tiếp tục</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleCancelJob}
+                    className="px-3.5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <Square className="w-3.5 h-3.5 text-rose-400" />
+                    <span>Hủy</span>
+                  </button>
+                </>
+              ) : (
+                <>
+                  {activeJob?.status === "completed" &&
+                    activeJob.masterAudio && (
+                      <div className="flex items-center gap-2">
+                        {masterPlaying && currentMasterItem?.item && (
+                          <span className="hidden lg:inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs font-mono font-medium max-w-[240px] truncate">
+                            <Volume2 className="w-3.5 h-3.5 animate-pulse shrink-0" />
+                            <span className="truncate">
+                              Câu {currentMasterItem.item.index}:{" "}
+                              {currentMasterItem.item.text}
+                            </span>
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => handlePlayMasterAudio()}
+                          className="px-3.5 py-2.5 bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-emerald-500/40 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-md"
+                          title="Nghe file master hoàn chỉnh"
+                        >
+                          {masterPlaying ? (
+                            <>
+                              <Pause className="w-4 h-4 fill-current" />
+                              <span>
+                                Dừng ({formatSecondsDisplay(masterCurrentTime)})
+                              </span>
+                            </>
+                          ) : (
+                            <>
+                              <Play className="w-4 h-4 fill-current text-emerald-400" />
+                              <span>Nghe Master</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    )}
+
+                  {/* Nút Bắt Đầu Xử Lý Chính */}
+                  <button
+                    type="button"
+                    disabled={subtitles.length === 0}
+                    onClick={handleStartProcessing}
+                    className="px-5 sm:px-6 py-2.5 bg-gradient-to-r from-amber-500 to-amber-400 hover:from-amber-400 hover:to-amber-300 active:scale-95 text-slate-950 font-black rounded-xl text-xs sm:text-sm flex items-center gap-2 shadow-xl shadow-amber-500/25 disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none transition-all cursor-pointer"
+                  >
+                    {activeJob?.status === "completed" ? (
+                      <>
+                        <RotateCcw className="w-4 h-4" />
+                        <span>Chạy Lại ({subtitles.length} câu)</span>
+                      </>
+                    ) : (
+                      <>
+                        <Play className="w-4 h-4 fill-current ml-0.5" />
+                        <span>Bắt Đầu Xử Lý ({subtitles.length} câu)</span>
+                      </>
+                    )}
+                  </button>
+                </>
+              )}
+            </div>
           </div>
+        </div>
       )}
 
       {/* Audio Cleanup Modal (Requirement: Dọn Dẹp Audio) */}
@@ -6073,7 +6210,10 @@ const { audio, sampleRate } = await tts.synthesize("Xin chào! Đây là Piper T
                 ? {
                     ...prev,
                     masterAudio: undefined,
-                    items: prev.items.map((i) => ({ ...i, audioUrl: undefined })),
+                    items: prev.items.map((i) => ({
+                      ...i,
+                      audioUrl: undefined,
+                    })),
                   }
                 : null,
             );
@@ -6102,7 +6242,8 @@ const { audio, sampleRate } = await tts.synthesize("Xin chào! Đây là Piper T
             </div>
             <div className="p-4 space-y-2.5">
               <p className="text-xs text-slate-400 leading-relaxed">
-                Chọn phong cách giao diện Desktop phù hợp với không gian làm việc của bạn:
+                Chọn phong cách giao diện Desktop phù hợp với không gian làm
+                việc của bạn:
               </p>
               <div className="space-y-1.5 pt-1">
                 {themes.map((t) => (
@@ -6138,7 +6279,9 @@ const { audio, sampleRate } = await tts.synthesize("Xin chào! Đây là Piper T
                         </p>
                       </div>
                     </div>
-                    {theme === t.id && <Check className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />}
+                    {theme === t.id && (
+                      <Check className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                    )}
                   </button>
                 ))}
               </div>

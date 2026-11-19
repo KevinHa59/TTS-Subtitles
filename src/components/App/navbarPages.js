@@ -1,0 +1,118 @@
+import {
+  BookOpen,
+  Captions,
+  FileText,
+  Film,
+  Music,
+  Scissors,
+  Sparkles,
+  UploadCloud,
+  Zap,
+} from "lucide-react";
+
+const ACCENTS = {
+  amber: "border-amber-500/60 bg-amber-500/15 text-amber-300",
+  cyan: "border-cyan-500/60 bg-cyan-500/15 text-cyan-300",
+  violet: "border-violet-500/60 bg-violet-500/15 text-violet-300",
+};
+
+// Danh sách trang + công cụ hiển thị trong grid của menu điều hướng.
+// `label`: nhãn ngắn trong grid, `title`: tiêu đề trang hiện tại (dòng trên cùng).
+export const NAV_PAGES = [
+  {
+    id: "subtitles",
+    label: "Đồng Bộ SRT",
+    title: "Đồng Bộ Phụ Đề (SRT)",
+    desc: "Đồng bộ phụ đề SRT thành audio theo timeline",
+    Icon: FileText,
+    active: ACCENTS.amber,
+  },
+  {
+    id: "video-dubbing",
+    label: "Video Dubbing",
+    title: "Video Dubbing",
+    desc: "Pipeline lồng tiếng và đồng bộ phụ đề cho video",
+    Icon: Film,
+    active: ACCENTS.amber,
+  },
+  {
+    id: "subtitle-ocr",
+    label: "OCR Phụ Đề",
+    title: "OCR Phụ Đề",
+    desc: "Nhận dạng phụ đề cứng từ video",
+    Icon: Captions,
+    active: ACCENTS.cyan,
+  },
+  {
+    id: "voice-clone",
+    label: "Clone Giọng",
+    title: "Clone Giọng",
+    desc: "Huấn luyện và clone giọng nói tiếng Việt bằng Google Colab",
+    Icon: Sparkles,
+    active: ACCENTS.amber,
+  },
+  {
+    id: "subtitle-editor",
+    label: "Dịch & Sửa SRT",
+    title: "Dịch & Sửa SRT",
+    desc: "Dịch và chỉnh sửa phụ đề",
+    Icon: Captions,
+    active: ACCENTS.violet,
+  },
+  {
+    id: "single",
+    label: "Đọc Đoạn Văn",
+    title: "Đọc Đoạn Văn Nhanh",
+    desc: "Tạo giọng đọc từ văn bản",
+    Icon: Zap,
+    active: ACCENTS.amber,
+  },
+  {
+    id: "story",
+    label: "Kể Truyện",
+    title: "Kể Truyện",
+    desc: "Kể chuyện đa nhân vật",
+    Icon: BookOpen,
+    active: ACCENTS.amber,
+  },
+  {
+    id: "bgm",
+    label: "Tạo Nhạc Nền",
+    title: "Tạo Nhạc Nền",
+    desc: "Tạo nhạc nền và âm thanh AI",
+    Icon: Music,
+    active: ACCENTS.amber,
+  },
+  {
+    id: "voice-effects",
+    label: "Voice Effects",
+    title: "Voice Effects",
+    desc: "Tạo và lưu preset giọng nói",
+    Icon: Sparkles,
+    active: ACCENTS.amber,
+  },
+  {
+    id: "srt-from-text",
+    label: "SRT from Text",
+    title: "SRT from Text",
+    desc: "Tách văn bản thành nhiều file SRT",
+    Icon: Captions,
+    active: ACCENTS.amber,
+  },
+  {
+    id: "join-split-video",
+    label: "Join / Split",
+    title: "Join / Split Video",
+    desc: "Nối, cắt và xuất video",
+    Icon: Scissors,
+    active: ACCENTS.amber,
+  },
+  {
+    id: "file-transfer",
+    label: "Transfer File",
+    title: "Transfer File",
+    desc: "Gửi và nhận file qua mạng LAN",
+    Icon: UploadCloud,
+    active: ACCENTS.cyan,
+  },
+];
