@@ -1,5 +1,4 @@
 import { LoaderCircle, Pause, Play, RefreshCw, Trash2 } from "lucide-react";
-import { formatDuration } from "./helpers";
 
 import { useVideoDubbing } from "./VideoDubbingContext";
 
@@ -87,10 +86,6 @@ export default function SubtitleAudioList(props) {
                     }
                     className="h-8 min-w-0 flex-1 rounded-md border border-slate-700 bg-slate-950 px-2.5 text-xs text-slate-100 outline-none focus:border-violet-400 disabled:opacity-60"
                   />
-                  <span className="shrink-0 text-[10px] tabular-nums text-slate-400">
-                    {formatDuration(item.startTime)} –{" "}
-                    {formatDuration(item.endTime)}
-                  </span>
                   {editedAfterAudio && (
                     <span
                       className="shrink-0 rounded border border-amber-500/30 bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-semibold text-amber-300"
@@ -103,129 +98,125 @@ export default function SubtitleAudioList(props) {
               </div>
 
               {/* Dòng 2: các nút chức năng bao gồm nút audio */}
-              <div className="flex flex-wrap items-center justify-between gap-1.5 pt-0.5">
-                {/* Khu vực Audio */}
-                <div className="flex items-center gap-1.5 min-w-0">
-                  {audio?.audioUrl ? (
-                    <button
-                      type="button"
-                      onClick={() => void playSubtitleAudio(audio)}
-                      aria-label={
-                        subtitleAudioPlayingId === item.id
-                          ? `Dừng audio câu ${item.index}`
-                          : `Phát audio câu ${item.index}`
-                      }
-                      title={
-                        subtitleAudioPlayingId === item.id
-                          ? "Dừng phát"
-                          : "Phát audio"
-                      }
-                      className="inline-flex h-7 items-center gap-1.5 rounded-md border border-violet-500/30 bg-violet-500/10 px-2.5 text-[11px] font-semibold text-violet-200 hover:bg-violet-500/20 transition-colors"
-                    >
-                      {subtitleAudioPlayingId === item.id ? (
-                        <>
-                          <Pause className="h-3 w-3" />
-                          <span>Dừng</span>
-                        </>
-                      ) : (
-                        <>
-                          <Play className="h-3 w-3" />
-                          <span>Phát audio</span>
-                        </>
-                      )}
-                    </button>
-                  ) : (
-                    <span
-                      className={`inline-flex items-center gap-1.5 text-[11px] ${
-                        audio?.status === "failed"
-                          ? "text-rose-300"
-                          : "text-slate-400"
-                      }`}
-                    >
-                      {audio?.status === "generating" && (
-                        <LoaderCircle className="h-3 w-3 animate-spin text-cyan-400" />
-                      )}
-                      {audio?.status === "failed"
-                        ? audio.error || "Tạo audio thất bại"
-                        : audio?.status === "generating"
-                          ? "Đang tạo audio…"
-                          : "Chưa có audio"}
-                    </span>
-                  )}
-                  {audio?.status === "failed" && audio?.audioUrl && (
-                    <span
-                      className="max-w-32 truncate text-[10px] text-rose-300"
-                      title={audio.error}
-                    >
-                      {audio.error}
-                    </span>
-                  )}
-                </div>
+              <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                {/* Nút Audio / Trạng thái Audio */}
+                {audio?.audioUrl ? (
+                  <button
+                    type="button"
+                    onClick={() => void playSubtitleAudio(audio)}
+                    aria-label={
+                      subtitleAudioPlayingId === item.id
+                        ? `Dừng audio câu ${item.index}`
+                        : `Phát audio câu ${item.index}`
+                    }
+                    title={
+                      subtitleAudioPlayingId === item.id
+                        ? "Dừng phát"
+                        : "Phát audio"
+                    }
+                    className="inline-flex h-7 items-center gap-1.5 rounded-md border border-violet-500/30 bg-violet-500/10 px-2 text-[10px] font-semibold text-violet-200 hover:bg-violet-500/20 transition-colors"
+                  >
+                    {subtitleAudioPlayingId === item.id ? (
+                      <>
+                        <Pause className="h-3 w-3" />
+                        <span>Dừng</span>
+                      </>
+                    ) : (
+                      <>
+                        <Play className="h-3 w-3" />
+                        <span>Phát</span>
+                      </>
+                    )}
+                  </button>
+                ) : (
+                  <span
+                    className={`inline-flex items-center gap-1 text-[10px] ${
+                      audio?.status === "failed"
+                        ? "text-rose-300"
+                        : "text-slate-400"
+                    }`}
+                  >
+                    {audio?.status === "generating" && (
+                      <LoaderCircle className="h-3 w-3 animate-spin text-cyan-400" />
+                    )}
+                    {audio?.status === "failed"
+                      ? audio.error || "Tạo audio thất bại"
+                      : audio?.status === "generating"
+                        ? "Đang tạo audio…"
+                        : "Chưa có audio"}
+                  </span>
+                )}
+                {audio?.status === "failed" && audio?.audioUrl && (
+                  <span
+                    className="max-w-28 truncate text-[10px] text-rose-300"
+                    title={audio.error}
+                  >
+                    {audio.error}
+                  </span>
+                )}
 
                 {/* Các nút tác vụ */}
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      regenerateSubtitleAudioWithDraft(subtitleItem)
-                    }
-                    disabled={
-                      !selectedVoice ||
-                      subtitleAudioSyncing ||
-                      Boolean(subtitleAudioRegeneratingId) ||
-                      subtitleAudioMasterBusy ||
-                      isMasterGenerating ||
-                      isMediaProcessing
-                    }
-                    className="inline-flex h-7 items-center gap-1 rounded-md border border-violet-500/30 bg-violet-500/10 px-2 text-[10px] font-semibold text-violet-200 hover:bg-violet-500/20 disabled:cursor-not-allowed disabled:opacity-40"
-                    title={`Tạo lại audio câu ${item.index}`}
-                  >
-                    {subtitleAudioRegeneratingId === item.id ? (
-                      <LoaderCircle className="h-3 w-3 animate-spin" />
-                    ) : (
-                      <RefreshCw className="h-3 w-3" />
-                    )}
-                    Tạo lại
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      combineSubtitleAudioCueAbove(item.id, "merge")
-                    }
-                    disabled={combineDisabled}
-                    className="inline-flex h-7 items-center rounded-md border border-amber-500/30 px-2 text-[10px] font-semibold text-amber-200 hover:bg-amber-950/30 disabled:cursor-not-allowed disabled:opacity-40"
-                    title="Gộp với câu phía trên, giữ nội dung câu phía trên và mở rộng thời gian"
-                  >
-                    Merge above
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      combineSubtitleAudioCueAbove(item.id, "join")
-                    }
-                    disabled={combineDisabled}
-                    className="inline-flex h-7 items-center rounded-md border border-cyan-500/30 px-2 text-[10px] font-semibold text-cyan-200 hover:bg-cyan-950/30 disabled:cursor-not-allowed disabled:opacity-40"
-                    title="Nối nội dung với câu phía trên và mở rộng thời gian"
-                  >
-                    Join above
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => deleteSubtitleAudioCue(item.id)}
-                    disabled={
-                      subtitleAudioSyncing ||
-                      Boolean(subtitleAudioRegeneratingId) ||
-                      subtitleAudioMasterBusy ||
-                      isMasterGenerating ||
-                      isMediaProcessing
-                    }
-                    className="inline-flex h-7 items-center gap-1 rounded-md border border-rose-500/30 bg-rose-500/10 px-2 text-[10px] font-semibold text-rose-200 hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-40"
-                    title={`Xóa câu ${item.index} và audio`}
-                  >
-                    <Trash2 className="h-3 w-3" />
-                    Xóa
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  onClick={() =>
+                    regenerateSubtitleAudioWithDraft(subtitleItem)
+                  }
+                  disabled={
+                    !selectedVoice ||
+                    subtitleAudioSyncing ||
+                    Boolean(subtitleAudioRegeneratingId) ||
+                    subtitleAudioMasterBusy ||
+                    isMasterGenerating ||
+                    isMediaProcessing
+                  }
+                  className="inline-flex h-7 items-center gap-1 rounded-md border border-violet-500/30 bg-violet-500/10 px-2 text-[10px] font-semibold text-violet-200 hover:bg-violet-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                  title={`Tạo lại audio câu ${item.index}`}
+                >
+                  {subtitleAudioRegeneratingId === item.id ? (
+                    <LoaderCircle className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-3 w-3" />
+                  )}
+                  Tạo lại
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    combineSubtitleAudioCueAbove(item.id, "merge")
+                  }
+                  disabled={combineDisabled}
+                  className="inline-flex h-7 items-center rounded-md border border-amber-500/30 px-2 text-[10px] font-semibold text-amber-200 hover:bg-amber-950/30 disabled:cursor-not-allowed disabled:opacity-40"
+                  title="Gộp với câu phía trên, giữ nội dung câu phía trên và mở rộng thời gian"
+                >
+                  Merge above
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    combineSubtitleAudioCueAbove(item.id, "join")
+                  }
+                  disabled={combineDisabled}
+                  className="inline-flex h-7 items-center rounded-md border border-cyan-500/30 px-2 text-[10px] font-semibold text-cyan-200 hover:bg-cyan-950/30 disabled:cursor-not-allowed disabled:opacity-40"
+                  title="Nối nội dung với câu phía trên và mở rộng thời gian"
+                >
+                  Join above
+                </button>
+                <button
+                  type="button"
+                  onClick={() => deleteSubtitleAudioCue(item.id)}
+                  disabled={
+                    subtitleAudioSyncing ||
+                    Boolean(subtitleAudioRegeneratingId) ||
+                    subtitleAudioMasterBusy ||
+                    isMasterGenerating ||
+                    isMediaProcessing
+                  }
+                  className="inline-flex h-7 items-center gap-1 rounded-md border border-rose-500/30 bg-rose-500/10 px-2 text-[10px] font-semibold text-rose-200 hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                  title={`Xóa câu ${item.index} và audio`}
+                >
+                  <Trash2 className="h-3 w-3" />
+                  Xóa
+                </button>
               </div>
             </div>
           );
