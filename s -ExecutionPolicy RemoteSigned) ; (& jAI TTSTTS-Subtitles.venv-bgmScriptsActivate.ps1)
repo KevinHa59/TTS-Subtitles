@@ -1,0 +1,455 @@
+[1mdiff --git a/src/components/VideoDubbingTab.jsx b/src/components/VideoDubbingTab.jsx[m
+[1mindex b35d24c..7a41e5d 100644[m
+[1m--- a/src/components/VideoDubbingTab.jsx[m
+[1m+++ b/src/components/VideoDubbingTab.jsx[m
+[36m@@ -57,6 +57,8 @@[m [mimport SourceInfoPanels from "./VideoDubbingTab/SourceInfoPanels";[m
+ import SubtitleBackgroundPickerModal from "./VideoDubbingTab/SubtitleBackgroundPickerModal";[m
+ import VideoDubbingHeader from "./VideoDubbingTab/VideoDubbingHeader";[m
+ import WorkspaceColumn from "./VideoDubbingTab/WorkspaceColumn";[m
+[32m+[m[32mimport { VideoDubbingProvider } from "./VideoDubbingTab/VideoDubbingContext";[m
+[32m+[m
+ [m
+ export default function VideoDubbingTab() {[m
+   const [video, setVideo] = useState(null);[m
+[36m@@ -275,6 +277,10 @@[m [mexport default function VideoDubbingTab() {[m
+     subtitleAudioSpecialCharactersFilterEnabled,[m
+     setSubtitleAudioSpecialCharactersFilterEnabled,[m
+   ] = useState(false);[m
+[32m+[m[32m  const [[m
+[32m+[m[32m    subtitleAudioNonAlphabetFilterEnabled,[m
+[32m+[m[32m    setSubtitleAudioNonAlphabetFilterEnabled,[m
+[32m+[m[32m  ] = useState(false);[m
+   const [[m
+     subtitleAudioSimilarFilterEnabled,[m
+     setSubtitleAudioSimilarFilterEnabled,[m
+[36m@@ -5392,6 +5398,7 @@[m [mexport default function VideoDubbingTab() {[m
+   const activeSubtitleAudioFilterCount =[m
+     Number(subtitleAudioShortFilterEnabled) +[m
+     Number(subtitleAudioSpecialCharactersFilterEnabled) +[m
+[32m+[m[32m    Number(subtitleAudioNonAlphabetFilterEnabled) +[m
+     Number(subtitleAudioSimilarFilterEnabled);[m
+   const filteredSubtitleAudioInput = filterSubtitleAudioItems([m
+     subtitleAudioInput,[m
+[36m@@ -5400,6 +5407,7 @@[m [mexport default function VideoDubbingTab() {[m
+         ? { maxCharacterCount: subtitleAudioMaxCharacterCount }[m
+         : {}),[m
+       specialCharactersOnly: subtitleAudioSpecialCharactersFilterEnabled,[m
+[32m+[m[32m      nonAlphabetOnly: subtitleAudioNonAlphabetFilterEnabled,[m
+       similarAdjacent: subtitleAudioSimilarFilterEnabled,[m
+       similarityThreshold: 0.8,[m
+     },[m
+[36m@@ -7070,476 +7078,413 @@[m [mexport default function VideoDubbingTab() {[m
+   const endSceneEnabled = Boolean(job?.overlaySettings?.endScene?.enabled);[m
+   const subtitleBackgroundSliceUrl = (background, slice) =>[m
+     `/assets/subtitle/${encodeURIComponent(`${background}-${slice}.png`)}`;[m
+[32m+[m
+[32m+[m[32m    const stageContextValue = {[m
+[32m+[m[32m    acceptCharacterCardReferenceFile,[m
+[32m+[m[32m    activePreviewSubtitle,[m
+[32m+[m[32m    activePreviewTextItems,[m
+[32m+[m[32m    activeProject,[m
+[32m+[m[32m    activeSubtitleAudio,[m
+[32m+[m[32m    activeSubtitleAudioFilterCount,[m
+[32m+[m[32m    activeSubtitleAudioItem,[m
+[32m+[m[32m    activeSubtitleAudioRow,[m
+[32m+[m[32m    activeTextTrackId,[m
+[32m+[m[32m    addEndSceneText,[m
+[32m+[m[32m    addTextOverlayToTrack,[m
+[32m+[m[32m    adjustSubtitleAudioCueTiming,[m
+[32m+[m[32m    allSrtDownloadTargets,[m
+[32m+[m[32m    allVideosAction,[m
+[32m+[m[32m    allVideosActionDisabled,[m
+[32m+[m[32m    allVideosJobs,[m
+[32m+[m[32m    allVideosRunning,[m
+[32m+[m[32m    allVideosTtsReady,[m
+[32m+[m[32m    applySelectedTextOverlayToTrack,[m
+[32m+[m[32m    autoPipeline,[m
+[32m+[m[32m    autoPipelineConfig,[m
+[32m+[m[32m    autoPipelineDemucsEnabled,[m
+[32m+[m[32m    autoPipelineError,[m
+[32m+[m[32m    autoPipelineExpanded,[m
+[32m+[m[32m    autoPipelineProgress,[m
+[32m+[m[32m    autoPipelineSaving,[m
+[32m+[m[32m    autoPipelineTtsMasterEnabled,[m
+[32m+[m[32m    canGenerateMaster,[m
+[32m+[m[32m    canStartQueue,[m
+[32m+[m[32m    canStartSeparation,[m
+[32m+[m[32m    cancelCharacterCardOcr,[m
+[32m+[m[32m    cancelCharacterCardReferenceScan,[m
+[32m+[m[32m    cancelCharacterCardRegionDraw,[m
+[32m+[m[32m    cancelFinalMix,[m
+[32m+[m[32m    cancelMaster,[m
+[32m+[m[32m    cancelMediaTask,[m
+[32m+[m[32m    cancelSeparation,[m
+[32m+[m[32m    cancelVideo,[m
+[32m+[m[32m    changeSubtitleTimelineZoom,[m
+[32m+[m[32m    characterCardDrawMode,[m
+[32m+[m[32m    characterCardOcrDuration,[m
+[32m+[m[32m    characterCardOcrError,[m
+[32m+[m[32m    characterCardOcrJob,[m
+[32m+[m[32m    characterCardOcrStartOffset,[m
+[32m+[m[32m    characterCardOcrWorker,[m
+[32m+[m[32m    characterCardReferenceError,[m
+[32m+[m[32m    characterCardReferenceFile,[m
+[32m+[m[32m    characterCardReferenceFramesToSkip,[m
+[32m+[m[32m    characterCardReferencePreviewUrl,[m
+[32m+[m[32m    characterCardReferenceScanJob,[m
+[32m+[m[32m    characterCardReferenceSelectedIds,[m
+[32m+[m[32m    characterCardReferenceSimilarity,[m
+[32m+[m[32m    characterCardRegion,[m
+[32m+[m[32m    characterCardRegionDraft,[m
+[32m+[m[32m    chooseCoverFile,[m
+[32m+[m[32m    clearSelectedFiles,[m
+[32m+[m[32m    clearSrt,[m
+[32m+[m[32m    clearVideo,[m
+[32m+[m[32m    combineSubtitleAudioCueAbove,[m
+[32m+[m[32m    commitSubtitleAudioCueText,[m
+[32m+[m[32m    concatPreflight,[m
+[32m+[m[32m    concatStatus,[m
+[32m+[m[32m    confirmCoverEditor,[m
+[32m+[m[32m    coverEditorBusy,[m
+[32m+[m[32m    coverEditorDragOver,[m
+[32m+[m[32m    coverEditorError,[m
+[32m+[m[32m    coverEditorFile,[m
+[32m+[m[32m    coverEditorFrameCount,[m
+[32m+[m[32m    coverEditorInputRef,[m
+[32m+[m[32m    coverEditorPreviewUrl,[m
+[32m+[m[32m    coverEditorTarget,[m
+[32m+[m[32m    createCharacterCardsAutomatically,[m
+[32m+[m[32m    createMaster,[m
+[32m+[m[32m    createProject,[m
+[32m+[m[32m    createTitleOverlay,[m
+[32m+[m[32m    defaultProjectId,[m
+[32m+[m[32m    deleteActiveTextTrack,[m
+[32m+[m[32m    deleteHistoryJob,[m
+[32m+[m[32m    deleteProject,[m
+[32m+[m[32m    deleteSubtitleAudioCue,[m
+[32m+[m[32m    detailJob,[m
+[32m+[m[32m    detailRowIndex,[m
+[32m+[m[32m    detailState,[m
+[32m+[m[32m    detailSubtitle,[m
+[32m+[m[32m    detailVideoFile,[m
+[32m+[m[32m    downloadAllSrts,[m
+[32m+[m[32m    endSceneAspectRatio,[m
+[32m+[m[32m    endSceneDurationSeconds,[m
+[32m+[m[32m    endSceneEnabled,[m
+[32m+[m[32m    endSceneOverlayScale,[m
+[32m+[m[32m    endScenePreviewContainerRef,[m
+[32m+[m[32m    endScenePreviewSize,[m
+[32m+[m[32m    endSceneStageRef,[m
+[32m+[m[32m    endSceneTextOverlays,[m
+[32m+[m[32m    endSceneTextStyleValue,[m
+[32m+[m[32m    exportClockNow,[m
+[32m+[m[32m    exportQuality,[m
+[32m+[m[32m    fileDetailsOpen,[m
+[32m+[m[32m    filteredSubtitleAudioInput,[m
+[32m+[m[32m    finalMix,[m
+[32m+[m[32m    finishCharacterCardRegion,[m
+[32m+[m[32m    fitSubtitleTimelineToPanel,[m
+[32m+[m[32m    flushSubtitleMarginSave,[m
+[32m+[m[32m    handleQueueDrop,[m
+[32m+[m[32m    handleSrtChange,[m
+[32m+[m[32m    handleSrtFile,[m
+[32m+[m[32m    handleVideoChange,[m
+[32m+[m[32m    handleVideoFile,[m
+[32m+[m[32m    hasExportedVideo,[m
+[32m+[m[32m    hasFinalMix,[m
+[32m+[m[32m    hasMasterAudio,[m
+[32m+[m[32m    hasPreviewTrack,[m
+[32m+[m[32m    historyError,[m
+[32m+[m[32m    historyExpanded,[m
+[32m+[m[32m    historyLoading,[m
+[32m+[m[32m    isAutoPipelineRunning,[m
+[32m+[m[32m    isBusy,[m
+[32m+[m[32m    isFinalMixCurrent,[m
+[32m+[m[32m    isMasterGenerating,[m
+[32m+[m[32m    isMediaProcessing,[m
+[32m+[m[32m    isSeparationProcessing,[m
+[32m+[m[32m    job,[m
+[32m+[m[32m    jobHistory,[m
+[32m+[m[32m    joinAfterQueue,[m
+[32m+[m[32m    joinedVideo,[m
+[32m+[m[32m    leftPanelTab,[m
+[32m+[m[32m    loadJobHistory,[m
+[32m+[m[32m    loadProjects,[m
+[32m+[m[32m    logoEnabled,[m
+[32m+[m[32m    logoInputRef,[m
+[32m+[m[32m    logoPaddingPx,[m
+[32m+[m[32m    logoPosition,[m
+[32m+[m[32m    logoUploading,[m
+[32m+[m[32m    logoWidthPercent,[m
+[32m+[m[32m    masterError,[m
+[32m+[m[32m    masterGeneration,[m
+[32m+[m[32m    masterPanelExpanded,[m
+[32m+[m[32m    maxSpeed,[m
+[32m+[m[32m    mediaError,[m
+[32m+[m[32m    minSpeed,[m
+[32m+[m[32m    mixerError,[m
+[32m+[m[32m    mixerSettings,[m
+[32m+[m[32m    mixerSettingsSaved,[m
+[32m+[m[32m    mixerTouchedRef,[m
+[32m+[m[32m    mixerTrackAvailability,[m
+[32m+[m[32m    mixerVolumeDrafts,[m
+[32m+[m[32m    moveCharacterCardRegion,[m
+[32m+[m[32m    nextSubtitleAudioItem,[m
+[32m+[m[32m    openHistoryJob,[m
+[32m+[m[32m    openProject,[m
+[32m+[m[32m    openProjectFolder,[m
+[32m+[m[32m    openSrtBrowser,[m
+[32m+[m[32m    originalAudioVolumePercent,[m
+[32m+[m[32m    overlayAlignment,[m
+[32m+[m[32m    pasteCharacterCardReference,[m
+[32m+[m[32m    playMixerPreview,[m
+[32m+[m[32m    playSubtitleAudio,[m
+[32m+[m[32m    previewCurrentTime,[m
+[32m+[m[32m    previewError,[m
+[32m+[m[32m    previewOverlayScale,[m
+[32m+[m[32m    previewSourceVideo,[m
+[32m+[m[32m    previewStageRef,[m
+[32m+[m[32m    previewStatus,[m
+[32m+[m[32m    previewSubtitleCues,[m
+[32m+[m[32m    previewVideoRef,[m
+[32m+[m[32m    previewVideoRow,[m
+[32m+[m[32m    previewingEndScene,[m
+[32m+[m[32m    previousSubtitleAudioItem,[m
+[32m+[m[32m    projectBusy,[m
+[32m+[m[32m    projectError,[m
+[32m+[m[32m    projectJobItems,[m
+[32m+[m[32m    projectSaveState,[m
+[32m+[m[32m    projects,[m
+[32m+[m[32m    queueRowCount,[m
+[32m+[m[32m    queueRows,[m
+[32m+[m[32m    queueRunning,[m
+[32m+[m[32m    queueStates,[m
+[32m+[m[32m    rebuildMasterFromSubtitleAudio,[m
+[32m+[m[32m    regenerateSubtitleAudio,[m
+[32m+[m[32m    regenerateSubtitleAudioWithDraft,[m
+[32m+[m[32m    removeCoverFromEditor,[m
+[32m+[m[32m    removeQueuedSource,[m
+[32m+[m[32m    removeSelectedEndSceneText,[m
+[32m+[m[32m    renameProject,[m
+[32m+[m[32m    renderCoverEditorButton,[m
+[32m+[m[32m    renderJobProcessingBar,[m
+[32m+[m[32m    renderSubtitleTimingAdjustment,[m
+[32m+[m[32m    renderVideoActions,[m
+[32m+[m[32m    requestMasterEdit,[m
+[32m+[m[32m    restartMixerPreview,[m
+[32m+[m[32m    runAllVideosAction,[m
+[32m+[m[32m    saveAutoPipelineConfig,[m
+[32m+[m[32m    saveEndSceneForCurrentVideo,[m
+[32m+[m[32m    scheduleSubtitleMarginSave,[m
+[32m+[m[32m    seekMixerPreview,[m
+[32m+[m[32m    seekSubtitleTimeline,[m
+[32m+[m[32m    selectedEndSceneCue,[m
+[32m+[m[32m    selectedEndSceneTextIndex,[m
+[32m+[m[32m    selectedSubtitleCue,[m
+[32m+[m[32m    selectedSubtitleCueTtsItem,[m
+[32m+[m[32m    selectedTextOverlay,[m
+[32m+[m[32m    selectedVoice,[m
+[32m+[m[32m    selectedVoiceId,[m
+[32m+[m[32m    separation,[m
+[32m+[m[32m    separationAvailability,[m
+[32m+[m[32m    separationBackendLabel,[m
+[32m+[m[32m    separationElapsedSeconds,[m
+[32m+[m[32m    separationError,[m
+[32m+[m[32m    separationHeartbeatFresh,[m
+[32m+[m[32m    separationPanelExpanded,[m
+[32m+[m[32m    separationPhaseLabel,[m
+[32m+[m[32m    setActiveTextTrackId,[m
+[32m+[m[32m    setAutoPipelineDemucsEnabled,[m
+[32m+[m[32m    setAutoPipelineExpanded,[m
+[32m+[m[32m    setAutoPipelineTtsMasterEnabled,[m
+[32m+[m[32m    setCharacterCardDrawMode,[m
+[32m+[m[32m    setCharacterCardDrawStart,[m
+[32m+[m[32m    setCharacterCardOcrDuration,[m
+[32m+[m[32m    setCharacterCardOcrError,[m
+[32m+[m[32m    setCharacterCardOcrStartOffset,[m
+[32m+[m[32m    setCharacterCardReferenceError,[m
+[32m+[m[32m    setCharacterCardReferenceFile,[m
+[32m+[m[32m    setCharacterCardReferenceFramesToSkip,[m
+[32m+[m[32m    setCharacterCardReferenceScanJob,[m
+[32m+[m[32m    setCharacterCardReferenceSelectedIds,[m
+[32m+[m[32m    setCharacterCardReferenceSimilarity,[m
+[32m+[m[32m    setCharacterCardRegion,[m
+[32m+[m[32m    setCharacterCardRegionDraft,[m
+[32m+[m[32m    setCoverEditorDragOver,[m
+[32m+[m[32m    setCoverEditorError,[m
+[32m+[m[32m    setCoverEditorFile,[m
+[32m+[m[32m    setCoverEditorFrameCount,[m
+[32m+[m[32m    setCoverEditorTarget,[m
+[32m+[m[32m    setDefaultProject,[m
+[32m+[m[32m    setDetailRowIndex,[m
+[32m+[m[32m    setEndSceneAspectRatio,[m
+[32m+[m[32m    setEndSceneDurationSeconds,[m
+[32m+[m[32m    setEndSceneTextOverlays,[m
+[32m+[m[32m    setExportQuality,[m
+[32m+[m[32m    setFileDetailsOpen,[m
+[32m+[m[32m    setGuideOpen,[m
+[32m+[m[32m    setHistoryExpanded,[m
+[32m+[m[32m    setLeftPanelTab,[m
+[32m+[m[32m    setLogoEnabled,[m
+[32m+[m[32m    setLogoPaddingPx,[m
+[32m+[m[32m    setLogoPosition,[m
+[32m+[m[32m    setLogoWidthPercent,[m
+[32m+[m[32m    setMasterPanelExpanded,[m
+[32m+[m[32m    setMaxSpeed,[m
+[32m+[m[32m    setMinSpeed,[m
+[32m+[m[32m    setMixerVolumeDrafts,[m
+[32m+[m[32m    setOriginalAudioVolumePercent,[m
+[32m+[m[32m    setPreviewError,[m
+[32m+[m[32m    setProjectsExpanded,[m
+[32m+[m[32m    setQueueStates,[m
+[32m+[m[32m    setSelectedEndSceneTextIndex,[m
+[32m+[m[32m    setSelectedSubtitleCue,[m
+[32m+[m[32m    setSelectedTextOverlay,[m
+[32m+[m[32m    setSelectedVoiceId,[m
+[32m+[m[32m    setSeparationPanelExpanded,[m
+[32m+[m[32m    setSettingsCollapsed,[m
+[32m+[m[32m    setSpeedPriority,[m
+[32m+[m[32m    setSubtitleAudioDrafts,[m
+[32m+[m[32m    setSubtitleAudioFilterOpen,[m
+[32m+[m[32m    setSubtitleAudioMaxCharacterCount,[m
+[32m+[m[32m    setSubtitleAudioNonAlphabetFilterEnabled,[m
+[32m+[m[32m    setSubtitleAudioShortFilterEnabled,[m
+[32m+[m[32m    setSubtitleAudioSimilarFilterEnabled,[m
+[32m+[m[32m    setSubtitleAudioSpecialCharactersFilterEnabled,[m
+[32m+[m[32m    setSubtitleAudioTimingStepMs,[m
+[32m+[m[32m    setSubtitleBackgroundColor,[m
+[32m+[m[32m    setSubtitleBackgroundImage,[m
+[32m+[m[32m    setSubtitleBackgroundMode,[m
+[32m+[m[32m    setSubtitleBackgroundPickerOpen,[m
+[32m+[m[32m    setSubtitleMarginPx,[m
+[32m+[m[32m    setSubtitlePaddingPx,[m
+[32m+[m[32m    setSubtitlePosition,[m
+[32m+[m[32m    setSubtitlesEnabled,[m
+[32m+[m[32m    setTextOverlays,[m
+[32m+[m[32m    setTextTracks,[m
+[32m+[m[32m    setTimelineWorkspaceTab,[m
+[32m+[m[32m    setVideoPreviewReady,[m
+[32m+[m[32m    settingsCollapsed,[m
+[32m+[m[32m    settingsSyncMessage,[m
+[32m+[m[32m    settingsSyncRunning,[m
+[32m+[m[32m    speedPriority,[m
+[32m+[m[32m    srt,[m
+[32m+[m[32m    srtDownloadMessage,[m
+[32m+[m[32m    srtInputRef,[m
+[32m+[m[32m    startCharacterCardOcrWorker,[m
+[32m+[m[32m    startCharacterCardReferenceScan,[m
+[32m+[m[32m    startCharacterCardRegion,[m
+[32m+[m[32m    startEndSceneTextDrag,[m
+[32m+[m[32m    startQueue,[m
+[32m+[m[32m    startSeparation,[m
+[32m+[m[32m    startSubtitleTimelineDrag,[m
+[32m+[m[32m    startTextOverlayPreviewDrag,[m
+[32m+[m[32m    stopCharacterCardOcrWorker,[m
+[32m+[m[32m    stopQueue,[m
+[32m+[m[32m    subtitleAudioDrafts,[m
+[32m+[m[32m    subtitleAudioError,[m
+[32m+[m[32m    subtitleAudioFilterOpen,[m
+[32m+[m[32m    subtitleAudioInput,[m
+[32m+[m[32m    subtitleAudioItems,[m
+[32m+[m[32m    subtitleAudioMasterBusy,[m
+[32m+[m[32m    subtitleAudioMaxCharacterCount,[m
+[32m+[m[32m    subtitleAudioNonAlphabetFilterEnabled,[m
+[32m+[m[32m    subtitleAudioPlayingId,[m
+[32m+[m[32m    subtitleAudioRegeneratingId,[m
+[32m+[m[32m    subtitleAudioShortFilterEnabled,[m
+[32m+[m[32m    subtitleAudioSimilarFilterEnabled,[m
+[32m+[m[32m    subtitleAudioSpecialCharactersFilterEnabled,[m
+[32m+[m[32m    subtitleAudioSyncing,[m
+[32m+[m[32m    subtitleAudioTimingStepMs,[m
+[32m+[m[32m    subtitleBackgroundColor,[m
+[32m+[m[32m    subtitleBackgroundImage,[m
+[32m+[m[32m    subtitleBackgroundMode,[m
+[32m+[m[32m    subtitleBackgroundSliceUrl,[m
+[32m+[m[32m    subtitleBackgroundTransparent,[m
+[32m+[m[32m    subtitleBackgrounds,[m
+[32m+[m[32m    subtitleBold,[m
+[32m+[m[32m    subtitleCharacterSpacingPx,[m
+[32m+[m[32m    subtitleColor,[m
+[32m+[m[32m    subtitleFiles,[m
+[32m+[m[32m    subtitleFontFamily,[m
+[32m+[m[32m    subtitleFontOptions,[m
+[32m+[m[32m    subtitleFontSize,[m
+[32m+[m[32m    subtitleItalic,[m
+[32m+[m[32m    subtitleLineSpacingPx,[m
+[32m+[m[32m    subtitleMarginPx,[m
+[32m+[m[32m    subtitleOutlineColor,[m
+[32m+[m[32m    subtitleOutlineEnabled,[m
+[32m+[m[32m    subtitleOutlineWidthPx,[m
+[32m+[m[32m    subtitleOverlayAlignment,[m
+[32m+[m[32m    subtitlePaddingPx,[m
+[32m+[m[32m    subtitlePosition,[m
+[32m+[m[32m    subtitleTextCase,[m
+[32m+[m[32m    subtitleTextStyleValue,[m
+[32m+[m[32m    subtitleTimelineCursor,[m
+[32m+[m[32m    subtitleTimelineDuration,[m
+[32m+[m[32m    subtitleTimelineItems,[m
+[32m+[m[32m    subtitleTimelineLaneEnds,[m
+[32m+[m[32m    subtitleTimelineMinZoom,[m
+[32m+[m[32m    subtitleTimelineScrollRef,[m
+[32m+[m[32m    subtitleTimelineTicks,[m
+[32m+[m[32m    subtitleTimelineTrackRef,[m
+[32m+[m[32m    subtitleTimelineWidth,[m
+[32m+[m[32m    subtitleTimelineZoom,[m
+[32m+[m[32m    subtitleUnderline,[m
+[32m+[m[32m    subtitlesEnabled,[m
+[32m+[m[32m    syncSettingsToAllVideos,[m
+[32m+[m[32m    textOverlays,[m
+[32m+[m[32m    textTimelineLanes,[m
+[32m+[m[32m    textTracks,[m
+[32m+[m[32m    timelineWorkspaceTab,[m
+[32m+[m[32m    titleOverlay,[m
+[32m+[m[32m    titleOverlayIndex,[m
+[32m+[m[32m    toggleJoinAfterQueue,[m
+[32m+[m[32m    updateEndSceneText,[m
+[32m+[m[32m    updateMixerSetting,[m
+[32m+[m[32m    updatePreviewSubtitleCues,[m
+[32m+[m[32m    updateSelectedEndSceneStyle,[m
+[32m+[m[32m    updateSelectedSubtitleCue,[m
+[32m+[m[32m    updateSelectedTextOverlay,[m
+[32m+[m[32m    updateSubtitleTextStyle,[m
+[32m+[m[32m    uploadOverlayLogo,[m
+[32m+[m[32m    video,[m
+[32m+[m[32m    videoExport,[m
+[32m+[m[32m    videoFiles,[m
+[32m+[m[32m    videoInputRef,[m
+[32m+[m[32m    videoPreviewReady,[m
+[32m+[m[32m    videoWorkspaceTab,[m
+[32m+[m[32m    voices,[m
+[32m+[m[32m    voicesError,[m
+[32m+[m[32m  };[m
+[32m+[m
+[32m+[m
+[32m+[m
+   return ([m
+[31m-    <section[m
+[31m-      className={`grid w-full h-full max-w-none grid-cols-1 grid-rows-[auto_auto_minmax(0,1fr)] items-stretch gap-0 p-0 text-slate-200 overflow-hidden ${settingsCollapsed ? "xl:grid-cols-[48px_minmax(0,1fr)]" : "xl:grid-cols-[minmax(390px,440px)_minmax(0,1fr)] 2xl:grid-cols-[minmax(420px,470px)_minmax(0,1fr)]"}`}[m
+[31m-    >[m
+[31m-      {subtitleBackgroundPickerOpen && ([m
+[31m-        <SubtitleBackgroundPickerModal[m
+[31m-          setSubtitleBackgroundImage={setSubtitleBackgroundImage}[m
+[31m-          setSubtitleBackgroundPickerOpen={setSubtitleBackgroundPickerOpen}[m
+[31m-          subtitleBackgroundImage={subtitleBackgroundImage}[m
+[31m-          subtitleBackgroundSliceUrl={subtitleBackgroundSliceUrl}[m
+[31m-          subtitleBackgrounds={subtitleBackgrounds}[m
+[31m-        />[m
+[31m-      )}[m
+[31m-      <VideoDubbingHeader[m
+[31m-        autoPipelineTtsMasterEnabled={autoPipelineTtsMasterEnabled}[m
+[31m-        setAutoPipelineTtsMasterEnabled={setAutoPipelineTtsMasterEnabled}[m
+[31m-      />[m
+[32m+[m[32m    <VideoDubbingProvider value={stageContextValue}>[m
+[32m+[m[32m      <section[m
+[32m+[m[32m        className={`grid w-full h-full max-w-none grid-cols-1 grid-rows-[auto_auto_minmax(0,1fr)] items-stretch gap-0 p-0 text-slate-200 overflow-hidden ${settingsCollapsed ? "xl:grid-cols-[48px_minmax(0,1fr)]" : "xl:grid-cols-[minmax(390px,440px)_minmax(0,1fr)] 2xl:grid-cols-[minmax(420px,470px)_minmax(0,1fr)]"}`}[m
+[32m+[m[32m      >[m
+[32m+[m[32m        {subtitleBackgroundPickerOpen && <SubtitleBackgroundPickerModal />}[m
+[32m+[m[32m        <VideoDubbingHeader />[m
+ [m
+[31m-      {historyExpanded && ([m
+[31m-        <HistoryModal[m
+[31m-          deleteHistoryJob={deleteHistoryJob}[m
+[31m-          historyError={historyError}[m
+[31m-          historyExpanded={historyExpanded}[m
+[31m-          historyLoading={historyLoading}[m
+[31m- 
