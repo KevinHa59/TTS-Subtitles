@@ -1,8 +1,11 @@
 import VideoDubbingAudioTimeline from "../VideoDubbingAudioTimeline";
-import SubtitleAudioSection from "./SubtitleAudioSection";
 import SubtitleTimelineSection from "./SubtitleTimelineSection";
 
-export default function TimelineWorkspace({
+import { useVideoDubbing } from "./VideoDubbingContext";
+
+export default function TimelineWorkspace(props) {
+  const context = useVideoDubbing();
+  const {
   activeSubtitleAudio,
   activeSubtitleAudioFilterCount,
   activeSubtitleAudioItem,
@@ -85,7 +88,7 @@ export default function TimelineWorkspace({
   updatePreviewSubtitleCues,
   updateSelectedTextOverlay,
   video,
-}) {
+} = { ...context, ...props };
   return (
     <div className="space-y-3">
       <div
@@ -111,111 +114,9 @@ export default function TimelineWorkspace({
         >
           Timeline âm thanh
         </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={timelineWorkspaceTab === "subtitle-audio"}
-          onClick={() => setTimelineWorkspaceTab("subtitle-audio")}
-          className={`flex-1 rounded-lg px-3 py-2 text-xs font-semibold ${timelineWorkspaceTab === "subtitle-audio" ? "bg-violet-400 text-slate-950" : "text-slate-300 hover:bg-slate-800"}`}
-        >
-          Subtitle-Audio
-        </button>
       </div>
-      {timelineWorkspaceTab === "subtitle-audio" && (
-        <SubtitleAudioSection
-          activeSubtitleAudio={activeSubtitleAudio}
-          activeSubtitleAudioFilterCount={activeSubtitleAudioFilterCount}
-          activeSubtitleAudioItem={activeSubtitleAudioItem}
-          activeSubtitleAudioRow={activeSubtitleAudioRow}
-          adjustSubtitleAudioCueTiming={adjustSubtitleAudioCueTiming}
-          combineSubtitleAudioCueAbove={combineSubtitleAudioCueAbove}
-          commitSubtitleAudioCueText={commitSubtitleAudioCueText}
-          deleteSubtitleAudioCue={deleteSubtitleAudioCue}
-          filteredSubtitleAudioInput={filteredSubtitleAudioInput}
-          isMasterGenerating={isMasterGenerating}
-          isMediaProcessing={isMediaProcessing}
-          nextSubtitleAudioItem={nextSubtitleAudioItem}
-          playSubtitleAudio={playSubtitleAudio}
-          previewSubtitleCues={previewSubtitleCues}
-          previousSubtitleAudioItem={previousSubtitleAudioItem}
-          rebuildMasterFromSubtitleAudio={rebuildMasterFromSubtitleAudio}
-          regenerateSubtitleAudioWithDraft={regenerateSubtitleAudioWithDraft}
-          seekSubtitleTimeline={seekSubtitleTimeline}
-          selectedVoice={selectedVoice}
-          setSubtitleAudioDrafts={setSubtitleAudioDrafts}
-          setSubtitleAudioFilterOpen={setSubtitleAudioFilterOpen}
-          setSubtitleAudioMaxCharacterCount={setSubtitleAudioMaxCharacterCount}
-          setSubtitleAudioShortFilterEnabled={
-            setSubtitleAudioShortFilterEnabled
-          }
-          setSubtitleAudioSimilarFilterEnabled={
-            setSubtitleAudioSimilarFilterEnabled
-          }
-          setSubtitleAudioSpecialCharactersFilterEnabled={
-            setSubtitleAudioSpecialCharactersFilterEnabled
-          }
-          setSubtitleAudioTimingStepMs={setSubtitleAudioTimingStepMs}
-          subtitleAudioDrafts={subtitleAudioDrafts}
-          subtitleAudioError={subtitleAudioError}
-          subtitleAudioFilterOpen={subtitleAudioFilterOpen}
-          subtitleAudioInput={subtitleAudioInput}
-          subtitleAudioItems={subtitleAudioItems}
-          subtitleAudioMasterBusy={subtitleAudioMasterBusy}
-          subtitleAudioMaxCharacterCount={subtitleAudioMaxCharacterCount}
-          subtitleAudioPlayingId={subtitleAudioPlayingId}
-          subtitleAudioRegeneratingId={subtitleAudioRegeneratingId}
-          subtitleAudioShortFilterEnabled={subtitleAudioShortFilterEnabled}
-          subtitleAudioSimilarFilterEnabled={subtitleAudioSimilarFilterEnabled}
-          subtitleAudioSpecialCharactersFilterEnabled={
-            subtitleAudioSpecialCharactersFilterEnabled
-          }
-          subtitleAudioSyncing={subtitleAudioSyncing}
-          subtitleAudioTimingStepMs={subtitleAudioTimingStepMs}
-        />
-      )}
       {timelineWorkspaceTab === "subtitle" && (
-        <SubtitleTimelineSection
-          activeTextTrackId={activeTextTrackId}
-          addTextOverlayToTrack={addTextOverlayToTrack}
-          applySelectedTextOverlayToTrack={applySelectedTextOverlayToTrack}
-          changeSubtitleTimelineZoom={changeSubtitleTimelineZoom}
-          deleteActiveTextTrack={deleteActiveTextTrack}
-          endSceneDurationSeconds={endSceneDurationSeconds}
-          endSceneEnabled={endSceneEnabled}
-          fitSubtitleTimelineToPanel={fitSubtitleTimelineToPanel}
-          isMediaProcessing={isMediaProcessing}
-          job={job}
-          previewSubtitleCues={previewSubtitleCues}
-          renderSubtitleTimingAdjustment={renderSubtitleTimingAdjustment}
-          saveEndSceneForCurrentVideo={saveEndSceneForCurrentVideo}
-          seekSubtitleTimeline={seekSubtitleTimeline}
-          selectedSubtitleCue={selectedSubtitleCue}
-          selectedTextOverlay={selectedTextOverlay}
-          setActiveTextTrackId={setActiveTextTrackId}
-          setSelectedSubtitleCue={setSelectedSubtitleCue}
-          setSelectedTextOverlay={setSelectedTextOverlay}
-          setSubtitlesEnabled={setSubtitlesEnabled}
-          setTextOverlays={setTextOverlays}
-          setTextTracks={setTextTracks}
-          startSubtitleTimelineDrag={startSubtitleTimelineDrag}
-          subtitleFontOptions={subtitleFontOptions}
-          subtitleTimelineCursor={subtitleTimelineCursor}
-          subtitleTimelineDuration={subtitleTimelineDuration}
-          subtitleTimelineItems={subtitleTimelineItems}
-          subtitleTimelineLaneEnds={subtitleTimelineLaneEnds}
-          subtitleTimelineMinZoom={subtitleTimelineMinZoom}
-          subtitleTimelineScrollRef={subtitleTimelineScrollRef}
-          subtitleTimelineTicks={subtitleTimelineTicks}
-          subtitleTimelineTrackRef={subtitleTimelineTrackRef}
-          subtitleTimelineWidth={subtitleTimelineWidth}
-          subtitleTimelineZoom={subtitleTimelineZoom}
-          textOverlays={textOverlays}
-          textTimelineLanes={textTimelineLanes}
-          textTracks={textTracks}
-          updatePreviewSubtitleCues={updatePreviewSubtitleCues}
-          updateSelectedTextOverlay={updateSelectedTextOverlay}
-          video={video}
-        />
+        <SubtitleTimelineSection />
       )}
       {timelineWorkspaceTab === "audio" && job && (
         <VideoDubbingAudioTimeline

@@ -1,7 +1,11 @@
 import { DEFAULT_TEXT_TRACK_ID } from "./constants";
 import { formatDuration, formatElapsed } from "./helpers";
 
-export default function SubtitleTimelineTrack({
+import { useVideoDubbing } from "./VideoDubbingContext";
+
+export default function SubtitleTimelineTrack(props) {
+  const context = useVideoDubbing();
+  const {
   activeTextTrackId,
   endSceneDurationSeconds,
   endSceneEnabled,
@@ -25,7 +29,7 @@ export default function SubtitleTimelineTrack({
   textOverlays,
   textTimelineLanes,
   textTracks,
-}) {
+} = { ...context, ...props };
   return (
     <div
       ref={subtitleTimelineScrollRef}
@@ -221,13 +225,8 @@ export default function SubtitleTimelineTrack({
             }}
             className={`border-t border-slate-800 transition-colors ${activeTextTrackId === track.id ? "bg-violet-500/10 ring-1 ring-inset ring-violet-400/40" : "bg-violet-950/10 hover:bg-violet-500/5"}`}
           >
-            <div className="flex h-7 items-center px-2">
-              <span className="text-[9px] font-semibold text-violet-300">
-                {track.name}
-              </span>
-            </div>
             <div
-              className="relative"
+              className="relative flex items-center"
               style={{
                 height: `${Math.max(
                   32,
@@ -247,6 +246,11 @@ export default function SubtitleTimelineTrack({
                 seekSubtitleTimeline(position * subtitleTimelineDuration);
               }}
             >
+              <span
+                className="pointer-events-none sticky left-2 z-0 inline-flex items-center text-[10px] font-bold uppercase tracking-wider text-violet-300/40 select-none"
+              >
+                {track.name}
+              </span>
               <span
                 className="pointer-events-none absolute inset-y-0 z-20 border-l-2 border-rose-400"
                 style={{

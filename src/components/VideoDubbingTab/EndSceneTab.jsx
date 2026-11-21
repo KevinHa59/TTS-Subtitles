@@ -1,7 +1,11 @@
 import SubtitleOverlayRenderer from "../SubtitleOverlayRenderer";
 import EndSceneEditorPanel from "./EndSceneEditorPanel";
 
-export default function EndSceneTab({
+import { useVideoDubbing } from "./VideoDubbingContext";
+
+export default function EndSceneTab(props) {
+  const context = useVideoDubbing();
+  const {
   addEndSceneText,
   endSceneAspectRatio,
   endSceneDurationSeconds,
@@ -26,7 +30,7 @@ export default function EndSceneTab({
   subtitleFontOptions,
   updateEndSceneText,
   updateSelectedEndSceneStyle,
-}) {
+} = { ...context, ...props };
   return (
     <div className="space-y-4">
       <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1.4fr)_minmax(280px,0.8fr)]">

@@ -1,7 +1,11 @@
 import { X } from "lucide-react";
 import { formatDuration } from "./helpers";
 
-export default function CharacterCardResultsPanel({
+import { useVideoDubbing } from "./VideoDubbingContext";
+
+export default function CharacterCardResultsPanel(props) {
+  const context = useVideoDubbing();
+  const {
   characterCardOcrDuration,
   characterCardOcrError,
   characterCardOcrJob,
@@ -12,7 +16,7 @@ export default function CharacterCardResultsPanel({
   createCharacterCardsAutomatically,
   setCharacterCardReferenceScanJob,
   setCharacterCardReferenceSelectedIds,
-}) {
+} = { ...context, ...props };
   return (
     <section
       role="dialog"

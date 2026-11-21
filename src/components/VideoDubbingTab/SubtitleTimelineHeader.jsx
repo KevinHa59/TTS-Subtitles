@@ -1,6 +1,10 @@
 import { Plus, Trash2 } from "lucide-react";
 
-export default function SubtitleTimelineHeader({
+import { useVideoDubbing } from "./VideoDubbingContext";
+
+export default function SubtitleTimelineHeader(props) {
+  const context = useVideoDubbing();
+  const {
   activeTextTrackId,
   addTextOverlayToTrack,
   changeSubtitleTimelineZoom,
@@ -21,7 +25,7 @@ export default function SubtitleTimelineHeader({
   subtitleTimelineZoom,
   textTracks,
   updatePreviewSubtitleCues,
-}) {
+} = { ...context, ...props };
   return (
     <div className="flex flex-wrap items-center justify-between gap-3">
       <div>

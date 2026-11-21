@@ -2,7 +2,11 @@ import { LoaderCircle, Plus, Trash2, Upload } from "lucide-react";
 import { OVERLAY_POSITION_OPTIONS } from "./constants";
 import TextStyleControls from "./TextStyleControls";
 
-export default function LogoTitleTab({
+import { useVideoDubbing } from "./VideoDubbingContext";
+
+export default function LogoTitleTab(props) {
+  const context = useVideoDubbing();
+  const {
   createTitleOverlay,
   isMediaProcessing,
   job,
@@ -24,7 +28,7 @@ export default function LogoTitleTab({
   titleOverlayIndex,
   updateSelectedTextOverlay,
   uploadOverlayLogo,
-}) {
+} = { ...context, ...props };
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-3">

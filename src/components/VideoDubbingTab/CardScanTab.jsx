@@ -1,4 +1,8 @@
-export default function CardScanTab({
+import { useVideoDubbing } from "./VideoDubbingContext";
+
+export default function CardScanTab(props) {
+  const context = useVideoDubbing();
+  const {
   acceptCharacterCardReferenceFile,
   cancelCharacterCardOcr,
   cancelCharacterCardReferenceScan,
@@ -34,7 +38,7 @@ export default function CardScanTab({
   startCharacterCardReferenceScan,
   stopCharacterCardOcrWorker,
   videoPreviewReady,
-}) {
+} = { ...context, ...props };
   return (
     <div id="character-card-scan-panel" className="space-y-2">
       <div className="flex flex-wrap items-center gap-2">

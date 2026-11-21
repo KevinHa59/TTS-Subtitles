@@ -1,10 +1,14 @@
 import { formatDuration, formatElapsed, formatFileSize } from "./helpers";
 
-export default function MergedVideoTab({
+import { useVideoDubbing } from "./VideoDubbingContext";
+
+export default function MergedVideoTab(props) {
+  const context = useVideoDubbing();
+  const {
   isFinalMixCurrent,
   job,
   videoExport,
-}) {
+} = { ...context, ...props };
   return (
     <div className="space-y-3 rounded-xl border border-emerald-500/25 bg-emerald-950/20 p-3.5">
       <div className="flex flex-wrap items-center justify-between gap-2">

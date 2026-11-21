@@ -1,29 +1,33 @@
 import { LoaderCircle, Pause, Play, RefreshCw } from "lucide-react";
 import { formatDuration } from "./helpers";
 
-export default function CurrentSubtitlePanel({
-  activeSubtitleAudio,
-  activeSubtitleAudioItem,
-  activeSubtitleAudioRow,
-  adjustSubtitleAudioCueTiming,
-  commitSubtitleAudioCueText,
-  isMasterGenerating,
-  isMediaProcessing,
-  nextSubtitleAudioItem,
-  playSubtitleAudio,
-  previousSubtitleAudioItem,
-  regenerateSubtitleAudioWithDraft,
-  seekSubtitleTimeline,
-  selectedVoice,
-  setSubtitleAudioDrafts,
-  setSubtitleAudioTimingStepMs,
-  subtitleAudioDrafts,
-  subtitleAudioMasterBusy,
-  subtitleAudioPlayingId,
-  subtitleAudioRegeneratingId,
-  subtitleAudioSyncing,
-  subtitleAudioTimingStepMs,
-}) {
+import { useVideoDubbing } from "./VideoDubbingContext";
+
+export default function CurrentSubtitlePanel(props) {
+  const context = useVideoDubbing();
+  const {
+    activeSubtitleAudio,
+    activeSubtitleAudioItem,
+    activeSubtitleAudioRow,
+    adjustSubtitleAudioCueTiming,
+    commitSubtitleAudioCueText,
+    isMasterGenerating,
+    isMediaProcessing,
+    nextSubtitleAudioItem,
+    playSubtitleAudio,
+    previousSubtitleAudioItem,
+    regenerateSubtitleAudioWithDraft,
+    seekSubtitleTimeline,
+    selectedVoice,
+    setSubtitleAudioDrafts,
+    setSubtitleAudioTimingStepMs,
+    subtitleAudioDrafts = {},
+    subtitleAudioMasterBusy,
+    subtitleAudioPlayingId,
+    subtitleAudioRegeneratingId,
+    subtitleAudioSyncing,
+    subtitleAudioTimingStepMs = 100,
+  } = { ...context, ...props };
   return (
     <div className="overflow-hidden rounded-lg border border-cyan-500/30 bg-cyan-950/10">
       <div

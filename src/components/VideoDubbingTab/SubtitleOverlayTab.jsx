@@ -2,7 +2,11 @@ import { ChevronDown } from "lucide-react";
 import { OVERLAY_POSITION_OPTIONS } from "./constants";
 import TextStyleControls from "./TextStyleControls";
 
-export default function SubtitleOverlayTab({
+import { useVideoDubbing } from "./VideoDubbingContext";
+
+export default function SubtitleOverlayTab(props) {
+  const context = useVideoDubbing();
+  const {
   flushSubtitleMarginSave,
   job,
   scheduleSubtitleMarginSave,
@@ -26,7 +30,7 @@ export default function SubtitleOverlayTab({
   subtitleTextStyleValue,
   subtitlesEnabled,
   updateSubtitleTextStyle,
-}) {
+} = { ...context, ...props };
   return (
     <div className="space-y-3 rounded-xl">
       <label className="flex items-center gap-2 text-sm font-semibold text-slate-100">

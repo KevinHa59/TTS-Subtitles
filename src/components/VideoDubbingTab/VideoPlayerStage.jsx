@@ -1,7 +1,11 @@
 import SubtitleOverlayRenderer from "../SubtitleOverlayRenderer";
 import { getOverlayAlignment, getSubtitleTextAlignment } from "./helpers";
 
-export default function VideoPlayerStage({
+import { useVideoDubbing } from "./VideoDubbingContext";
+
+export default function VideoPlayerStage(props) {
+  const context = useVideoDubbing();
+  const {
   activePreviewSubtitle,
   activePreviewTextItems,
   cancelCharacterCardRegionDraw,
@@ -47,7 +51,7 @@ export default function VideoPlayerStage({
   subtitleTextCase,
   subtitleUnderline,
   videoWorkspaceTab,
-}) {
+} = { ...context, ...props };
   return (
     <div
       className={`flex justify-center ${videoWorkspaceTab === "preview" ? "" : "hidden"}`}

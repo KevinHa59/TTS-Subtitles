@@ -8,7 +8,11 @@ import {
 } from "lucide-react";
 import { formatDuration } from "./helpers";
 
-export default function PreviewTransportControls({
+import { useVideoDubbing } from "./VideoDubbingContext";
+
+export default function PreviewTransportControls(props) {
+  const context = useVideoDubbing();
+  const {
   hasPreviewTrack,
   isMasterGenerating,
   isMediaProcessing,
@@ -33,7 +37,7 @@ export default function PreviewTransportControls({
   updateSelectedSubtitleCue,
   videoPreviewReady,
   videoWorkspaceTab,
-}) {
+} = { ...context, ...props };
   return (
     <div
       className={`flex flex-wrap items-center gap-2 ${videoWorkspaceTab === "preview" ? "" : "hidden"}`}

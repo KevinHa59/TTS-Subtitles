@@ -2,53 +2,57 @@ import { Filter, LoaderCircle, RefreshCw, X } from "lucide-react";
 import CurrentSubtitlePanel from "./CurrentSubtitlePanel";
 import SubtitleAudioList from "./SubtitleAudioList";
 
-export default function SubtitleAudioSection({
-  activeSubtitleAudio,
-  activeSubtitleAudioFilterCount,
-  activeSubtitleAudioItem,
-  activeSubtitleAudioRow,
-  adjustSubtitleAudioCueTiming,
-  combineSubtitleAudioCueAbove,
-  commitSubtitleAudioCueText,
-  deleteSubtitleAudioCue,
-  filteredSubtitleAudioInput,
-  isMasterGenerating,
-  isMediaProcessing,
-  nextSubtitleAudioItem,
-  playSubtitleAudio,
-  previewSubtitleCues,
-  previousSubtitleAudioItem,
-  rebuildMasterFromSubtitleAudio,
-  regenerateSubtitleAudioWithDraft,
-  seekSubtitleTimeline,
-  selectedVoice,
-  setSubtitleAudioDrafts,
-  setSubtitleAudioFilterOpen,
-  setSubtitleAudioMaxCharacterCount,
-  setSubtitleAudioShortFilterEnabled,
-  setSubtitleAudioSimilarFilterEnabled,
-  setSubtitleAudioSpecialCharactersFilterEnabled,
-  setSubtitleAudioTimingStepMs,
-  subtitleAudioDrafts,
-  subtitleAudioError,
-  subtitleAudioFilterOpen,
-  subtitleAudioInput,
-  subtitleAudioItems,
-  subtitleAudioMasterBusy,
-  subtitleAudioMaxCharacterCount,
-  subtitleAudioPlayingId,
-  subtitleAudioRegeneratingId,
-  subtitleAudioShortFilterEnabled,
-  subtitleAudioSimilarFilterEnabled,
-  subtitleAudioSpecialCharactersFilterEnabled,
-  subtitleAudioSyncing,
-  subtitleAudioTimingStepMs,
-}) {
+import { useVideoDubbing } from "./VideoDubbingContext";
+
+export default function SubtitleAudioSection(props) {
+  const context = useVideoDubbing();
+  const {
+    activeSubtitleAudio,
+    activeSubtitleAudioFilterCount = 0,
+    activeSubtitleAudioItem,
+    activeSubtitleAudioRow,
+    adjustSubtitleAudioCueTiming,
+    combineSubtitleAudioCueAbove,
+    commitSubtitleAudioCueText,
+    deleteSubtitleAudioCue,
+    filteredSubtitleAudioInput = [],
+    isMasterGenerating,
+    isMediaProcessing,
+    nextSubtitleAudioItem,
+    playSubtitleAudio,
+    previewSubtitleCues = [],
+    previousSubtitleAudioItem,
+    rebuildMasterFromSubtitleAudio,
+    regenerateSubtitleAudioWithDraft,
+    seekSubtitleTimeline,
+    selectedVoice,
+    setSubtitleAudioDrafts,
+    setSubtitleAudioFilterOpen = () => {},
+    setSubtitleAudioMaxCharacterCount = () => {},
+    setSubtitleAudioShortFilterEnabled = () => {},
+    setSubtitleAudioSimilarFilterEnabled = () => {},
+    setSubtitleAudioSpecialCharactersFilterEnabled = () => {},
+    setSubtitleAudioTimingStepMs = () => {},
+    subtitleAudioDrafts = {},
+    subtitleAudioError,
+    subtitleAudioFilterOpen = false,
+    subtitleAudioInput = [],
+    subtitleAudioItems = [],
+    subtitleAudioMasterBusy,
+    subtitleAudioMaxCharacterCount = 5,
+    subtitleAudioPlayingId,
+    subtitleAudioRegeneratingId,
+    subtitleAudioShortFilterEnabled = false,
+    subtitleAudioSimilarFilterEnabled = false,
+    subtitleAudioSpecialCharactersFilterEnabled = false,
+    subtitleAudioSyncing,
+    subtitleAudioTimingStepMs = 100,
+  } = { ...context, ...props };
   return (
     <section className="space-y-3 rounded-xl border border-violet-500/25 bg-slate-950/70 p-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h4 className="text-xs font-semibold text-white">Subtitle-Audio</h4>
+          <h4 className="text-xs font-semibold text-white">Âm thanh phụ đề</h4>
           <p className="mt-1 text-[10px] text-slate-400">
             Sửa chữ không tự tạo lại audio; tạo lại Master sẽ dùng audio hiện
             có.
@@ -203,50 +207,8 @@ export default function SubtitleAudioSection({
           {subtitleAudioError || "Đang đồng bộ danh sách câu phụ đề…"}
         </p>
       )}
-      <CurrentSubtitlePanel
-        activeSubtitleAudio={activeSubtitleAudio}
-        activeSubtitleAudioItem={activeSubtitleAudioItem}
-        activeSubtitleAudioRow={activeSubtitleAudioRow}
-        adjustSubtitleAudioCueTiming={adjustSubtitleAudioCueTiming}
-        commitSubtitleAudioCueText={commitSubtitleAudioCueText}
-        isMasterGenerating={isMasterGenerating}
-        isMediaProcessing={isMediaProcessing}
-        nextSubtitleAudioItem={nextSubtitleAudioItem}
-        playSubtitleAudio={playSubtitleAudio}
-        previousSubtitleAudioItem={previousSubtitleAudioItem}
-        regenerateSubtitleAudioWithDraft={regenerateSubtitleAudioWithDraft}
-        seekSubtitleTimeline={seekSubtitleTimeline}
-        selectedVoice={selectedVoice}
-        setSubtitleAudioDrafts={setSubtitleAudioDrafts}
-        setSubtitleAudioTimingStepMs={setSubtitleAudioTimingStepMs}
-        subtitleAudioDrafts={subtitleAudioDrafts}
-        subtitleAudioMasterBusy={subtitleAudioMasterBusy}
-        subtitleAudioPlayingId={subtitleAudioPlayingId}
-        subtitleAudioRegeneratingId={subtitleAudioRegeneratingId}
-        subtitleAudioSyncing={subtitleAudioSyncing}
-        subtitleAudioTimingStepMs={subtitleAudioTimingStepMs}
-      />
-      <SubtitleAudioList
-        combineSubtitleAudioCueAbove={combineSubtitleAudioCueAbove}
-        commitSubtitleAudioCueText={commitSubtitleAudioCueText}
-        deleteSubtitleAudioCue={deleteSubtitleAudioCue}
-        filteredSubtitleAudioInput={filteredSubtitleAudioInput}
-        isMasterGenerating={isMasterGenerating}
-        isMediaProcessing={isMediaProcessing}
-        playSubtitleAudio={playSubtitleAudio}
-        previewSubtitleCues={previewSubtitleCues}
-        regenerateSubtitleAudioWithDraft={regenerateSubtitleAudioWithDraft}
-        seekSubtitleTimeline={seekSubtitleTimeline}
-        selectedVoice={selectedVoice}
-        setSubtitleAudioDrafts={setSubtitleAudioDrafts}
-        subtitleAudioDrafts={subtitleAudioDrafts}
-        subtitleAudioInput={subtitleAudioInput}
-        subtitleAudioItems={subtitleAudioItems}
-        subtitleAudioMasterBusy={subtitleAudioMasterBusy}
-        subtitleAudioPlayingId={subtitleAudioPlayingId}
-        subtitleAudioRegeneratingId={subtitleAudioRegeneratingId}
-        subtitleAudioSyncing={subtitleAudioSyncing}
-      />
+      <CurrentSubtitlePanel />
+      <SubtitleAudioList />
     </section>
   );
 }

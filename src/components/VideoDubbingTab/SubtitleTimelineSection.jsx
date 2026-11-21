@@ -3,7 +3,11 @@ import SelectedClipStylePanel from "./SelectedClipStylePanel";
 import SubtitleTimelineHeader from "./SubtitleTimelineHeader";
 import SubtitleTimelineTrack from "./SubtitleTimelineTrack";
 
-export default function SubtitleTimelineSection({
+import { useVideoDubbing } from "./VideoDubbingContext";
+
+export default function SubtitleTimelineSection(props) {
+  const context = useVideoDubbing();
+  const {
   activeTextTrackId,
   addTextOverlayToTrack,
   applySelectedTextOverlayToTrack,
@@ -44,31 +48,10 @@ export default function SubtitleTimelineSection({
   updatePreviewSubtitleCues,
   updateSelectedTextOverlay,
   video,
-}) {
+} = { ...context, ...props };
   return (
     <section className="space-y-3 rounded-xl border border-slate-800 bg-slate-950/60 p-3">
-      <SubtitleTimelineHeader
-        activeTextTrackId={activeTextTrackId}
-        addTextOverlayToTrack={addTextOverlayToTrack}
-        changeSubtitleTimelineZoom={changeSubtitleTimelineZoom}
-        deleteActiveTextTrack={deleteActiveTextTrack}
-        endSceneEnabled={endSceneEnabled}
-        fitSubtitleTimelineToPanel={fitSubtitleTimelineToPanel}
-        isMediaProcessing={isMediaProcessing}
-        job={job}
-        previewSubtitleCues={previewSubtitleCues}
-        saveEndSceneForCurrentVideo={saveEndSceneForCurrentVideo}
-        setActiveTextTrackId={setActiveTextTrackId}
-        setSelectedSubtitleCue={setSelectedSubtitleCue}
-        setSubtitlesEnabled={setSubtitlesEnabled}
-        setTextTracks={setTextTracks}
-        subtitleTimelineCursor={subtitleTimelineCursor}
-        subtitleTimelineDuration={subtitleTimelineDuration}
-        subtitleTimelineMinZoom={subtitleTimelineMinZoom}
-        subtitleTimelineZoom={subtitleTimelineZoom}
-        textTracks={textTracks}
-        updatePreviewSubtitleCues={updatePreviewSubtitleCues}
-      />
+      <SubtitleTimelineHeader />
       {previewSubtitleCues.length > 0 && (
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-slate-800 bg-slate-950/50 px-2.5 py-2 text-[10px] text-slate-400">
           {renderSubtitleTimingAdjustment("start", "Bắt đầu")}
@@ -86,31 +69,7 @@ export default function SubtitleTimelineSection({
           Chọn file SRT để tạo các clip phụ đề trên timeline.
         </p>
       ) : (
-        <SubtitleTimelineTrack
-          activeTextTrackId={activeTextTrackId}
-          endSceneDurationSeconds={endSceneDurationSeconds}
-          endSceneEnabled={endSceneEnabled}
-          job={job}
-          previewSubtitleCues={previewSubtitleCues}
-          seekSubtitleTimeline={seekSubtitleTimeline}
-          selectedSubtitleCue={selectedSubtitleCue}
-          selectedTextOverlay={selectedTextOverlay}
-          setActiveTextTrackId={setActiveTextTrackId}
-          setSelectedSubtitleCue={setSelectedSubtitleCue}
-          setSelectedTextOverlay={setSelectedTextOverlay}
-          startSubtitleTimelineDrag={startSubtitleTimelineDrag}
-          subtitleTimelineCursor={subtitleTimelineCursor}
-          subtitleTimelineDuration={subtitleTimelineDuration}
-          subtitleTimelineItems={subtitleTimelineItems}
-          subtitleTimelineLaneEnds={subtitleTimelineLaneEnds}
-          subtitleTimelineScrollRef={subtitleTimelineScrollRef}
-          subtitleTimelineTicks={subtitleTimelineTicks}
-          subtitleTimelineTrackRef={subtitleTimelineTrackRef}
-          subtitleTimelineWidth={subtitleTimelineWidth}
-          textOverlays={textOverlays}
-          textTimelineLanes={textTimelineLanes}
-          textTracks={textTracks}
-        />
+        <SubtitleTimelineTrack />
       )}
 
       {selectedTextOverlay !== null &&
