@@ -8,6 +8,7 @@ export default function SubtitleAudioSection(props) {
   const context = useVideoDubbing();
   const {
     activeSubtitleAudio,
+    activeSubtitleAudioDialogFilterCount = 0,
     activeSubtitleAudioFilterCount = 0,
     activeSubtitleAudioItem,
     activeSubtitleAudioRow,
@@ -30,6 +31,8 @@ export default function SubtitleAudioSection(props) {
     setSubtitleAudioFilterOpen = () => {},
     setSubtitleAudioMaxCharacterCount = () => {},
     setSubtitleAudioNonAlphabetFilterEnabled = () => {},
+    setSubtitleAudioSearchCaseSensitive = () => {},
+    setSubtitleAudioSearchText = () => {},
     setSubtitleAudioShortFilterEnabled = () => {},
     setSubtitleAudioSimilarFilterEnabled = () => {},
     setSubtitleAudioSpecialCharactersFilterEnabled = () => {},
@@ -44,6 +47,8 @@ export default function SubtitleAudioSection(props) {
     subtitleAudioNonAlphabetFilterEnabled = false,
     subtitleAudioPlayingId,
     subtitleAudioRegeneratingId,
+    subtitleAudioSearchCaseSensitive = false,
+    subtitleAudioSearchText = "",
     subtitleAudioShortFilterEnabled = false,
     subtitleAudioSimilarFilterEnabled = false,
     subtitleAudioSpecialCharactersFilterEnabled = false,
@@ -51,7 +56,7 @@ export default function SubtitleAudioSection(props) {
     subtitleAudioTimingStepMs = 100,
   } = { ...context, ...props };
   return (
-    <section className="h-full flex flex-col min-h-0 space-y-2 rounded-xl border border-violet-500/25 bg-slate-950/70 p-2.5">
+    <section className="relative h-full flex flex-col min-h-0 space-y-2 rounded-xl border border-violet-500/25 bg-slate-950/70 p-2.5">
       <div className="shrink-0 flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <span className="text-[10px] text-slate-400">
@@ -59,19 +64,60 @@ export default function SubtitleAudioSection(props) {
               ? `${filteredSubtitleAudioInput.length}/${subtitleAudioInput.length} câu`
               : `${subtitleAudioInput.length} câu`}
           </span>
-          <div className="relative">
+
+          <div className="flex items-center">
+            <div className="relative flex items-center">
+              <input
+                type="text"
+                value={subtitleAudioSearchText}
+                onChange={(event) => setSubtitleAudioSearchText(event.target.value)}
+                placeholder="Tìm câu..."
+                className="h-7 w-28 sm:w-36 rounded-l-lg border border-r-0 border-slate-700 bg-slate-900 pl-2 pr-5 text-xs text-slate-200 placeholder:text-slate-500 focus:border-cyan-500 focus:outline-none"
+              />
+              {subtitleAudioSearchText && (
+                <button
+                  type="button"
+                  onClick={() => setSubtitleAudioSearchText("")}
+                  className="absolute right-1 text-slate-400 hover:text-white"
+                  title="Xóa tìm kiếm"
+                  aria-label="Xóa tìm kiếm"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => setSubtitleAudioSearchCaseSensitive((prev) => !prev)}
+              title={
+                subtitleAudioSearchCaseSensitive
+                  ? "Phân biệt hoa/thường: ĐANG BẬT"
+                  : "Phân biệt hoa/thường: ĐANG TẮT"
+              }
+              aria-pressed={subtitleAudioSearchCaseSensitive}
+              className={`h-7 px-2 rounded-r-lg border text-xs font-bold transition-all select-none ${
+                subtitleAudioSearchCaseSensitive
+                  ? "border-amber-400 bg-amber-400 text-slate-950 shadow-[0_0_8px_rgba(251,191,36,0.5)]"
+                  : "border-slate-700 bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-slate-200"
+              }`}
+            >
+              S
+            </button>
+          </div>
+
+          <div>
             <button
               type="button"
               aria-expanded={subtitleAudioFilterOpen}
               aria-haspopup="dialog"
               onClick={() => setSubtitleAudioFilterOpen((open) => !open)}
-              className={`inline-flex items-center gap-1.5 rounded-lg border p-1 text-xs font-semibold ${activeSubtitleAudioFilterCount ? "border-cyan-400/50 bg-cyan-950/30 text-cyan-100" : "border-slate-700 text-slate-300 hover:bg-slate-800"}`}
+              className={`inline-flex items-center gap-1.5 rounded-lg border p-1 text-xs font-semibold ${activeSubtitleAudioDialogFilterCount ? "border-cyan-400/50 bg-cyan-950/30 text-cyan-100" : "border-slate-700 text-slate-300 hover:bg-slate-800"}`}
             >
               <Filter className="h-3.5 w-3.5" />
               Lọc
-              {activeSubtitleAudioFilterCount > 0 && (
+              {activeSubtitleAudioDialogFilterCount > 0 && (
                 <span className="rounded-full bg-cyan-300 px-1.5 text-[10px] font-bold text-slate-950">
-                  {activeSubtitleAudioFilterCount}
+                  {activeSubtitleAudioDialogFilterCount}
                 </span>
               )}
             </button>
@@ -79,7 +125,7 @@ export default function SubtitleAudioSection(props) {
               <div
                 role="dialog"
                 aria-label="Lọc danh sách phụ đề"
-                className="absolute left-0 top-full z-30 mt-2 w-[min(22rem,calc(100vw-2rem))] space-y-3 rounded-xl border border-slate-700 bg-slate-900 p-3 shadow-2xl"
+                className="absolute inset-x-2.5 top-11 z-30 space-y-3 rounded-xl border border-slate-700 bg-slate-900/95 p-3 shadow-2xl backdrop-blur-md"
               >
                 <div className="flex items-center justify-between gap-2">
                   <h5 className="text-xs font-semibold text-white">

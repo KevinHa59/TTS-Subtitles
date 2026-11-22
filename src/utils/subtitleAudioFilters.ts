@@ -4,6 +4,8 @@ export interface SubtitleAudioFilterOptions {
   nonAlphabetOnly?: boolean;
   similarAdjacent?: boolean;
   similarityThreshold?: number;
+  searchText?: string;
+  searchCaseSensitive?: boolean;
 }
 
 function normalizeForSimilarity(text: string): string[] {
@@ -63,38 +65,53 @@ export function filterSubtitleAudioItems<
     options.specialCharactersOnly === true ||
     options.nonAlphabetOnly === true ||
     options.similarAdjacent === true;
-  if (!hasActiveFilter) return [...items];
 
-  const similarIds = new Set<string>();
-  if (options.similarAdjacent) {
-    const threshold = options.similarityThreshold ?? 0.8;
-    for (let index = 1; index < items.length; index += 1) {
-      if (
-        getTextSimilarity(items[index - 1].text, items[index].text) > threshold
-      ) {
-        similarIds.add(items[index - 1].id);
-        similarIds.add(items[index].id);
+  let filtered = [...items];
+
+  if (hasActiveFilter) {
+    const similarIds = new Set<string>();
+    if (options.similarAdjacent) {
+      const threshold = options.similarityThreshold ?? 0.8;
+      for (let index = 1; index < items.length; index += 1) {
+        if (
+          getTextSimilarity(items[index - 1].text, items[index].text) > threshold
+        ) {
+          similarIds.add(items[index - 1].id);
+          similarIds.add(items[index].id);
+        }
       }
     }
+
+    filtered = items.filter((item) => {
+      if (
+        options.maxCharacterCount !== undefined &&
+        Array.from(item.text).length <= options.maxCharacterCount
+      ) {
+        return true;
+      }
+      if (
+        options.specialCharactersOnly &&
+        item.text.trim().length > 0 &&
+        !/[\p{L}\p{N}]/u.test(item.text)
+      ) {
+        return true;
+      }
+      if (options.nonAlphabetOnly && containsNonAlphabet(item.text)) {
+        return true;
+      }
+      return options.similarAdjacent === true && similarIds.has(item.id);
+    });
   }
 
-  return items.filter((item) => {
-    if (
-      options.maxCharacterCount !== undefined &&
-      Array.from(item.text).length <= options.maxCharacterCount
-    ) {
-      return true;
-    }
-    if (
-      options.specialCharactersOnly &&
-      item.text.trim().length > 0 &&
-      !/[\p{L}\p{N}]/u.test(item.text)
-    ) {
-      return true;
-    }
-    if (options.nonAlphabetOnly && containsNonAlphabet(item.text)) {
-      return true;
-    }
-    return options.similarAdjacent === true && similarIds.has(item.id);
-  });
+  const query = options.searchText ?? "";
+  if (query.length > 0) {
+    const sensitive = Boolean(options.searchCaseSensitive);
+    const targetQuery = sensitive ? query : query.toLocaleLowerCase();
+    filtered = filtered.filter((item) => {
+      const text = sensitive ? item.text : item.text.toLocaleLowerCase();
+      return text.includes(targetQuery);
+    });
+  }
+
+  return filtered;
 }

@@ -297,6 +297,11 @@ export default function VideoDubbingTab() {
     subtitleAudioNonAlphabetFilterEnabled,
     setSubtitleAudioNonAlphabetFilterEnabled,
   ] = useState(false);
+  const [subtitleAudioSearchText, setSubtitleAudioSearchText] = useState("");
+  const [
+    subtitleAudioSearchCaseSensitive,
+    setSubtitleAudioSearchCaseSensitive,
+  ] = useState(false);
   const subtitleAudioSyncRequestRef = useRef(0);
   const subtitleAudioKnownNonEmptyJobIdsRef = useRef(new Set());
   const subtitleAudioPlayerRef = useRef(null);
@@ -5407,11 +5412,14 @@ export default function VideoDubbingTab() {
     text: item.text,
   }));
   const subtitleAudioInputKey = JSON.stringify(subtitleAudioInput);
-  const activeSubtitleAudioFilterCount =
+  const activeSubtitleAudioDialogFilterCount =
     Number(subtitleAudioShortFilterEnabled) +
     Number(subtitleAudioSpecialCharactersFilterEnabled) +
     Number(subtitleAudioNonAlphabetFilterEnabled) +
     Number(subtitleAudioSimilarFilterEnabled);
+  const activeSubtitleAudioFilterCount =
+    activeSubtitleAudioDialogFilterCount +
+    Number(Boolean(subtitleAudioSearchText.length > 0));
   const filteredSubtitleAudioInput = filterSubtitleAudioItems(
     subtitleAudioInput,
     {
@@ -5422,6 +5430,8 @@ export default function VideoDubbingTab() {
       nonAlphabetOnly: subtitleAudioNonAlphabetFilterEnabled,
       similarAdjacent: subtitleAudioSimilarFilterEnabled,
       similarityThreshold: 0.8,
+      searchText: subtitleAudioSearchText,
+      searchCaseSensitive: subtitleAudioSearchCaseSensitive,
     },
   );
   useEffect(() => {
@@ -7209,6 +7219,8 @@ export default function VideoDubbingTab() {
     setSelectedTextOverlay,
     setSubtitleAudioDrafts,
     setSubtitleAudioFilterOpen,
+    setSubtitleAudioSearchText,
+    setSubtitleAudioSearchCaseSensitive,
     setSubtitleAudioMaxCharacterCount,
     setSubtitleAudioNonAlphabetFilterEnabled,
     setSubtitleAudioShortFilterEnabled,
@@ -7240,6 +7252,9 @@ export default function VideoDubbingTab() {
     subtitleAudioDrafts,
     subtitleAudioError,
     subtitleAudioFilterOpen,
+    subtitleAudioSearchText,
+    subtitleAudioSearchCaseSensitive,
+    activeSubtitleAudioDialogFilterCount,
     subtitleAudioInput,
     subtitleAudioItems,
     subtitleAudioMasterBusy,
