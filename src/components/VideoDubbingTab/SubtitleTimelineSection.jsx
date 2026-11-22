@@ -8,60 +8,50 @@ import { useVideoDubbing } from "./VideoDubbingContext";
 export default function SubtitleTimelineSection(props) {
   const context = useVideoDubbing();
   const {
-  activeTextTrackId,
-  addTextOverlayToTrack,
-  applySelectedTextOverlayToTrack,
-  changeSubtitleTimelineZoom,
-  deleteActiveTextTrack,
-  endSceneDurationSeconds,
-  endSceneEnabled,
-  fitSubtitleTimelineToPanel,
-  isMediaProcessing,
-  job,
-  previewSubtitleCues,
-  renderSubtitleTimingAdjustment,
-  saveEndSceneForCurrentVideo,
-  seekSubtitleTimeline,
-  selectedSubtitleCue,
-  selectedTextOverlay,
-  setActiveTextTrackId,
-  setSelectedSubtitleCue,
-  setSelectedTextOverlay,
-  setSubtitlesEnabled,
-  setTextOverlays,
-  setTextTracks,
-  startSubtitleTimelineDrag,
-  subtitleFontOptions,
-  subtitleTimelineCursor,
-  subtitleTimelineDuration,
-  subtitleTimelineItems,
-  subtitleTimelineLaneEnds,
-  subtitleTimelineMinZoom,
-  subtitleTimelineScrollRef,
-  subtitleTimelineTicks,
-  subtitleTimelineTrackRef,
-  subtitleTimelineWidth,
-  subtitleTimelineZoom,
-  textOverlays,
-  textTimelineLanes,
-  textTracks,
-  updatePreviewSubtitleCues,
-  updateSelectedTextOverlay,
-  video,
-} = { ...context, ...props };
+    activeTextTrackId,
+    addTextOverlayToTrack,
+    applySelectedTextOverlayToTrack,
+    changeSubtitleTimelineZoom,
+    deleteActiveTextTrack,
+    endSceneDurationSeconds,
+    endSceneEnabled,
+    fitSubtitleTimelineToPanel,
+    isMediaProcessing,
+    job,
+    previewSubtitleCues,
+    renderSubtitleTimingAdjustment,
+    saveEndSceneForCurrentVideo,
+    seekSubtitleTimeline,
+    selectedSubtitleCue,
+    selectedTextOverlay,
+    setActiveTextTrackId,
+    setSelectedSubtitleCue,
+    setSelectedTextOverlay,
+    setSubtitlesEnabled,
+    setTextOverlays,
+    setTextTracks,
+    startSubtitleTimelineDrag,
+    subtitleFontOptions,
+    subtitleTimelineCursor,
+    subtitleTimelineDuration,
+    subtitleTimelineItems,
+    subtitleTimelineLaneEnds,
+    subtitleTimelineMinZoom,
+    subtitleTimelineScrollRef,
+    subtitleTimelineTicks,
+    subtitleTimelineTrackRef,
+    subtitleTimelineWidth,
+    subtitleTimelineZoom,
+    textOverlays,
+    textTimelineLanes,
+    textTracks,
+    updatePreviewSubtitleCues,
+    updateSelectedTextOverlay,
+    video,
+  } = { ...context, ...props };
   return (
     <section className="space-y-3 rounded-xl border border-slate-800 bg-slate-950/60 p-3">
       <SubtitleTimelineHeader />
-      {previewSubtitleCues.length > 0 && (
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-slate-800 bg-slate-950/50 px-2.5 py-2 text-[10px] text-slate-400">
-          {renderSubtitleTimingAdjustment("start", "Bắt đầu")}
-          {renderSubtitleTimingAdjustment("end", "Kết thúc")}
-          {renderSubtitleTimingAdjustment("move", "Di chuyển")}
-          <span className="text-slate-500">
-            Chỉ kéo dài vào khoảng trống, không chồng lấn phụ đề kế bên
-          </span>
-        </div>
-      )}
       {previewSubtitleCues.length === 0 &&
       textTracks.length === 0 &&
       !endSceneEnabled ? (

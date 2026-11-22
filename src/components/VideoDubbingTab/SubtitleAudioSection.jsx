@@ -79,7 +79,7 @@ export default function SubtitleAudioSection(props) {
               <div
                 role="dialog"
                 aria-label="Lọc danh sách phụ đề"
-                className="absolute right-0 top-full z-30 mt-2 w-[min(22rem,calc(100vw-2rem))] space-y-3 rounded-xl border border-slate-700 bg-slate-900 p-3 shadow-2xl"
+                className="absolute left-0 top-full z-30 mt-2 w-[min(22rem,calc(100vw-2rem))] space-y-3 rounded-xl border border-slate-700 bg-slate-900 p-3 shadow-2xl"
               >
                 <div className="flex items-center justify-between gap-2">
                   <h5 className="text-xs font-semibold text-white">

@@ -5,50 +5,41 @@ import { useVideoDubbing } from "./VideoDubbingContext";
 export default function SubtitleTimelineHeader(props) {
   const context = useVideoDubbing();
   const {
-  activeTextTrackId,
-  addTextOverlayToTrack,
-  changeSubtitleTimelineZoom,
-  deleteActiveTextTrack,
-  endSceneEnabled,
-  fitSubtitleTimelineToPanel,
-  isMediaProcessing,
-  job,
-  masterEditBusy,
-  previewSubtitleCues,
-  requestMasterEdit,
-  runMasterEditAction,
-  saveEndSceneForCurrentVideo,
-  setActiveTextTrackId,
-  setSelectedSubtitleCue,
-  setShowTtsMasterTimeline,
-  setSubtitlesEnabled,
-  setTextTracks,
-  showTtsMasterTimeline,
-  subtitleTimelineCursor,
-  subtitleTimelineDuration,
-  subtitleTimelineMinZoom,
-  subtitleTimelineZoom,
-  textTracks,
-  updatePreviewSubtitleCues,
-} = { ...context, ...props };
+    activeTextTrackId,
+    addTextOverlayToTrack,
+    changeSubtitleTimelineZoom,
+    deleteActiveTextTrack,
+    endSceneEnabled,
+    fitSubtitleTimelineToPanel,
+    isMediaProcessing,
+    job,
+    masterEditBusy,
+    previewSubtitleCues,
+    requestMasterEdit,
+    runMasterEditAction,
+    saveEndSceneForCurrentVideo,
+    setActiveTextTrackId,
+    setSelectedSubtitleCue,
+    setShowTtsMasterTimeline,
+    setSubtitlesEnabled,
+    setTextTracks,
+    showTtsMasterTimeline,
+    subtitleTimelineCursor,
+    subtitleTimelineDuration,
+    subtitleTimelineMinZoom,
+    subtitleTimelineZoom,
+    textTracks,
+    updatePreviewSubtitleCues,
+  } = { ...context, ...props };
 
   const ttsMasterAvailable = Boolean(
     job?.masterGeneration?.sizeBytes &&
-      job?.masterGeneration?.durationSeconds !== undefined,
+    job?.masterGeneration?.durationSeconds !== undefined,
   );
   const masterEdit = job?.masterEdit;
   const hasMasterClips = Boolean(masterEdit?.clips?.length);
   return (
     <div className="flex flex-wrap items-center justify-between gap-3">
-      <div>
-        <h4 className="text-xs font-semibold text-white">Timeline phụ đề</h4>
-        <p className="mt-1 text-[10px] text-slate-500">
-          Khi phát, timeline bám theo video; khi dừng, bấm timeline để di chuyển
-          playhead riêng · Ctrl+C/V sao chép/dán tại playhead · Delete xóa cue ·
-          Ctrl+cuộn để zoom vào playhead · Shift+Z fit toàn timeline ·
-          Shift+cuộn để cuộn ngang
-        </p>
-      </div>
       <div className="flex items-center gap-2 text-[10px] text-slate-400">
         <span>{previewSubtitleCues.length} câu</span>
         <button
@@ -182,9 +173,7 @@ export default function SubtitleTimelineHeader(props) {
             type="button"
             disabled={!ttsMasterAvailable || masterEditBusy}
             onClick={() =>
-              void runMasterEditAction(() =>
-                requestMasterEdit(job.id, "split"),
-              )
+              void runMasterEditAction(() => requestMasterEdit(job.id, "split"))
             }
             className="inline-flex items-center gap-1 rounded-md border border-violet-500/40 px-2 py-1 text-violet-200 hover:bg-violet-950/40 disabled:cursor-not-allowed disabled:opacity-40"
             title="Tách TTS Master thành các clip để căn chỉnh"
@@ -200,9 +189,7 @@ export default function SubtitleTimelineHeader(props) {
             type="button"
             disabled={!hasMasterClips || masterEditBusy}
             onClick={() =>
-              void runMasterEditAction(() =>
-                requestMasterEdit(job.id, "merge"),
-              )
+              void runMasterEditAction(() => requestMasterEdit(job.id, "merge"))
             }
             className="rounded-md border border-cyan-500/40 px-2 py-1 text-cyan-200 hover:bg-cyan-950/40 disabled:cursor-not-allowed disabled:opacity-40"
             title="Gộp các clip đã chỉnh thành file Master mới"
