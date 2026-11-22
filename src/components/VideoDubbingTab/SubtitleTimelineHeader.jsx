@@ -1,4 +1,4 @@
-import { Plus, Trash2 } from "lucide-react";
+import { LoaderCircle, Plus, Scissors, Trash2 } from "lucide-react";
 
 import { useVideoDubbing } from "./VideoDubbingContext";
 
@@ -13,12 +13,17 @@ export default function SubtitleTimelineHeader(props) {
   fitSubtitleTimelineToPanel,
   isMediaProcessing,
   job,
+  masterEditBusy,
   previewSubtitleCues,
+  requestMasterEdit,
+  runMasterEditAction,
   saveEndSceneForCurrentVideo,
   setActiveTextTrackId,
   setSelectedSubtitleCue,
+  setShowTtsMasterTimeline,
   setSubtitlesEnabled,
   setTextTracks,
+  showTtsMasterTimeline,
   subtitleTimelineCursor,
   subtitleTimelineDuration,
   subtitleTimelineMinZoom,
@@ -26,6 +31,13 @@ export default function SubtitleTimelineHeader(props) {
   textTracks,
   updatePreviewSubtitleCues,
 } = { ...context, ...props };
+
+  const ttsMasterAvailable = Boolean(
+    job?.masterGeneration?.sizeBytes &&
+      job?.masterGeneration?.durationSeconds !== undefined,
+  );
+  const masterEdit = job?.masterEdit;
+  const hasMasterClips = Boolean(masterEdit?.clips?.length);
   return (
     <div className="flex flex-wrap items-center justify-between gap-3">
       <div>
@@ -142,6 +154,62 @@ export default function SubtitleTimelineHeader(props) {
             aria-label="Zoom timeline phụ đề"
           />
         </label>
+        <div className="flex items-center gap-1.5 border-l border-slate-800 pl-2">
+          <label
+            className={`inline-flex items-center gap-1.5 rounded-md border border-slate-700/80 px-2 py-1 select-none transition-colors ${
+              !ttsMasterAvailable
+                ? "cursor-not-allowed opacity-40 text-slate-500"
+                : "cursor-pointer text-cyan-200 hover:border-cyan-500/50 bg-slate-900/60"
+            }`}
+            title={
+              ttsMasterAvailable
+                ? "Ẩn / hiện timeline TTS Master"
+                : "Chưa có TTS Master"
+            }
+          >
+            <input
+              type="checkbox"
+              disabled={!ttsMasterAvailable}
+              checked={Boolean(ttsMasterAvailable && showTtsMasterTimeline)}
+              onChange={(event) =>
+                setShowTtsMasterTimeline(event.target.checked)
+              }
+              className="h-3.5 w-3.5 rounded accent-cyan-400"
+            />
+            <span>TTS Master</span>
+          </label>
+          <button
+            type="button"
+            disabled={!ttsMasterAvailable || masterEditBusy}
+            onClick={() =>
+              void runMasterEditAction(() =>
+                requestMasterEdit(job.id, "split"),
+              )
+            }
+            className="inline-flex items-center gap-1 rounded-md border border-violet-500/40 px-2 py-1 text-violet-200 hover:bg-violet-950/40 disabled:cursor-not-allowed disabled:opacity-40"
+            title="Tách TTS Master thành các clip để căn chỉnh"
+          >
+            {masterEditBusy ? (
+              <LoaderCircle className="h-3 w-3 animate-spin" />
+            ) : (
+              <Scissors className="h-3 w-3" />
+            )}
+            Tách
+          </button>
+          <button
+            type="button"
+            disabled={!hasMasterClips || masterEditBusy}
+            onClick={() =>
+              void runMasterEditAction(() =>
+                requestMasterEdit(job.id, "merge"),
+              )
+            }
+            className="rounded-md border border-cyan-500/40 px-2 py-1 text-cyan-200 hover:bg-cyan-950/40 disabled:cursor-not-allowed disabled:opacity-40"
+            title="Gộp các clip đã chỉnh thành file Master mới"
+          >
+            Gộp thành Master
+          </button>
+        </div>
       </div>
     </div>
   );

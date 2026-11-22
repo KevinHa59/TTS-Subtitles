@@ -207,6 +207,18 @@ export default function VideoDubbingTab() {
   const [guideOpen, setGuideOpen] = useState(false);
   const [videoWorkspaceTab, setVideoWorkspaceTab] = useState("preview");
   const [timelineWorkspaceTab, setTimelineWorkspaceTab] = useState("subtitle");
+  const [showTtsMasterTimeline, setShowTtsMasterTimeline] = useState(true);
+  const [masterEditBusy, setMasterEditBusy] = useState(false);
+  const runMasterEditAction = async (action) => {
+    setMasterEditBusy(true);
+    try {
+      await action();
+    } catch {
+      // mediaError is already set in requestMasterEdit
+    } finally {
+      setMasterEditBusy(false);
+    }
+  };
   const [endSceneDurationSeconds, setEndSceneDurationSeconds] = useState(
     DEFAULT_END_SCENE_DURATION_SECONDS,
   );
@@ -7157,6 +7169,8 @@ export default function VideoDubbingTab() {
     removeSelectedEndSceneText,
     renderSubtitleTimingAdjustment,
     requestMasterEdit,
+    runMasterEditAction,
+    masterEditBusy,
     restartMixerPreview,
     saveEndSceneForCurrentVideo,
     scheduleSubtitleMarginSave,
@@ -7209,6 +7223,8 @@ export default function VideoDubbingTab() {
     setTextOverlays,
     setTextTracks,
     setTimelineWorkspaceTab,
+    setShowTtsMasterTimeline,
+    showTtsMasterTimeline,
     setVideoPreviewReady,
     srt,
     startCharacterCardOcrWorker,
