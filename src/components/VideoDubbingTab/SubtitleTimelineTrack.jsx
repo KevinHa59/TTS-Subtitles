@@ -1,35 +1,207 @@
+import { useEffect, useRef, useState } from "react";
 import { DEFAULT_TEXT_TRACK_ID } from "./constants";
 import { formatDuration, formatElapsed } from "./helpers";
 
 import { useVideoDubbing } from "./VideoDubbingContext";
 
+const vocalsPeaksCache = new Map();
+
+function getWaveformPeaks(audioBuffer) {
+  const peakCount = Math.max(
+    1,
+    Math.min(6000, Math.ceil(audioBuffer.duration * 8)),
+  );
+  const peaks = new Array(peakCount).fill(0);
+  for (
+    let channelIndex = 0;
+    channelIndex < audioBuffer.numberOfChannels;
+    channelIndex += 1
+  ) {
+    const samples = audioBuffer.getChannelData(channelIndex);
+    for (let peakIndex = 0; peakIndex < peakCount; peakIndex += 1) {
+      const start = Math.floor((peakIndex * samples.length) / peakCount);
+      const end = Math.max(
+        start + 1,
+        Math.floor(((peakIndex + 1) * samples.length) / peakCount),
+      );
+      let peak = 0;
+      for (let sampleIndex = start; sampleIndex < end; sampleIndex += 1) {
+        peak = Math.max(peak, Math.abs(samples[sampleIndex]));
+      }
+      peaks[peakIndex] = Math.max(peaks[peakIndex], peak);
+    }
+  }
+  return peaks;
+}
+
 export default function SubtitleTimelineTrack(props) {
   const context = useVideoDubbing();
   const {
-  activeTextTrackId,
-  endSceneDurationSeconds,
-  endSceneEnabled,
-  job,
-  previewSubtitleCues,
-  seekSubtitleTimeline,
-  selectedSubtitleCue,
-  selectedTextOverlay,
-  setActiveTextTrackId,
-  setSelectedSubtitleCue,
-  setSelectedTextOverlay,
-  startSubtitleTimelineDrag,
-  subtitleTimelineCursor,
-  subtitleTimelineDuration,
-  subtitleTimelineItems,
-  subtitleTimelineLaneEnds,
-  subtitleTimelineScrollRef,
-  subtitleTimelineTicks,
-  subtitleTimelineTrackRef,
-  subtitleTimelineWidth,
-  textOverlays,
-  textTimelineLanes,
-  textTracks,
-} = { ...context, ...props };
+    activeTextTrackId,
+    endSceneDurationSeconds,
+    endSceneEnabled,
+    job,
+    previewSubtitleCues,
+    seekSubtitleTimeline,
+    selectedSubtitleCue,
+    selectedTextOverlay,
+    setActiveTextTrackId,
+    setSelectedSubtitleCue,
+    setSelectedTextOverlay,
+    startSubtitleTimelineDrag,
+    subtitleTimelineCursor,
+    subtitleTimelineDuration,
+    subtitleTimelineItems,
+    subtitleTimelineLaneEnds,
+    subtitleTimelineScrollRef,
+    subtitleTimelineTicks,
+    subtitleTimelineTrackRef,
+    subtitleTimelineWidth,
+    textOverlays,
+    textTimelineLanes,
+    textTracks,
+  } = { ...context, ...props };
+
+  const vocalsCanvasRef = useRef(null);
+  const [scrollLeft, setScrollLeft] = useState(0);
+  const [viewportWidth, setViewportWidth] = useState(0);
+  const [waveform, setWaveform] = useState({ status: "missing" });
+
+  const vocalsAvailable = Boolean(job?.separation?.vocalsSizeBytes);
+  const vocalsUrl =
+    vocalsAvailable && job?.id
+      ? `/api/video-dubbing/jobs/${job.id}/separation/vocals`
+      : undefined;
+
+  useEffect(() => {
+    if (!vocalsUrl || !job?.id) {
+      setWaveform({ status: "missing" });
+      return;
+    }
+    const cacheKey = `${job.id}_${job.separation?.vocalsSizeBytes || 0}`;
+    if (vocalsPeaksCache.has(cacheKey)) {
+      setWaveform(vocalsPeaksCache.get(cacheKey));
+      return;
+    }
+
+    let disposed = false;
+    const controller = new AbortController();
+    let audioContext = null;
+    setWaveform({ status: "loading" });
+
+    void (async () => {
+      try {
+        if (!window.AudioContext) {
+          throw new Error("Trình duyệt không hỗ trợ giải mã âm thanh.");
+        }
+        audioContext = new window.AudioContext();
+        const response = await fetch(vocalsUrl, {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          throw new Error(`Tải audio thất bại (${response.status}).`);
+        }
+        const audioBuffer = await audioContext.decodeAudioData(
+          await response.arrayBuffer(),
+        );
+        const peaks = getWaveformPeaks(audioBuffer);
+        const data = {
+          status: "ready",
+          peaks,
+          duration: audioBuffer.duration,
+        };
+        vocalsPeaksCache.set(cacheKey, data);
+        if (!disposed) {
+          setWaveform(data);
+        }
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        if (!disposed) {
+          setWaveform({
+            status: "unavailable",
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      } finally {
+        if (audioContext && audioContext.state !== "closed") {
+          void audioContext.close();
+        }
+      }
+    })();
+
+    return () => {
+      disposed = true;
+      controller.abort();
+      if (audioContext && audioContext.state !== "closed") {
+        void audioContext.close();
+      }
+    };
+  }, [vocalsUrl, job?.id, job?.separation?.vocalsSizeBytes]);
+
+  useEffect(() => {
+    const container = subtitleTimelineScrollRef?.current;
+    if (!container) return;
+    const update = () => {
+      setScrollLeft(container.scrollLeft);
+      setViewportWidth(container.clientWidth);
+    };
+    update();
+    container.addEventListener("scroll", update, { passive: true });
+    const observer = new ResizeObserver(update);
+    observer.observe(container);
+    return () => {
+      container.removeEventListener("scroll", update);
+      observer.disconnect();
+    };
+  }, [subtitleTimelineScrollRef]);
+
+  useEffect(() => {
+    const canvas = vocalsCanvasRef.current;
+    if (!canvas || viewportWidth <= 0) return;
+    const pixelRatio = window.devicePixelRatio || 1;
+    const trackHeight = 28;
+    canvas.width = Math.round(viewportWidth * pixelRatio);
+    canvas.height = Math.round(trackHeight * pixelRatio);
+    canvas.style.width = `${viewportWidth}px`;
+    canvas.style.height = `${trackHeight}px`;
+    const context = canvas.getContext("2d");
+    if (!context) return;
+    context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+    context.clearRect(0, 0, viewportWidth, trackHeight);
+
+    if (
+      waveform.status !== "ready" ||
+      !waveform.peaks?.length ||
+      subtitleTimelineWidth <= 0 ||
+      subtitleTimelineDuration <= 0
+    ) {
+      return;
+    }
+
+    const center = trackHeight / 2;
+    const sampleStep =
+      (waveform.duration || subtitleTimelineDuration) / waveform.peaks.length;
+    context.strokeStyle = "rgba(167, 139, 250, 0.75)";
+    context.lineWidth = 1;
+    context.beginPath();
+    for (let x = 0; x < viewportWidth; x += 2) {
+      const time =
+        ((scrollLeft + x) / subtitleTimelineWidth) * subtitleTimelineDuration;
+      const sampleIndex = Math.floor(time / sampleStep);
+      const peak = waveform.peaks[sampleIndex] || 0;
+      const amplitude = Math.max(1, peak * (trackHeight * 0.44));
+      context.moveTo(x + 0.5, center - amplitude);
+      context.lineTo(x + 0.5, center + amplitude);
+    }
+    context.stroke();
+  }, [
+    scrollLeft,
+    viewportWidth,
+    waveform,
+    subtitleTimelineDuration,
+    subtitleTimelineWidth,
+  ]);
   return (
     <div
       ref={subtitleTimelineScrollRef}
@@ -101,6 +273,28 @@ export default function SubtitleTimelineTrack(props) {
               left: `${(subtitleTimelineCursor / subtitleTimelineDuration) * subtitleTimelineWidth}px`,
             }}
           />
+          {/* Nền waveform Voice đã tách cho timeline phụ đề đầu tiên (lane 0) */}
+          <div
+            className="pointer-events-none absolute left-0 top-[5px] z-0 overflow-hidden rounded-md border border-violet-500/25 bg-violet-950/20"
+            style={{
+              width: `${subtitleTimelineWidth}px`,
+              height: "28px",
+            }}
+            title="Voice đã tách"
+          >
+            {waveform.status === "ready" && (
+              <canvas
+                ref={vocalsCanvasRef}
+                className="sticky left-0 top-0 block"
+                style={{ height: "28px" }}
+              />
+            )}
+            {waveform.status === "loading" && (
+              <span className="sticky left-3 top-1 text-[9px] text-violet-300/60">
+                Đang tải waveform Voice đã tách…
+              </span>
+            )}
+          </div>
           {subtitleTimelineItems.map(({ cue, index, lane }) => {
             const active =
               cue.startTime <= subtitleTimelineCursor &&

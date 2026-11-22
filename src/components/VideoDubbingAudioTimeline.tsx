@@ -24,7 +24,7 @@ interface VideoDubbingAudioTimelineProps {
   zoom: number;
   onZoomChange: (zoom: number) => void;
   onSeek: (time: number) => void;
-  vocalsAvailable: boolean;
+  vocalsAvailable?: boolean;
   instrumentalAvailable: boolean;
   ttsMasterAvailable: boolean;
   ttsMasterVersion: number;
@@ -108,8 +108,7 @@ export default function VideoDubbingAudioTimeline({
     startTime: number;
   } | null>(null);
   const [clipPositions, setClipPositions] = useState<Record<string, number>>({});
-  const [waveforms, setWaveforms] = useState<Record<AudioTrack["key"], TrackWaveform>>({
-    vocals: { status: "missing" },
+  const [waveforms, setWaveforms] = useState<Record<"ttsMaster" | "instrumental", TrackWaveform>>({
     instrumental: { status: "missing" },
     ttsMaster: { status: "missing" },
   });
@@ -121,9 +120,6 @@ export default function VideoDubbingAudioTimeline({
     { length: Math.floor(timelineDuration / tickStep) + 1 },
     (_, index) => index * tickStep,
   );
-  const vocalsUrl = vocalsAvailable
-    ? `/api/video-dubbing/jobs/${jobId}/separation/vocals`
-    : undefined;
   const instrumentalUrl = instrumentalAvailable
     ? `/api/video-dubbing/jobs/${jobId}/separation/instrumental`
     : undefined;
@@ -135,7 +131,6 @@ export default function VideoDubbingAudioTimeline({
 
   useEffect(() => {
     const tracks: AudioTrack[] = [
-      { key: "vocals", label: "Voice đã tách", url: vocalsUrl },
       { key: "ttsMaster", label: "TTS Master", url: ttsMasterUrl },
       { key: "instrumental", label: "Nhạc nền (instrumental)", url: instrumentalUrl },
     ];
@@ -143,7 +138,6 @@ export default function VideoDubbingAudioTimeline({
     let disposed = false;
     let audioContext: AudioContext | null = null;
     setWaveforms({
-      vocals: { status: vocalsUrl ? "loading" : "missing" },
       instrumental: { status: instrumentalUrl ? "loading" : "missing" },
       ttsMaster: { status: ttsMasterUrl ? "loading" : "missing" },
     });
@@ -197,10 +191,6 @@ export default function VideoDubbingAudioTimeline({
         if (!disposed && !controller.signal.aborted) {
           const message = error instanceof Error ? error.message : String(error);
           setWaveforms((current) => ({
-            vocals:
-              current.vocals.status === "loading"
-                ? { status: "unavailable", error: message }
-                : current.vocals,
             instrumental:
               current.instrumental.status === "loading"
                 ? { status: "unavailable", error: message }
@@ -225,7 +215,7 @@ export default function VideoDubbingAudioTimeline({
         void audioContext.close();
       }
     };
-  }, [jobId, instrumentalUrl, ttsMasterUrl, vocalsUrl]);
+  }, [jobId, instrumentalUrl, ttsMasterUrl]);
 
   useEffect(() => {
     const container = scrollRef.current;
@@ -237,7 +227,7 @@ export default function VideoDubbingAudioTimeline({
   }, []);
 
   useEffect(() => {
-    for (const [index, key] of ["vocals", "ttsMaster", "instrumental"].entries()) {
+    for (const [index, key] of (["ttsMaster", "instrumental"] as const).entries()) {
       const canvas = canvasRefs.current[index];
       if (!canvas || viewportWidth <= 0) continue;
       const pixelRatio = window.devicePixelRatio || 1;
@@ -250,16 +240,14 @@ export default function VideoDubbingAudioTimeline({
       context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
       context.clearRect(0, 0, viewportWidth, TRACK_HEIGHT);
       const center = TRACK_HEIGHT / 2;
-      const waveform = waveforms[key as AudioTrack["key"]];
+      const waveform = waveforms[key];
       if (waveform.status !== "ready" || !waveform.peaks?.length) continue;
       const secondsPerPixel = 1 / zoom;
       const sampleStep = (waveform.duration || timelineDuration) / waveform.peaks.length;
       context.strokeStyle =
-        key === "vocals"
-          ? "rgba(167, 139, 250, 0.8)"
-          : key === "instrumental"
-            ? "rgba(251, 191, 36, 0.8)"
-            : "rgba(103, 232, 249, 0.8)";
+        key === "instrumental"
+          ? "rgba(251, 191, 36, 0.8)"
+          : "rgba(103, 232, 249, 0.8)";
       context.lineWidth = 1;
       context.beginPath();
       for (let x = 0; x < viewportWidth; x += 2) {
@@ -419,7 +407,6 @@ export default function VideoDubbingAudioTimeline({
             ))}
           </div>
           {([
-            { key: "vocals", label: "Voice đã tách", color: "text-violet-200" },
             { key: "ttsMaster", label: "TTS Master", color: "text-cyan-200" },
             { key: "instrumental", label: "Nhạc nền (instrumental)", color: "text-amber-200" },
           ] as const).map((track, index) => {
