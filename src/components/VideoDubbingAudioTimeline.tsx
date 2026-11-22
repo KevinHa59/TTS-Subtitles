@@ -5,6 +5,7 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import { LoaderCircle, Minus, Plus, Scissors, Volume2, VolumeX, Waves } from "lucide-react";
+import { formatTimelineRulerTime, getNiceTimelineStep } from "./VideoDubbingTab/helpers";
 import type {
   VideoDubbingMasterEditState,
   VideoDubbingMixerSettings,
@@ -115,10 +116,10 @@ export default function VideoDubbingAudioTimeline({
 
   const timelineDuration = Math.max(1, Number.isFinite(duration) ? duration : 0);
   const timelineWidth = Math.max(720, timelineDuration * zoom);
-  const tickStep = Math.max(5, Math.ceil(timelineDuration / 12 / 5) * 5);
+  const tickStep = getNiceTimelineStep(zoom, 80);
   const ticks = Array.from(
     { length: Math.floor(timelineDuration / tickStep) + 1 },
-    (_, index) => index * tickStep,
+    (_, index) => Math.round(index * tickStep * 1000) / 1000,
   );
   const instrumentalUrl = instrumentalAvailable
     ? `/api/video-dubbing/jobs/${jobId}/separation/instrumental`
@@ -402,7 +403,7 @@ export default function VideoDubbingAudioTimeline({
                 className="absolute top-1 text-[9px] tabular-nums text-slate-500"
                 style={{ left: `${tick * zoom}px` }}
               >
-                {formatTimelineTime(tick)}
+                {formatTimelineRulerTime(tick, tickStep)}
               </span>
             ))}
           </div>

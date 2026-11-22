@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { DEFAULT_TEXT_TRACK_ID } from "./constants";
-import { formatDuration, formatElapsed } from "./helpers";
+import { formatDuration, formatElapsed, formatTimelineRulerTime } from "./helpers";
 
 import { useVideoDubbing } from "./VideoDubbingContext";
 
@@ -55,6 +55,7 @@ export default function SubtitleTimelineTrack(props) {
     subtitleTimelineItems,
     subtitleTimelineLaneEnds,
     subtitleTimelineScrollRef,
+    subtitleTimelineStep,
     subtitleTimelineTicks,
     subtitleTimelineTrackRef,
     subtitleTimelineWidth,
@@ -382,7 +383,7 @@ export default function SubtitleTimelineTrack(props) {
                 left: `${(tick / subtitleTimelineDuration) * subtitleTimelineWidth}px`,
               }}
             >
-              {formatElapsed(tick)}
+              {formatTimelineRulerTime(tick, subtitleTimelineStep)}
             </span>
           ))}
         </div>

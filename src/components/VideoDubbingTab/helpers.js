@@ -108,6 +108,44 @@ export function formatFrameRate(frameRate) {
     : "Không xác định";
 }
 
+export const NICE_TIMELINE_STEPS = [
+  0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30,
+  60, 120, 300, 600, 900, 1800, 3600
+];
+
+export function getNiceTimelineStep(pixelsPerSecond, minTickSpacingPx = 80) {
+  const safePps = Math.max(0.0001, pixelsPerSecond || 0);
+  const targetSeconds = minTickSpacingPx / safePps;
+  for (const step of NICE_TIMELINE_STEPS) {
+    if (step >= targetSeconds) {
+      return step;
+    }
+  }
+  return Math.max(60, Math.ceil(targetSeconds / 3600) * 3600);
+}
+
+export function formatTimelineRulerTime(seconds, step = 1) {
+  const safeSeconds = Math.max(0, Number(seconds) || 0);
+  const hours = Math.floor(safeSeconds / 3600);
+  const minutes = Math.floor((safeSeconds % 3600) / 60);
+  const remainingSeconds = safeSeconds % 60;
+  const pad = (value) => String(value).padStart(2, "0");
+
+  if (step < 1) {
+    const wholeSec = Math.floor(remainingSeconds);
+    const decimal = Math.round((remainingSeconds - wholeSec) * 10);
+    const secStr = `${pad(wholeSec)}.${decimal}`;
+    return hours > 0
+      ? `${pad(hours)}:${pad(minutes)}:${secStr}`
+      : `${pad(minutes)}:${secStr}`;
+  }
+
+  const wholeSec = Math.floor(remainingSeconds);
+  return hours > 0
+    ? `${pad(hours)}:${pad(minutes)}:${pad(wholeSec)}`
+    : `${pad(minutes)}:${pad(wholeSec)}`;
+}
+
 export function statusLabel(job) {
   if (!job) return "Đang chuẩn bị upload";
   switch (job.status) {

@@ -45,6 +45,7 @@ import FileDetailsModal from "./VideoDubbingTab/FileDetailsModal";
 import GuideModal from "./VideoDubbingTab/GuideModal";
 import {
   getJobProcessingProgress,
+  getNiceTimelineStep,
   getOverlayAlignment,
   getSubtitleTextAlignment,
 } from "./VideoDubbingTab/helpers";
@@ -5980,13 +5981,15 @@ export default function VideoDubbingTab() {
     8,
     Math.max(0.001, subtitleTimelineViewportWidth / subtitleTimelineDuration),
   );
-  const subtitleTimelineStep = Math.max(
-    5,
-    Math.ceil(subtitleTimelineDuration / 12 / 5) * 5,
+  const subtitleTimelinePixelsPerSecond =
+    subtitleTimelineWidth / Math.max(0.001, subtitleTimelineDuration);
+  const subtitleTimelineStep = getNiceTimelineStep(
+    subtitleTimelinePixelsPerSecond,
+    80,
   );
   const subtitleTimelineTicks = Array.from(
     { length: Math.floor(subtitleTimelineDuration / subtitleTimelineStep) + 1 },
-    (_, index) => index * subtitleTimelineStep,
+    (_, index) => Math.round(index * subtitleTimelineStep * 1000) / 1000,
   );
   useEffect(() => {
     const container = subtitleTimelineScrollRef.current;
@@ -7277,6 +7280,7 @@ export default function VideoDubbingTab() {
     subtitleTimelineLaneEnds,
     subtitleTimelineMinZoom,
     subtitleTimelineScrollRef,
+    subtitleTimelineStep,
     subtitleTimelineTicks,
     subtitleTimelineTrackRef,
     subtitleTimelineWidth,
