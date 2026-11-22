@@ -7,6 +7,119 @@ import { useVideoDubbing } from "./VideoDubbingContext";
 const vocalsPeaksCache = new Map();
 const ttsPeaksCache = new Map();
 
+const WAVEFORM_TILE_WIDTH = 2500;
+
+function WaveformTile({
+  tileLeft,
+  tileWidth,
+  trackHeight,
+  timelineWidth,
+  timelineDuration,
+  waveform,
+  color,
+}) {
+  const canvasRef = useRef(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (
+      !canvas ||
+      tileWidth <= 0 ||
+      waveform.status !== "ready" ||
+      !waveform.peaks?.length ||
+      timelineWidth <= 0 ||
+      timelineDuration <= 0
+    ) {
+      return;
+    }
+    const pixelRatio = window.devicePixelRatio || 1;
+    canvas.width = Math.round(tileWidth * pixelRatio);
+    canvas.height = Math.round(trackHeight * pixelRatio);
+    canvas.style.width = `${tileWidth}px`;
+    canvas.style.height = `${trackHeight}px`;
+
+    const context = canvas.getContext("2d");
+    if (!context) return;
+    context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+    context.clearRect(0, 0, tileWidth, trackHeight);
+
+    const center = trackHeight / 2;
+    const sampleStep =
+      (waveform.duration || timelineDuration) / waveform.peaks.length;
+    context.strokeStyle = color;
+    context.lineWidth = 1;
+    context.beginPath();
+
+    for (let x = 0; x < tileWidth; x += 2) {
+      const globalX = tileLeft + x;
+      const time = (globalX / timelineWidth) * timelineDuration;
+      const sampleIndex = Math.floor(time / sampleStep);
+      const peak = waveform.peaks[sampleIndex] || 0;
+      const amplitude = Math.max(1, peak * (trackHeight * 0.44));
+      context.moveTo(x + 0.5, center - amplitude);
+      context.lineTo(x + 0.5, center + amplitude);
+    }
+    context.stroke();
+  }, [
+    tileLeft,
+    tileWidth,
+    trackHeight,
+    timelineWidth,
+    timelineDuration,
+    waveform,
+    color,
+  ]);
+
+  return (
+    <canvas
+      ref={canvasRef}
+      className="pointer-events-none absolute top-0 block"
+      style={{
+        left: `${tileLeft}px`,
+        width: `${tileWidth}px`,
+        height: `${trackHeight}px`,
+      }}
+    />
+  );
+}
+
+function WaveformCanvasLayer({
+  waveform,
+  timelineWidth,
+  timelineDuration,
+  trackHeight,
+  color,
+}) {
+  if (
+    waveform?.status !== "ready" ||
+    !waveform.peaks?.length ||
+    timelineWidth <= 0 ||
+    timelineDuration <= 0
+  ) {
+    return null;
+  }
+
+  const tileCount = Math.ceil(timelineWidth / WAVEFORM_TILE_WIDTH);
+  const tiles = [];
+  for (let i = 0; i < tileCount; i += 1) {
+    const tileLeft = i * WAVEFORM_TILE_WIDTH;
+    const tileWidth = Math.min(WAVEFORM_TILE_WIDTH, timelineWidth - tileLeft);
+    tiles.push(
+      <WaveformTile
+        key={i}
+        tileLeft={tileLeft}
+        tileWidth={tileWidth}
+        trackHeight={trackHeight}
+        timelineWidth={timelineWidth}
+        timelineDuration={timelineDuration}
+        waveform={waveform}
+        color={color}
+      />,
+    );
+  }
+  return <>{tiles}</>;
+}
+
 function getWaveformPeaks(audioBuffer) {
   const peakCount = Math.max(
     1,
@@ -67,10 +180,6 @@ export default function SubtitleTimelineTrack(props) {
     showTtsMasterTimeline,
   } = { ...context, ...props };
 
-  const vocalsCanvasRef = useRef(null);
-  const ttsMasterCanvasRef = useRef(null);
-  const [scrollLeft, setScrollLeft] = useState(0);
-  const [viewportWidth, setViewportWidth] = useState(0);
   const [waveform, setWaveform] = useState({ status: "missing" });
   const [ttsWaveform, setTtsWaveform] = useState({ status: "missing" });
   const [draggingClip, setDraggingClip] = useState(null);
@@ -165,70 +274,6 @@ export default function SubtitleTimelineTrack(props) {
   }, [vocalsUrl, job?.id, job?.separation?.vocalsSizeBytes]);
 
   useEffect(() => {
-    const container = subtitleTimelineScrollRef?.current;
-    if (!container) return;
-    const update = () => {
-      setScrollLeft(container.scrollLeft);
-      setViewportWidth(container.clientWidth);
-    };
-    update();
-    container.addEventListener("scroll", update, { passive: true });
-    const observer = new ResizeObserver(update);
-    observer.observe(container);
-    return () => {
-      container.removeEventListener("scroll", update);
-      observer.disconnect();
-    };
-  }, [subtitleTimelineScrollRef]);
-
-  useEffect(() => {
-    const canvas = vocalsCanvasRef.current;
-    if (!canvas || viewportWidth <= 0) return;
-    const pixelRatio = window.devicePixelRatio || 1;
-    const trackHeight = 28;
-    canvas.width = Math.round(viewportWidth * pixelRatio);
-    canvas.height = Math.round(trackHeight * pixelRatio);
-    canvas.style.width = `${viewportWidth}px`;
-    canvas.style.height = `${trackHeight}px`;
-    const context = canvas.getContext("2d");
-    if (!context) return;
-    context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
-    context.clearRect(0, 0, viewportWidth, trackHeight);
-
-    if (
-      waveform.status !== "ready" ||
-      !waveform.peaks?.length ||
-      subtitleTimelineWidth <= 0 ||
-      subtitleTimelineDuration <= 0
-    ) {
-      return;
-    }
-
-    const center = trackHeight / 2;
-    const sampleStep =
-      (waveform.duration || subtitleTimelineDuration) / waveform.peaks.length;
-    context.strokeStyle = "rgba(167, 139, 250, 0.75)";
-    context.lineWidth = 1;
-    context.beginPath();
-    for (let x = 0; x < viewportWidth; x += 2) {
-      const time =
-        ((scrollLeft + x) / subtitleTimelineWidth) * subtitleTimelineDuration;
-      const sampleIndex = Math.floor(time / sampleStep);
-      const peak = waveform.peaks[sampleIndex] || 0;
-      const amplitude = Math.max(1, peak * (trackHeight * 0.44));
-      context.moveTo(x + 0.5, center - amplitude);
-      context.lineTo(x + 0.5, center + amplitude);
-    }
-    context.stroke();
-  }, [
-    scrollLeft,
-    viewportWidth,
-    waveform,
-    subtitleTimelineDuration,
-    subtitleTimelineWidth,
-  ]);
-
-  useEffect(() => {
     if (!ttsMasterUrl || !job?.id || !showTtsMasterTimeline) {
       setTtsWaveform({ status: "missing" });
       return;
@@ -302,53 +347,6 @@ export default function SubtitleTimelineTrack(props) {
 
   const TTS_TRACK_HEIGHT = 44;
 
-  useEffect(() => {
-    const canvas = ttsMasterCanvasRef.current;
-    if (!canvas || viewportWidth <= 0 || !showTtsMasterTimeline) return;
-    const pixelRatio = window.devicePixelRatio || 1;
-    canvas.width = Math.round(viewportWidth * pixelRatio);
-    canvas.height = Math.round(TTS_TRACK_HEIGHT * pixelRatio);
-    canvas.style.width = `${viewportWidth}px`;
-    canvas.style.height = `${TTS_TRACK_HEIGHT}px`;
-    const context = canvas.getContext("2d");
-    if (!context) return;
-    context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
-    context.clearRect(0, 0, viewportWidth, TTS_TRACK_HEIGHT);
-
-    if (
-      ttsWaveform.status !== "ready" ||
-      !ttsWaveform.peaks?.length ||
-      subtitleTimelineWidth <= 0 ||
-      subtitleTimelineDuration <= 0
-    ) {
-      return;
-    }
-
-    const center = TTS_TRACK_HEIGHT / 2;
-    const sampleStep =
-      (ttsWaveform.duration || subtitleTimelineDuration) /
-      ttsWaveform.peaks.length;
-    context.strokeStyle = "rgba(103, 232, 249, 0.8)";
-    context.lineWidth = 1;
-    context.beginPath();
-    for (let x = 0; x < viewportWidth; x += 2) {
-      const time =
-        ((scrollLeft + x) / subtitleTimelineWidth) * subtitleTimelineDuration;
-      const sampleIndex = Math.floor(time / sampleStep);
-      const peak = ttsWaveform.peaks[sampleIndex] || 0;
-      const amplitude = Math.max(1, peak * (TTS_TRACK_HEIGHT * 0.44));
-      context.moveTo(x + 0.5, center - amplitude);
-      context.lineTo(x + 0.5, center + amplitude);
-    }
-    context.stroke();
-  }, [
-    scrollLeft,
-    viewportWidth,
-    ttsWaveform,
-    subtitleTimelineDuration,
-    subtitleTimelineWidth,
-    showTtsMasterTimeline,
-  ]);
   return (
     <div
       ref={subtitleTimelineScrollRef}
@@ -429,13 +427,13 @@ export default function SubtitleTimelineTrack(props) {
             }}
             title="Voice đã tách"
           >
-            {waveform.status === "ready" && (
-              <canvas
-                ref={vocalsCanvasRef}
-                className="sticky left-0 top-0 block"
-                style={{ height: "28px" }}
-              />
-            )}
+            <WaveformCanvasLayer
+              waveform={waveform}
+              timelineWidth={subtitleTimelineWidth}
+              timelineDuration={subtitleTimelineDuration}
+              trackHeight={28}
+              color="rgba(167, 139, 250, 0.75)"
+            />
             {waveform.status === "loading" && (
               <span className="sticky left-3 top-1 text-[9px] text-violet-300/60">
                 Đang tải waveform Voice đã tách…
@@ -594,10 +592,12 @@ export default function SubtitleTimelineTrack(props) {
             />
 
             {/* Canvas waveform TTS Master */}
-            <canvas
-              ref={ttsMasterCanvasRef}
-              className="pointer-events-none sticky left-0 top-0 block"
-              style={{ height: `${TTS_TRACK_HEIGHT}px` }}
+            <WaveformCanvasLayer
+              waveform={ttsWaveform}
+              timelineWidth={subtitleTimelineWidth}
+              timelineDuration={subtitleTimelineDuration}
+              trackHeight={TTS_TRACK_HEIGHT}
+              color="rgba(103, 232, 249, 0.8)"
             />
 
             {/* Thông báo trạng thái nếu chưa sẵn sàng */}
