@@ -53,13 +53,6 @@ export default function SubtitleAudioSection(props) {
   return (
     <section className="space-y-3 rounded-xl border border-violet-500/25 bg-slate-950/70 p-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h4 className="text-xs font-semibold text-white">Âm thanh phụ đề</h4>
-          <p className="mt-1 text-[10px] text-slate-400">
-            Sửa chữ không tự tạo lại audio; tạo lại Master sẽ dùng audio hiện
-            có.
-          </p>
-        </div>
         <div className="flex items-center gap-2">
           <span className="text-[10px] text-slate-400">
             {activeSubtitleAudioFilterCount
@@ -72,7 +65,7 @@ export default function SubtitleAudioSection(props) {
               aria-expanded={subtitleAudioFilterOpen}
               aria-haspopup="dialog"
               onClick={() => setSubtitleAudioFilterOpen((open) => !open)}
-              className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-2 text-xs font-semibold ${activeSubtitleAudioFilterCount ? "border-cyan-400/50 bg-cyan-950/30 text-cyan-100" : "border-slate-700 text-slate-300 hover:bg-slate-800"}`}
+              className={`inline-flex items-center gap-1.5 rounded-lg border p-1 text-xs font-semibold ${activeSubtitleAudioFilterCount ? "border-cyan-400/50 bg-cyan-950/30 text-cyan-100" : "border-slate-700 text-slate-300 hover:bg-slate-800"}`}
             >
               <Filter className="h-3.5 w-3.5" />
               Lọc
@@ -204,14 +197,14 @@ export default function SubtitleAudioSection(props) {
               isMasterGenerating ||
               isMediaProcessing
             }
-            className="inline-flex items-center gap-2 rounded-lg bg-violet-400 px-3 py-2 text-xs font-bold text-slate-950 hover:bg-violet-300 disabled:cursor-not-allowed disabled:opacity-40"
+            className="inline-flex items-center gap-2 rounded-lg bg-violet-400 p-1 text-xs font-bold text-slate-950 hover:bg-violet-300 disabled:cursor-not-allowed disabled:opacity-40"
           >
             {subtitleAudioMasterBusy ? (
               <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
             ) : (
               <RefreshCw className="h-3.5 w-3.5" />
             )}
-            Tạo lại Master
+            Master
           </button>
         </div>
       </div>
@@ -223,7 +216,7 @@ export default function SubtitleAudioSection(props) {
           {subtitleAudioError || "Đang đồng bộ danh sách câu phụ đề…"}
         </p>
       )}
-      <CurrentSubtitlePanel />
+      {/* <CurrentSubtitlePanel /> */}
       <SubtitleAudioList />
     </section>
   );

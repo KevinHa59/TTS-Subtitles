@@ -17,7 +17,7 @@ export default function OverlaySettingsPanel() {
         },
         {
           id: "text",
-          label: "Phụ đề Overlay",
+          label: "Text",
           content: <SubtitleOverlayTab />,
         },
         {
@@ -27,7 +27,7 @@ export default function OverlaySettingsPanel() {
         },
         {
           id: "subtitle-audio",
-          label: "Âm thanh phụ đề",
+          label: "Phụ đề",
           content: <SubtitleAudioSection />,
         },
       ]}

@@ -194,9 +194,7 @@ export default function SubtitleAudioList(props) {
                 {/* Các nút tác vụ */}
                 <button
                   type="button"
-                  onClick={() =>
-                    regenerateSubtitleAudioWithDraft(subtitleItem)
-                  }
+                  onClick={() => regenerateSubtitleAudioWithDraft(subtitleItem)}
                   disabled={
                     !selectedVoice ||
                     subtitleAudioSyncing ||
@@ -217,9 +215,7 @@ export default function SubtitleAudioList(props) {
                 </button>
                 <button
                   type="button"
-                  onClick={() =>
-                    combineSubtitleAudioCueAbove(item.id, "merge")
-                  }
+                  onClick={() => combineSubtitleAudioCueAbove(item.id, "merge")}
                   disabled={combineDisabled}
                   className="inline-flex h-7 items-center rounded-md border border-amber-500/30 px-2 text-[10px] font-semibold text-amber-200 hover:bg-amber-950/30 disabled:cursor-not-allowed disabled:opacity-40"
                   title="Gộp với câu phía trên, giữ nội dung câu phía trên và mở rộng thời gian"
@@ -228,9 +224,7 @@ export default function SubtitleAudioList(props) {
                 </button>
                 <button
                   type="button"
-                  onClick={() =>
-                    combineSubtitleAudioCueAbove(item.id, "join")
-                  }
+                  onClick={() => combineSubtitleAudioCueAbove(item.id, "join")}
                   disabled={combineDisabled}
                   className="inline-flex h-7 items-center rounded-md border border-cyan-500/30 px-2 text-[10px] font-semibold text-cyan-200 hover:bg-cyan-950/30 disabled:cursor-not-allowed disabled:opacity-40"
                   title="Nối nội dung với câu phía trên và mở rộng thời gian"
@@ -251,7 +245,6 @@ export default function SubtitleAudioList(props) {
                   title={`Xóa câu ${item.index} và audio`}
                 >
                   <Trash2 className="h-3 w-3" />
-                  Xóa
                 </button>
               </div>
             </div>
