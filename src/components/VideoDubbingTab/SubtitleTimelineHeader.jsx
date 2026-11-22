@@ -121,30 +121,6 @@ export default function SubtitleTimelineHeader(props) {
         >
           {endSceneEnabled ? "Bỏ End Scene" : "Add End Scene"}
         </button>
-        <button
-          type="button"
-          onClick={fitSubtitleTimelineToPanel}
-          title="Fit timeline vừa panel và cuộn về đầu (Shift+Z)"
-          aria-label="Fit timeline vừa panel và cuộn về đầu"
-          className="rounded-md border border-slate-700 px-2 py-1 text-slate-300 hover:border-cyan-500/50"
-        >
-          Fit
-        </button>
-        <label className="flex items-center gap-2">
-          Zoom
-          <input
-            type="range"
-            min={subtitleTimelineMinZoom}
-            max={180}
-            step="any"
-            value={subtitleTimelineZoom}
-            onChange={(event) =>
-              changeSubtitleTimelineZoom(Number(event.target.value))
-            }
-            className="w-20 accent-cyan-400"
-            aria-label="Zoom timeline phụ đề"
-          />
-        </label>
         <div className="flex items-center gap-1.5 border-l border-slate-800 pl-2">
           <label
             className={`inline-flex items-center gap-1.5 rounded-md border border-slate-700/80 px-2 py-1 select-none transition-colors ${

@@ -116,7 +116,7 @@ export default function TimelineWorkspace(props) {
         </button>
       </div> */}
       {timelineWorkspaceTab === "subtitle" && <SubtitleTimelineSection />}
-      {/* {timelineWorkspaceTab === "audio" && job && (
+      {timelineWorkspaceTab === "audio" && job && (
         <VideoDubbingAudioTimeline
           jobId={job.id}
           duration={job.metadata?.durationSeconds || 1}
@@ -148,7 +148,7 @@ export default function TimelineWorkspace(props) {
             })
           }
         />
-      )} */}
+      )}
     </div>
   );
 }
