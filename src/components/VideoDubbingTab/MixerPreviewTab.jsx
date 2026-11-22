@@ -28,7 +28,7 @@ export default function MixerPreviewTab(props) {
 
         {/* Right Column - Fixed 400px */}
         <div className="relative w-[400px] shrink-0 overflow-hidden">
-          <div className="absolute inset-0 overflow-hidden">
+          <div className="absolute inset-0 overflow-hidden flex flex-col">
             <OverlaySettingsPanel />
           </div>
         </div>

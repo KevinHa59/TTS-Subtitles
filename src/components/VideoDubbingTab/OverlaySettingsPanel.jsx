@@ -8,6 +8,7 @@ import { useVideoDubbing } from "./VideoDubbingContext";
 export default function OverlaySettingsPanel() {
   return (
     <Tabs
+      className="h-full flex flex-col min-h-0"
       defaultTab="logotitle"
       tabs={[
         {
@@ -29,6 +30,7 @@ export default function OverlaySettingsPanel() {
           id: "subtitle-audio",
           label: "Phụ đề",
           content: <SubtitleAudioSection />,
+          contentClassName: "h-full flex flex-col min-h-0 overflow-hidden",
         },
       ]}
     />

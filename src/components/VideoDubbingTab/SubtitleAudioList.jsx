@@ -51,10 +51,11 @@ export default function SubtitleAudioList(props) {
   return (
     <div
       ref={containerRef}
-      className="max-h-[70vh] overflow-y-auto rounded-lg border border-slate-800 bg-slate-950/40 divide-y divide-slate-800/80"
+      className="flex-1 min-h-0 overflow-y-auto rounded-lg border border-slate-800 bg-slate-950/40 divide-y divide-slate-800/80"
     >
       {filteredSubtitleAudioInput.length ? (
-        filteredSubtitleAudioInput.map((item) => {
+        <>
+          {filteredSubtitleAudioInput.map((item) => {
           const isActive = activeSubtitleAudioItem?.id === item.id;
           const audio = subtitleAudioItems.find(
             (entry) => entry.id === item.id,
@@ -249,7 +250,9 @@ export default function SubtitleAudioList(props) {
               </div>
             </div>
           );
-        })
+        })}
+        <div className="h-10 shrink-0 pointer-events-none" />
+      </>
       ) : (
         <div className="px-4 py-8 text-center text-xs text-slate-500">
           {subtitleAudioInput.length

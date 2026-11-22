@@ -51,8 +51,8 @@ export default function SubtitleAudioSection(props) {
     subtitleAudioTimingStepMs = 100,
   } = { ...context, ...props };
   return (
-    <section className="space-y-3 rounded-xl border border-violet-500/25 bg-slate-950/70 p-3">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+    <section className="h-full flex flex-col min-h-0 space-y-2 rounded-xl border border-violet-500/25 bg-slate-950/70 p-2.5">
+      <div className="shrink-0 flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <span className="text-[10px] text-slate-400">
             {activeSubtitleAudioFilterCount
@@ -79,7 +79,7 @@ export default function SubtitleAudioSection(props) {
               <div
                 role="dialog"
                 aria-label="Lọc danh sách phụ đề"
-                className="absolute left-0 top-full z-30 mt-2 w-[min(22rem,calc(100vw-2rem))] space-y-3 rounded-xl border border-slate-700 bg-slate-900 p-3 shadow-2xl"
+                className="absolute right-0 top-full z-30 mt-2 w-[min(22rem,calc(100vw-2rem))] space-y-3 rounded-xl border border-slate-700 bg-slate-900 p-3 shadow-2xl"
               >
                 <div className="flex items-center justify-between gap-2">
                   <h5 className="text-xs font-semibold text-white">
@@ -211,7 +211,7 @@ export default function SubtitleAudioSection(props) {
       {(subtitleAudioError || subtitleAudioSyncing) && (
         <p
           role={subtitleAudioError ? "alert" : "status"}
-          className={`rounded-lg border px-3 py-2 text-[11px] ${subtitleAudioError ? "border-rose-500/30 bg-rose-950/30 text-rose-200" : "border-slate-700 bg-slate-900 text-slate-400"}`}
+          className={`shrink-0 rounded-lg border px-3 py-1.5 text-[11px] ${subtitleAudioError ? "border-rose-500/30 bg-rose-950/30 text-rose-200" : "border-slate-700 bg-slate-900 text-slate-400"}`}
         >
           {subtitleAudioError || "Đang đồng bộ danh sách câu phụ đề…"}
         </p>
