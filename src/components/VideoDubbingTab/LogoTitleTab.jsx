@@ -7,30 +7,30 @@ import { useVideoDubbing } from "./VideoDubbingContext";
 export default function LogoTitleTab(props) {
   const context = useVideoDubbing();
   const {
-  createTitleOverlay,
-  isMediaProcessing,
-  job,
-  logoEnabled,
-  logoInputRef,
-  logoPaddingPx,
-  logoPosition,
-  logoUploading,
-  logoWidthPercent,
-  selectedTextOverlay,
-  setLogoEnabled,
-  setLogoPaddingPx,
-  setLogoPosition,
-  setLogoWidthPercent,
-  setSelectedTextOverlay,
-  setTextOverlays,
-  subtitleFontOptions,
-  titleOverlay,
-  titleOverlayIndex,
-  updateSelectedTextOverlay,
-  uploadOverlayLogo,
-} = { ...context, ...props };
+    createTitleOverlay,
+    isMediaProcessing,
+    job,
+    logoEnabled,
+    logoInputRef,
+    logoPaddingPx,
+    logoPosition,
+    logoUploading,
+    logoWidthPercent,
+    selectedTextOverlay,
+    setLogoEnabled,
+    setLogoPaddingPx,
+    setLogoPosition,
+    setLogoWidthPercent,
+    setSelectedTextOverlay,
+    setTextOverlays,
+    subtitleFontOptions,
+    titleOverlay,
+    titleOverlayIndex,
+    updateSelectedTextOverlay,
+    uploadOverlayLogo,
+  } = { ...context, ...props };
   return (
-    <div className="space-y-3">
+    <div className="space-y-3 p-2">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <label className="flex items-center gap-2 text-sm font-semibold text-slate-100">
           <input

@@ -7,32 +7,32 @@ import { useVideoDubbing } from "./VideoDubbingContext";
 export default function SubtitleOverlayTab(props) {
   const context = useVideoDubbing();
   const {
-  flushSubtitleMarginSave,
-  job,
-  scheduleSubtitleMarginSave,
-  setSubtitleBackgroundColor,
-  setSubtitleBackgroundImage,
-  setSubtitleBackgroundMode,
-  setSubtitleBackgroundPickerOpen,
-  setSubtitleMarginPx,
-  setSubtitlePaddingPx,
-  setSubtitlePosition,
-  setSubtitlesEnabled,
-  srt,
-  subtitleBackgroundColor,
-  subtitleBackgroundImage,
-  subtitleBackgroundMode,
-  subtitleBackgrounds,
-  subtitleFontOptions,
-  subtitleMarginPx,
-  subtitlePaddingPx,
-  subtitlePosition,
-  subtitleTextStyleValue,
-  subtitlesEnabled,
-  updateSubtitleTextStyle,
-} = { ...context, ...props };
+    flushSubtitleMarginSave,
+    job,
+    scheduleSubtitleMarginSave,
+    setSubtitleBackgroundColor,
+    setSubtitleBackgroundImage,
+    setSubtitleBackgroundMode,
+    setSubtitleBackgroundPickerOpen,
+    setSubtitleMarginPx,
+    setSubtitlePaddingPx,
+    setSubtitlePosition,
+    setSubtitlesEnabled,
+    srt,
+    subtitleBackgroundColor,
+    subtitleBackgroundImage,
+    subtitleBackgroundMode,
+    subtitleBackgrounds,
+    subtitleFontOptions,
+    subtitleMarginPx,
+    subtitlePaddingPx,
+    subtitlePosition,
+    subtitleTextStyleValue,
+    subtitlesEnabled,
+    updateSubtitleTextStyle,
+  } = { ...context, ...props };
   return (
-    <div className="space-y-3 rounded-xl">
+    <div className="space-y-3 rounded-xl p-2">
       <label className="flex items-center gap-2 text-sm font-semibold text-slate-100">
         <input
           type="checkbox"

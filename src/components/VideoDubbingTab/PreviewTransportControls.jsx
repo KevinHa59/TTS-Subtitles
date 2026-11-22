@@ -98,7 +98,7 @@ export default function PreviewTransportControls(props) {
           previewSubtitleCues[selectedSubtitleCue] && (
             <div className="flex flex-1 min-w-0 items-center gap-2 rounded-lg">
               <label className="flex-1 min-w-0 space-y-1 text-[10px] text-slate-400">
-                #{selectedSubtitleCue + 1}
+                {/* #{selectedSubtitleCue + 1} */}
                 <textarea
                   value={previewSubtitleCues[selectedSubtitleCue].text}
                   onChange={(event) =>
