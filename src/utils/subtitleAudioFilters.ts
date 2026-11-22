@@ -1,14 +1,25 @@
 export interface SubtitleAudioFilterOptions {
   maxCharacterCount?: number;
   specialCharactersOnly?: boolean;
+  nonAlphabetOnly?: boolean;
   similarAdjacent?: boolean;
   similarityThreshold?: number;
 }
 
 function normalizeForSimilarity(text: string): string[] {
   return Array.from(
-    text.normalize("NFKC").toLocaleLowerCase().replace(/[^\p{L}\p{N}]/gu, ""),
+    text
+      .normalize("NFKC")
+      .toLocaleLowerCase()
+      .replace(/[^\p{L}\p{N}]/gu, ""),
   );
+}
+
+function containsNonAlphabet(text: string): boolean {
+  // Regex kiểm tra các ký tự không thuộc bảng chữ cái Latin cơ bản/mở rộng thông thường,
+  // bao gồm các hệ thống chữ tượng hình/âm tiết như Trung, Nhật, Hàn (CJK), v.v.
+  // return /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff66-\uff9f]/.test(text);
+  return /(?!\p{Script=Latin})\p{L}/u.test(text);
 }
 
 function getTextSimilarity(firstText: string, secondText: string): number {
@@ -22,7 +33,10 @@ function getTextSimilarity(firstText: string, secondText: string): number {
     return 1 - lengthDifference / longestLength;
   }
 
-  let previousRow = Array.from({ length: second.length + 1 }, (_, index) => index);
+  let previousRow = Array.from(
+    { length: second.length + 1 },
+    (_, index) => index,
+  );
   for (let firstIndex = 1; firstIndex <= first.length; firstIndex += 1) {
     const currentRow = new Array<number>(second.length + 1);
     currentRow[0] = firstIndex;
@@ -41,13 +55,13 @@ function getTextSimilarity(firstText: string, secondText: string): number {
   return 1 - previousRow[second.length] / longestLength;
 }
 
-export function filterSubtitleAudioItems<T extends { id: string; text: string }>(
-  items: readonly T[],
-  options: SubtitleAudioFilterOptions,
-): T[] {
+export function filterSubtitleAudioItems<
+  T extends { id: string; text: string },
+>(items: readonly T[], options: SubtitleAudioFilterOptions): T[] {
   const hasActiveFilter =
     options.maxCharacterCount !== undefined ||
     options.specialCharactersOnly === true ||
+    options.nonAlphabetOnly === true ||
     options.similarAdjacent === true;
   if (!hasActiveFilter) return [...items];
 
@@ -76,6 +90,9 @@ export function filterSubtitleAudioItems<T extends { id: string; text: string }>
       item.text.trim().length > 0 &&
       !/[\p{L}\p{N}]/u.test(item.text)
     ) {
+      return true;
+    }
+    if (options.nonAlphabetOnly && containsNonAlphabet(item.text)) {
       return true;
     }
     return options.similarAdjacent === true && similarIds.has(item.id);

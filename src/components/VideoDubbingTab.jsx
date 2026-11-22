@@ -280,6 +280,10 @@ export default function VideoDubbingTab() {
     subtitleAudioSimilarFilterEnabled,
     setSubtitleAudioSimilarFilterEnabled,
   ] = useState(false);
+  const [
+    subtitleAudioNonAlphabetFilterEnabled,
+    setSubtitleAudioNonAlphabetFilterEnabled,
+  ] = useState(false);
   const subtitleAudioSyncRequestRef = useRef(0);
   const subtitleAudioKnownNonEmptyJobIdsRef = useRef(new Set());
   const subtitleAudioPlayerRef = useRef(null);
@@ -5393,6 +5397,7 @@ export default function VideoDubbingTab() {
   const activeSubtitleAudioFilterCount =
     Number(subtitleAudioShortFilterEnabled) +
     Number(subtitleAudioSpecialCharactersFilterEnabled) +
+    Number(subtitleAudioNonAlphabetFilterEnabled) +
     Number(subtitleAudioSimilarFilterEnabled);
   const filteredSubtitleAudioInput = filterSubtitleAudioItems(
     subtitleAudioInput,
@@ -5401,6 +5406,7 @@ export default function VideoDubbingTab() {
         ? { maxCharacterCount: subtitleAudioMaxCharacterCount }
         : {}),
       specialCharactersOnly: subtitleAudioSpecialCharactersFilterEnabled,
+      nonAlphabetOnly: subtitleAudioNonAlphabetFilterEnabled,
       similarAdjacent: subtitleAudioSimilarFilterEnabled,
       similarityThreshold: 0.8,
     },
@@ -7187,6 +7193,7 @@ export default function VideoDubbingTab() {
     setSubtitleAudioDrafts,
     setSubtitleAudioFilterOpen,
     setSubtitleAudioMaxCharacterCount,
+    setSubtitleAudioNonAlphabetFilterEnabled,
     setSubtitleAudioShortFilterEnabled,
     setSubtitleAudioSimilarFilterEnabled,
     setSubtitleAudioSpecialCharactersFilterEnabled,
@@ -7218,6 +7225,7 @@ export default function VideoDubbingTab() {
     subtitleAudioItems,
     subtitleAudioMasterBusy,
     subtitleAudioMaxCharacterCount,
+    subtitleAudioNonAlphabetFilterEnabled,
     subtitleAudioPlayingId,
     subtitleAudioRegeneratingId,
     subtitleAudioShortFilterEnabled,

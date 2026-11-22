@@ -29,6 +29,7 @@ export default function SubtitleAudioSection(props) {
     setSubtitleAudioDrafts,
     setSubtitleAudioFilterOpen = () => {},
     setSubtitleAudioMaxCharacterCount = () => {},
+    setSubtitleAudioNonAlphabetFilterEnabled = () => {},
     setSubtitleAudioShortFilterEnabled = () => {},
     setSubtitleAudioSimilarFilterEnabled = () => {},
     setSubtitleAudioSpecialCharactersFilterEnabled = () => {},
@@ -40,6 +41,7 @@ export default function SubtitleAudioSection(props) {
     subtitleAudioItems = [],
     subtitleAudioMasterBusy,
     subtitleAudioMaxCharacterCount = 5,
+    subtitleAudioNonAlphabetFilterEnabled = false,
     subtitleAudioPlayingId,
     subtitleAudioRegeneratingId,
     subtitleAudioShortFilterEnabled = false,
@@ -84,7 +86,7 @@ export default function SubtitleAudioSection(props) {
               <div
                 role="dialog"
                 aria-label="Lọc danh sách phụ đề"
-                className="absolute right-0 top-full z-30 mt-2 w-[min(22rem,calc(100vw-2rem))] space-y-3 rounded-xl border border-slate-700 bg-slate-900 p-3 shadow-2xl"
+                className="absolute left-0 top-full z-30 mt-2 w-[min(22rem,calc(100vw-2rem))] space-y-3 rounded-xl border border-slate-700 bg-slate-900 p-3 shadow-2xl"
               >
                 <div className="flex items-center justify-between gap-2">
                   <h5 className="text-xs font-semibold text-white">
@@ -152,6 +154,19 @@ export default function SubtitleAudioSection(props) {
                 <label className="flex items-center gap-2 text-xs text-slate-200">
                   <input
                     type="checkbox"
+                    checked={subtitleAudioNonAlphabetFilterEnabled}
+                    onChange={(event) =>
+                      setSubtitleAudioNonAlphabetFilterEnabled(
+                        event.target.checked,
+                      )
+                    }
+                    className="accent-cyan-400"
+                  />
+                  Câu chứa ngôn ngữ khác Alphabet
+                </label>
+                <label className="flex items-center gap-2 text-xs text-slate-200">
+                  <input
+                    type="checkbox"
                     checked={subtitleAudioSimilarFilterEnabled}
                     onChange={(event) =>
                       setSubtitleAudioSimilarFilterEnabled(event.target.checked)
@@ -166,6 +181,7 @@ export default function SubtitleAudioSection(props) {
                     onClick={() => {
                       setSubtitleAudioShortFilterEnabled(false);
                       setSubtitleAudioSpecialCharactersFilterEnabled(false);
+                      setSubtitleAudioNonAlphabetFilterEnabled(false);
                       setSubtitleAudioSimilarFilterEnabled(false);
                     }}
                     disabled={!activeSubtitleAudioFilterCount}

@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { LoaderCircle, Pause, Play, RefreshCw, Trash2 } from "lucide-react";
 
 import { useVideoDubbing } from "./VideoDubbingContext";
@@ -5,6 +6,7 @@ import { useVideoDubbing } from "./VideoDubbingContext";
 export default function SubtitleAudioList(props) {
   const context = useVideoDubbing();
   const {
+    activeSubtitleAudioItem,
     combineSubtitleAudioCueAbove,
     commitSubtitleAudioCueText,
     deleteSubtitleAudioCue,
@@ -25,10 +27,35 @@ export default function SubtitleAudioList(props) {
     subtitleAudioRegeneratingId,
     subtitleAudioSyncing,
   } = { ...context, ...props };
+
+  const containerRef = useRef(null);
+
+  useEffect(() => {
+    if (!activeSubtitleAudioItem?.id || !containerRef.current) return;
+    const container = containerRef.current;
+    const targetEl = container.querySelector(
+      `[data-cue-id="${activeSubtitleAudioItem.id}"]`,
+    );
+    if (targetEl) {
+      const containerRect = container.getBoundingClientRect();
+      const targetRect = targetEl.getBoundingClientRect();
+      const targetTop =
+        targetRect.top - containerRect.top + container.scrollTop;
+      container.scrollTo({
+        top: Math.max(0, targetTop),
+        behavior: "smooth",
+      });
+    }
+  }, [activeSubtitleAudioItem?.id]);
+
   return (
-    <div className="max-h-[70vh] overflow-y-auto rounded-lg border border-slate-800 bg-slate-950/40 divide-y divide-slate-800/80">
+    <div
+      ref={containerRef}
+      className="max-h-[70vh] overflow-y-auto rounded-lg border border-slate-800 bg-slate-950/40 divide-y divide-slate-800/80"
+    >
       {filteredSubtitleAudioInput.length ? (
         filteredSubtitleAudioInput.map((item) => {
+          const isActive = activeSubtitleAudioItem?.id === item.id;
           const audio = subtitleAudioItems.find(
             (entry) => entry.id === item.id,
           );
@@ -53,7 +80,12 @@ export default function SubtitleAudioList(props) {
           return (
             <div
               key={item.id}
-              className="p-2.5 space-y-2 hover:bg-slate-900/50 transition-colors"
+              data-cue-id={item.id}
+              className={`p-2.5 space-y-2 transition-colors ${
+                isActive
+                  ? "bg-cyan-950/40 border-l-2 border-cyan-400"
+                  : "hover:bg-slate-900/50"
+              }`}
             >
               {/* Dòng 1: # số câu và input text */}
               <div className="flex items-center gap-2 min-w-0">
@@ -61,7 +93,11 @@ export default function SubtitleAudioList(props) {
                   type="button"
                   onClick={() => seekSubtitleTimeline(item.startTime)}
                   title={`Tua preview đến câu ${item.index}`}
-                  className="shrink-0 h-8 min-w-[2.5rem] px-2 rounded-md font-mono text-xs font-bold text-slate-300 bg-slate-900 border border-slate-700/70 hover:bg-cyan-950/40 hover:text-cyan-300 hover:border-cyan-500/50 transition-colors"
+                  className={`shrink-0 h-8 min-w-[2.5rem] px-2 rounded-md font-mono text-xs font-bold transition-colors border ${
+                    isActive
+                      ? "bg-cyan-400 text-slate-950 border-cyan-300 shadow-sm shadow-cyan-500/20"
+                      : "text-slate-300 bg-slate-900 border-slate-700/70 hover:bg-cyan-950/40 hover:text-cyan-300 hover:border-cyan-500/50"
+                  }`}
                 >
                   #{item.index}
                 </button>
