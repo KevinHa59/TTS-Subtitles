@@ -60,11 +60,9 @@ export const LOCAL_MODEL_FILES: Record<string, string | string[]> = {
   "local:news-flash-tr52_1794223720081": "news-flash-tr52_1794223720081.onnx",
   "local:news-flash-tr56_1794327616307": "news-flash-tr56_1794327616307.onnx",
   "local:news-flash-tr57_1794394913177": "news-flash-tr57_1794394913177.onnx",
-  "local:kevinha-10_1794954036123": "kevinha-10_1794954036123.onnx",
-  "local:kevinha-15": "kevinha-15.onnx",
-  "local:kevinha-17": "kevinha-17.onnx",
   "local:kevinha_21": "kevinha_21.onnx",
   "local:kevinha_28": "kevinha_28.onnx",
+  "local:kevinha_38": "kevinha_38.onnx",
   [CSA_VOICE_MODEL_ID]: "vi_VN-csa-voice-piper-v3-medium.onnx",
 };
 
@@ -252,39 +250,6 @@ export const AVAILABLE_MODELS: VoiceDefinition[] = [
     recommended: false,
   },
   {
-    id: "local:kevinha-10_1794954036123",
-    modelId: "local:kevinha-10_1794954036123",
-    name: "Kevin Hà",
-    tag: "Nam · Miền Nam · Giọng tùy chỉnh (Offline)",
-    gender: "male",
-    description: "Giọng nam tùy chỉnh của Kevin Hà.",
-    sampleText:
-      "Ta là tông chủ Thanh Vân Tiên Tông, Phong Thanh Dương. Cẩn tuân tông chủ chi lệnh.",
-    recommended: false,
-  },
-  {
-    id: "local:kevinha-15",
-    modelId: "local:kevinha-15",
-    name: "Kevin Hà v15",
-    tag: "Nam · Miền Nam · Giọng tùy chỉnh (Offline)",
-    gender: "male",
-    description: "Giọng nam tùy chỉnh của Kevin Hà.",
-    sampleText:
-      "Ta là tông chủ Thanh Vân Tiên Tông, Phong Thanh Dương. Cẩn tuân tông chủ chi lệnh.",
-    recommended: false,
-  },
-  {
-    id: "local:kevinha-17",
-    modelId: "local:kevinha-17",
-    name: "Kevin Hà v17",
-    tag: "Nam · Miền Nam · Giọng tùy chỉnh (Offline)",
-    gender: "male",
-    description: "Giọng nam tùy chỉnh của Kevin Hà.",
-    sampleText:
-      "Ta là tông chủ Thanh Vân Tiên Tông, Phong Thanh Dương. Cẩn tuân tông chủ chi lệnh.",
-    recommended: false,
-  },
-  {
     id: "local:kevinha_21",
     modelId: "local:kevinha_21",
     name: "Kevin Hà v21",
@@ -299,6 +264,17 @@ export const AVAILABLE_MODELS: VoiceDefinition[] = [
     id: "local:kevinha_28",
     modelId: "local:kevinha_28",
     name: "Kevin Hà v28",
+    tag: "Nam · Miền Nam · Giọng tùy chỉnh (Offline)",
+    gender: "male",
+    description: "Giọng nam tùy chỉnh của Kevin Hà.",
+    sampleText:
+      "Ta là tông chủ Thanh Vân Tiên Tông, Phong Thanh Dương. Cẩn tuân tông chủ chi lệnh.",
+    recommended: false,
+  },
+  {
+    id: "local:kevinha_38",
+    modelId: "local:kevinha_38",
+    name: "Kevin Hà v38",
     tag: "Nam · Miền Nam · Giọng tùy chỉnh (Offline)",
     gender: "male",
     description: "Giọng nam tùy chỉnh của Kevin Hà.",
