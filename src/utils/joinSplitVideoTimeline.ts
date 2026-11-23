@@ -8,6 +8,8 @@ import type { JoinSplitVideoSegment } from "../types/joinSplitVideo";
 
 export interface KeyframeTimelineClip extends SnapTimelineClip {
   frameCount: number;
+  startFrame?: number;
+  endFrame?: number;
   keyframeTimes: readonly number[] | null;
 }
 
@@ -22,33 +24,38 @@ export function snapCutTimeToKeyframe(
   ) || (requestedTime === lastClip?.end ? lastClip : undefined);
   if (!clip || !clip.keyframeTimes?.length || clip.frameRate <= 0) return null;
 
+  const clipStartFrame = clip.startFrame ?? 1;
+  const clipEndFrame = clip.endFrame ?? clip.frameCount;
   const localTime = Math.max(0, Math.min(clip.end - clip.start, requestedTime - clip.start));
   const selectedFrame = Math.max(
-    1,
-    Math.min(clip.frameCount, Math.round(localTime * clip.frameRate) + 1),
+    clipStartFrame,
+    Math.min(clipEndFrame, Math.round(localTime * clip.frameRate) + clipStartFrame),
   );
   const keyframeFrames = clip.keyframeTimes
     .map((time) => Math.round(time * clip.frameRate) + 1)
-    .filter((frame) => frame >= 1 && frame <= clip.frameCount)
+    .filter((frame) => frame >= clipStartFrame && frame <= clipEndFrame)
     .sort((left, right) => left - right);
 
   if (edge === "start") {
     const keyframe = keyframeFrames.filter((frame) => frame <= selectedFrame).at(-1);
     if (keyframe === undefined) return null;
-    return clip.start + (keyframe - 1) / clip.frameRate;
+    return clip.start + (keyframe - clipStartFrame) / clip.frameRate;
   }
 
   const nextKeyframe = keyframeFrames.find((frame) => frame > selectedFrame);
   if (nextKeyframe === undefined) return clip.end;
-  return clip.start + (nextKeyframe - 2) / clip.frameRate;
+  return clip.start + (nextKeyframe - 1 - clipStartFrame) / clip.frameRate;
 }
 
 export interface JoinSplitTimelineClip {
+  clipId?: string;
   sourceId: string;
   start: number;
   end: number;
   frameRate: number;
   frameCount: number;
+  startFrame?: number;
+  endFrame?: number;
 }
 
 export function getJoinSplitTimelineSegments(
@@ -60,12 +67,14 @@ export function getJoinSplitTimelineSegments(
   const segments: JoinSplitVideoSegment[] = [];
   for (const clip of clips) {
     if (clip.end <= startTime || clip.start > endTime) continue;
+    const clipStartFrame = clip.startFrame ?? 1;
+    const clipEndFrame = clip.endFrame ?? clip.frameCount;
     const startFrame = startTime <= clip.start
-      ? 1
-      : Math.min(clip.frameCount, Math.floor((startTime - clip.start) * clip.frameRate + 1e-6) + 1);
+      ? clipStartFrame
+      : Math.min(clipEndFrame, clipStartFrame + Math.floor((startTime - clip.start) * clip.frameRate + 1e-6));
     const endFrame = endTime >= clip.end
-      ? clip.frameCount
-      : Math.min(clip.frameCount, Math.floor((endTime - clip.start) * clip.frameRate + 1e-6) + 1);
+      ? clipEndFrame
+      : Math.min(clipEndFrame, clipStartFrame + Math.floor((endTime - clip.start) * clip.frameRate + 1e-6));
     if (endFrame >= startFrame) segments.push({ sourceId: clip.sourceId, startFrame, endFrame });
   }
   return segments;
@@ -97,19 +106,22 @@ export function getJoinSplitTimelinePartitionSegments(
 
       const intersectionStart = Math.max(startTime, clip.start);
       const intersectionEnd = Math.min(endTime, clip.end);
-      const firstFrameIndex = Math.max(
+      const clipStartFrame = clip.startFrame ?? 1;
+      const clipEndFrame = clip.endFrame ?? clip.frameCount;
+      const clipAvailableFrames = clipEndFrame - clipStartFrame + 1;
+      const firstFrameOffset = Math.max(
         0,
         Math.ceil((intersectionStart - clip.start) * clip.frameRate - 1e-7),
       );
-      const endFrameExclusive = Math.min(
-        clip.frameCount,
+      const endFrameOffset = Math.min(
+        clipAvailableFrames,
         Math.ceil((intersectionEnd - clip.start) * clip.frameRate - 1e-7),
       );
-      if (endFrameExclusive > firstFrameIndex) {
+      if (endFrameOffset > firstFrameOffset) {
         segments.push({
           sourceId: clip.sourceId,
-          startFrame: firstFrameIndex + 1,
-          endFrame: endFrameExclusive,
+          startFrame: clipStartFrame + firstFrameOffset,
+          endFrame: clipStartFrame + endFrameOffset - 1,
         });
       }
     }
@@ -134,15 +146,24 @@ export function getJoinSplitRangeTimelineBounds(
   clips: JoinSplitTimelineClip[],
 ): { start: number; end: number } | null {
   const positions = segments.flatMap((segment) => {
-    const clip = clips.find((item) => item.sourceId === segment.sourceId);
-    if (!clip) return [];
-    return [{
-      start: clip.start + (segment.startFrame - 1) / clip.frameRate,
-      end: clip.start + segment.endFrame / clip.frameRate,
-    }];
+    const matchingClips = clips.filter((item) => item.sourceId === segment.sourceId);
+    if (!matchingClips.length) return [];
+    return matchingClips.flatMap((clip) => {
+      const clipStartFrame = clip.startFrame ?? 1;
+      const clipEndFrame = clip.endFrame ?? clip.frameCount;
+      const overlapStart = Math.max(segment.startFrame, clipStartFrame);
+      const overlapEnd = Math.min(segment.endFrame, clipEndFrame);
+      if (overlapEnd < overlapStart) return [];
+      return [{
+        start: clip.start + (overlapStart - clipStartFrame) / clip.frameRate,
+        end: clip.start + (overlapEnd - clipStartFrame + 1) / clip.frameRate,
+      }];
+    });
   });
   if (!positions.length) return null;
-  return { start: positions[0].start, end: positions[positions.length - 1].end };
+  const start = Math.min(...positions.map((p) => p.start));
+  const end = Math.max(...positions.map((p) => p.end));
+  return { start, end };
 }
 
 export function snapJoinSplitTimelineTime(

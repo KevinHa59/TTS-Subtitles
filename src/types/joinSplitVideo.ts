@@ -52,6 +52,13 @@ export interface JoinSplitVideoSegment {
   endFrame: number;
 }
 
+export interface JoinSplitTimelineClipItem {
+  id: string;
+  sourceId: string;
+  startFrame: number;
+  endFrame: number;
+}
+
 export interface JoinSplitVideoRangeStatus extends JoinSplitVideoRange {
   requiresEncoding: boolean;
   segmentCount: number;
