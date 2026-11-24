@@ -196,8 +196,12 @@ export function snapJoinSplitTimelineTime(
     if (nearestBoundary) return nearestBoundary.time;
   }
 
-  const clip = clips.find((candidate) => time >= candidate.start && time < candidate.end)
-    || clips[clips.length - 1];
+  const clip = clips.find((candidate) => time >= candidate.start && time < candidate.end);
+  if (!clip) {
+    // Thời gian đang nằm trong khoảng trống (gap)
+    const baseFps = clips[0]?.frameRate && clips[0].frameRate > 0 ? clips[0].frameRate : 30;
+    return Math.round(time * baseFps) / baseFps;
+  }
   if (!Number.isFinite(clip.frameRate) || clip.frameRate <= 0) return time;
   const localTime = Math.max(0, Math.min(clip.end - clip.start, time - clip.start));
   const frame = Math.round(localTime * clip.frameRate);

@@ -6,6 +6,7 @@ import {
   Film,
   FolderOpen,
   LoaderCircle,
+  Magnet,
   Minus,
   Pause,
   Play,
@@ -74,6 +75,7 @@ interface SavedWorkspace {
   selectedSourceIds: string[];
   timelineSourceIds: string[];
   timelineClipItems?: JoinSplitTimelineClipItem[];
+  magnetEnabled?: boolean;
   activeClipId?: string | null;
   activeSourceId: string | null;
   playhead: number;
@@ -138,6 +140,7 @@ export default function JoinSplitVideoPage() {
   const [selectedSourceIds, setSelectedSourceIds] = useState<string[]>([]);
   const [selectionRectangle, setSelectionRectangle] = useState<SelectionRectangle | null>(null);
   const [timelineClipItems, setTimelineClipItems] = useState<JoinSplitTimelineClipItem[]>([]);
+  const [magnetEnabled, setMagnetEnabled] = useState(true);
   const [activeClipId, setActiveClipId] = useState<string | null>(null);
   const [activeSourceId, setActiveSourceId] = useState<string | null>(null);
   const timelineSourceIds = useMemo(
@@ -210,6 +213,7 @@ export default function JoinSplitVideoPage() {
     initialEnd: number;
   } | null>(null);
   const playAfterSourceChangeRef = useRef(false);
+  const transitioningToGapRef = useRef(false);
 
   useEffect(() => {
     if (!previewRef.current) return;
@@ -281,6 +285,7 @@ export default function JoinSplitVideoPage() {
               sourceId: item.sourceId,
               startFrame,
               endFrame,
+              offsetSeconds: typeof item.offsetSeconds === "number" && Number.isFinite(item.offsetSeconds) ? Math.max(0, item.offsetSeconds) : undefined,
             });
           }
         } else if (Array.isArray(saved.timelineSourceIds)) {
@@ -296,6 +301,7 @@ export default function JoinSplitVideoPage() {
           }
         }
         setTimelineClipItems(restoredClipItems);
+        setMagnetEnabled(saved.magnetEnabled !== false);
         setActiveClipId(
           typeof saved.activeClipId === "string" && restoredClipItems.some((c) => c.id === saved.activeClipId)
             ? saved.activeClipId
@@ -366,6 +372,7 @@ export default function JoinSplitVideoPage() {
       selectedSourceIds,
       timelineSourceIds,
       timelineClipItems,
+      magnetEnabled,
       activeClipId,
       activeSourceId,
       playhead,
@@ -400,6 +407,7 @@ export default function JoinSplitVideoPage() {
     cutFromTime,
     cutToTime,
     joinQueuesAfterExport,
+    magnetEnabled,
     muted,
     playhead,
     preferKeyframeCuts,
@@ -424,7 +432,7 @@ export default function JoinSplitVideoPage() {
     [sources],
   );
   const timelineClips = useMemo(() => {
-    let offset = 0;
+    let prevEnd = 0;
     return timelineClipItems.flatMap((item) => {
       const source = sourceById.get(item.sourceId);
       if (!source) return [];
@@ -432,20 +440,24 @@ export default function JoinSplitVideoPage() {
       const endFrame = Math.max(startFrame, Math.min(source.frameCount, item.endFrame));
       const frameSpan = endFrame - startFrame + 1;
       const duration = frameSpan / source.frameRate;
+      const start = (magnetEnabled || typeof item.offsetSeconds !== "number")
+        ? prevEnd
+        : Math.max(prevEnd, item.offsetSeconds);
+      const end = start + duration;
+      prevEnd = end;
       const clip: TimelineClip = {
         clipId: item.id,
         sourceId: item.sourceId,
-        start: offset,
-        end: offset + duration,
+        start,
+        end,
         duration,
         startFrame,
         endFrame,
         source,
       };
-      offset += duration;
       return [clip];
     });
-  }, [sourceById, timelineClipItems]);
+  }, [magnetEnabled, sourceById, timelineClipItems]);
   const keyframeTimelineClips = useMemo(
     () => timelineClips.map((clip) => ({
       ...clip,
@@ -482,8 +494,7 @@ export default function JoinSplitVideoPage() {
 
   const activeClip = useMemo(() => {
     if (timelineClips.length > 0) {
-      const matchAtPlayhead = timelineClips.find((c) => playhead >= c.start && playhead < c.end)
-        || (playhead >= timelineDuration ? timelineClips[timelineClips.length - 1] : undefined);
+      const matchAtPlayhead = timelineClips.find((c) => playhead >= c.start && playhead < c.end);
       if (matchAtPlayhead) return matchAtPlayhead;
     }
     if (activeClipId) {
@@ -495,7 +506,12 @@ export default function JoinSplitVideoPage() {
       if (match) return match;
     }
     return timelineClips[0];
-  }, [activeClipId, activeSourceId, playhead, timelineClips, timelineDuration]);
+  }, [activeClipId, activeSourceId, playhead, timelineClips]);
+  const playheadClip = useMemo(
+    () => timelineClips.find((c) => playhead >= c.start && playhead < c.end),
+    [playhead, timelineClips],
+  );
+  const isInGap = timelineClips.length > 0 && !playheadClip;
   const localPlayhead = activeClip
     ? Math.max(0, Math.min(activeClip.duration, playhead - activeClip.start))
     : playhead;
@@ -694,7 +710,19 @@ export default function JoinSplitVideoPage() {
   const removeTimelineClip = (clipId: string) => {
     const clipIndex = timelineClipItems.findIndex((c) => c.id === clipId);
     if (clipIndex < 0) return;
+    const clipToDelete = timelineClips.find((c) => c.clipId === clipId);
     const nextClipItems = timelineClipItems.filter((c) => c.id !== clipId);
+    if (!magnetEnabled && clipToDelete) {
+      for (let i = clipIndex; i < nextClipItems.length; i++) {
+        const item = nextClipItems[i];
+        if (typeof item.offsetSeconds !== "number") {
+          const originalClip = timelineClips.find((c) => c.clipId === item.id);
+          if (originalClip) {
+            nextClipItems[i] = { ...item, offsetSeconds: originalClip.start };
+          }
+        }
+      }
+    }
     setTimelineClipItems(nextClipItems);
     if (nextClipItems.length === 0) {
       setActiveClipId(null);
@@ -711,6 +739,17 @@ export default function JoinSplitVideoPage() {
 
   const removeTimelineSource = (sourceId: string) => {
     const nextClipItems = timelineClipItems.filter((c) => c.sourceId !== sourceId);
+    if (!magnetEnabled) {
+      for (let i = 0; i < nextClipItems.length; i++) {
+        const item = nextClipItems[i];
+        if (typeof item.offsetSeconds !== "number") {
+          const originalClip = timelineClips.find((c) => c.clipId === item.id);
+          if (originalClip) {
+            nextClipItems[i] = { ...item, offsetSeconds: originalClip.start };
+          }
+        }
+      }
+    }
     setTimelineClipItems(nextClipItems);
     if (nextClipItems.length === 0) {
       setActiveClipId(null);
@@ -822,22 +861,26 @@ export default function JoinSplitVideoPage() {
   const seekGlobal = useCallback((requestedTime: number) => {
     if (!timelineClips.length) return;
     const time = snapPlayheadTime(requestedTime);
-    const clip = timelineClips.find((item) => time >= item.start && time < item.end)
-      || (time >= timelineDuration ? timelineClips[timelineClips.length - 1] : undefined);
-    if (!clip) return;
-    const localTime = Math.min(clip.duration, time - clip.start);
-    if (previewRef.current) {
-      try {
-        const sourceFrameTime = (clip.startFrame - 1) / clip.source.frameRate + localTime;
-        previewRef.current.currentTime = Math.max(0, sourceFrameTime);
-      } catch {
-        setError("Không thể tua tới frame đã chọn.");
+    const clip = timelineClips.find((item) => time >= item.start && time < item.end);
+    if (clip) {
+      const localTime = Math.min(clip.duration, time - clip.start);
+      if (previewRef.current) {
+        try {
+          const sourceFrameTime = (clip.startFrame - 1) / clip.source.frameRate + localTime;
+          previewRef.current.currentTime = Math.max(0, sourceFrameTime);
+        } catch {
+          setError("Không thể tua tới frame đã chọn.");
+        }
+      }
+      setActiveClipId(clip.clipId);
+      setActiveSourceId(clip.sourceId);
+    } else {
+      if (previewRef.current) {
+        previewRef.current.pause();
       }
     }
-    setActiveClipId(clip.clipId);
-    setActiveSourceId(clip.sourceId);
     setPlayhead(time);
-  }, [snapPlayheadTime, timelineClips, timelineDuration]);
+  }, [snapPlayheadTime, timelineClips]);
 
   const seekFrame = useCallback((frame: number) => {
     if (!selectedSource || !activeClip) return;
@@ -905,12 +948,15 @@ export default function JoinSplitVideoPage() {
       sourceId: targetClip.sourceId,
       startFrame: targetClip.startFrame,
       endFrame: splitFrame,
+      offsetSeconds: !magnetEnabled ? targetClip.start : undefined,
     };
+    const splitOffset = (splitFrame - targetClip.startFrame + 1) / targetClip.source.frameRate;
     const secondPiece: JoinSplitTimelineClipItem = {
       id: crypto.randomUUID(),
       sourceId: targetClip.sourceId,
       startFrame: splitFrame + 1,
       endFrame: targetClip.endFrame,
+      offsetSeconds: !magnetEnabled ? targetClip.start + splitOffset : undefined,
     };
     const nextClips = [...timelineClipItems];
     nextClips.splice(clipIndex, 1, firstPiece, secondPiece);
@@ -1064,18 +1110,42 @@ export default function JoinSplitVideoPage() {
   };
 
   const togglePlayback = async () => {
-    const video = previewRef.current;
-    if (!video || !selectedSource) return;
-    if (video.paused) {
-      try {
-        await video.play();
+    if (!timelineClips.length && !selectedSource) return;
+    if (isPlaying) {
+      if (previewRef.current && !previewRef.current.paused) {
+        previewRef.current.pause();
+      }
+      setIsPlaying(false);
+      return;
+    }
+
+    if (playhead >= timelineDuration - 1e-4) {
+      setPlayhead(0);
+      seekGlobal(0);
+    }
+
+    const currentClip = timelineClips.find((c) => playhead >= c.start && playhead < c.end);
+    if (currentClip) {
+      const video = previewRef.current;
+      if (video) {
+        try {
+          const localTime = Math.max(0, playhead - currentClip.start);
+          const targetSourceTime = (currentClip.startFrame - 1) / currentClip.source.frameRate + localTime;
+          video.currentTime = targetSourceTime;
+          await video.play();
+          setIsPlaying(true);
+        } catch (playError) {
+          setError(playError instanceof Error ? playError.message : "Không thể phát video.");
+        }
+      } else {
         setIsPlaying(true);
-      } catch (playError) {
-        setError(playError instanceof Error ? playError.message : "Không thể phát video.");
       }
     } else {
-      video.pause();
-      setIsPlaying(false);
+      // Đang ở trong khoảng trống (gap)
+      if (previewRef.current && !previewRef.current.paused) {
+        previewRef.current.pause();
+      }
+      setIsPlaying(true);
     }
   };
 
@@ -1418,21 +1488,54 @@ export default function JoinSplitVideoPage() {
 
   useEffect(() => {
     if (!timelineClips.length) return;
-    const clip = timelineClips.find((item) => playhead >= item.start && playhead < item.end)
-      || (playhead >= timelineDuration ? timelineClips[timelineClips.length - 1] : undefined);
+    const clip = timelineClips.find((item) => playhead >= item.start && playhead < item.end);
     if (clip) {
       if (clip.sourceId !== activeSourceId) setActiveSourceId(clip.sourceId);
       if (clip.clipId !== activeClipId) setActiveClipId(clip.clipId);
     }
-  }, [activeClipId, activeSourceId, playhead, timelineClips, timelineDuration]);
+  }, [activeClipId, activeSourceId, playhead, timelineClips]);
+
+  useEffect(() => {
+    if (!isPlaying) return;
+    const clipAtPlayhead = timelineClips.find((c) => playhead >= c.start && playhead < c.end);
+    if (clipAtPlayhead) return;
+
+    // Playhead đang ở trong khoảng trống (gap)
+    let animationFrameId: number;
+    let lastTime = performance.now();
+
+    const step = (now: number) => {
+      const dt = (now - lastTime) / 1000;
+      lastTime = now;
+      const nextTime = playhead + dt;
+
+      if (nextTime >= timelineDuration) {
+        setIsPlaying(false);
+        setPlayhead(timelineDuration);
+        return;
+      }
+
+      const enteringClip = timelineClips.find((c) => nextTime >= c.start && nextTime < c.end);
+      if (enteringClip) {
+        playAfterSourceChangeRef.current = true;
+        seekGlobal(enteringClip.start);
+      } else {
+        setPlayhead(nextTime);
+        animationFrameId = requestAnimationFrame(step);
+      }
+    };
+
+    animationFrameId = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(animationFrameId);
+  }, [isPlaying, playhead, seekGlobal, timelineClips, timelineDuration]);
 
   useEffect(() => {
     if (!selectedSource) return;
     const video = previewRef.current;
     if (!video) return;
     const handleLoaded = () => {
-      const clip = (activeClipId && timelineClips.find((c) => c.clipId === activeClipId))
-        || (timelineClips.find((c) => playhead >= c.start && playhead < c.end))
+      const clip = timelineClips.find((c) => playhead >= c.start && playhead < c.end)
+        || (activeClipId && timelineClips.find((c) => c.clipId === activeClipId))
         || timelineClips.find((c) => c.sourceId === selectedSource.id);
       const localTime = clip ? Math.max(0, Math.min(clip.duration, playhead - clip.start)) : 0;
       const targetSourceTime = clip ? (clip.startFrame - 1) / clip.source.frameRate + localTime : 0;
@@ -1660,7 +1763,8 @@ export default function JoinSplitVideoPage() {
     const destinationIndex = position === "before"
       ? (fromIndex < toIndex ? toIndex - 1 : toIndex)
       : (fromIndex < toIndex ? toIndex : toIndex + 1);
-    nextItems.splice(Math.max(0, Math.min(nextItems.length, destinationIndex)), 0, moved);
+    const cleanMoved = magnetEnabled ? { ...moved, offsetSeconds: undefined } : moved;
+    nextItems.splice(Math.max(0, Math.min(nextItems.length, destinationIndex)), 0, cleanMoved);
     setTimelineClipItems(nextItems);
     setActiveClipId(moved.id);
     setActiveSourceId(moved.sourceId);
@@ -2071,14 +2175,26 @@ export default function JoinSplitVideoPage() {
               <span className="font-semibold">Preview</span>
               <span className="max-w-[35vw] truncate text-slate-400">{selectedSource?.fileName || "Chọn video để preview"}</span>
             </div>
-            {selectedSource && (
+            {timelineClips.length > 0 ? (
               <span className="font-mono text-[11px] text-slate-300">
-                {currentFrame}/{selectedSource.frameCount} · {formatTime(localPlayhead)}
+                {isInGap ? (
+                  <>Khoảng trống · {formatTime(playhead)} / {formatTime(timelineDuration)}</>
+                ) : (
+                  <>{currentFrame}/{selectedSource?.frameCount || 0} · {formatTime(playhead)} / {formatTime(timelineDuration)}</>
+                )}
               </span>
-            )}
+            ) : selectedSource ? (
+              <span className="font-mono text-[11px] text-slate-300">
+                {currentFrame}/{selectedSource.frameCount} · {formatTime(playhead)}
+              </span>
+            ) : null}
           </div>
-          <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden">
-            {selectedSource ? (
+          <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-black">
+            {isInGap ? (
+              <div className="flex h-full w-full items-center justify-center bg-black">
+                <span className="font-mono text-xs text-slate-600 select-none">[Khoảng trống - Màn hình đen]</span>
+              </div>
+            ) : selectedSource ? (
               <video
                 ref={previewRef}
                 key={selectedSource.id}
@@ -2087,8 +2203,8 @@ export default function JoinSplitVideoPage() {
                 playsInline
                 preload="metadata"
                 onLoadedMetadata={(event) => {
-                  const clip = (activeClipId && timelineClips.find((c) => c.clipId === activeClipId))
-                    || timelineClips.find((c) => playhead >= c.start && playhead < c.end)
+                  const clip = timelineClips.find((c) => playhead >= c.start && playhead < c.end)
+                    || (activeClipId && timelineClips.find((c) => c.clipId === activeClipId))
                     || timelineClips.find((c) => c.sourceId === selectedSource.id);
                   const localTime = clip ? Math.max(0, Math.min(clip.duration, playhead - clip.start)) : 0;
                   const targetSourceTime = clip ? (clip.startFrame - 1) / clip.source.frameRate + localTime : 0;
@@ -2103,8 +2219,8 @@ export default function JoinSplitVideoPage() {
                     setPlayhead(event.currentTarget.currentTime);
                     return;
                   }
-                  const clip = (activeClipId && timelineClips.find((c) => c.clipId === activeClipId))
-                    || timelineClips.find((c) => playhead >= c.start && playhead < c.end)
+                  const clip = timelineClips.find((c) => playhead >= c.start && playhead < c.end)
+                    || (activeClipId && timelineClips.find((c) => c.clipId === activeClipId))
                     || timelineClips[0];
                   if (!clip) return;
                   const currentSourceTime = event.currentTarget.currentTime;
@@ -2113,15 +2229,36 @@ export default function JoinSplitVideoPage() {
 
                   // Kiểm tra đã phát tới cuối đoạn cắt hiện tại của clip chưa
                   if (currentSourceTime >= sourceEndTime - 0.005) {
-                    const currentIndex = timelineClips.findIndex((c) => c.clipId === clip.clipId);
-                    const nextClip = timelineClips[currentIndex + 1];
-                    if (nextClip) {
-                      playAfterSourceChangeRef.current = true;
-                      seekGlobal(nextClip.start);
-                    } else {
+                    const nextTime = clip.end;
+                    if (nextTime >= timelineDuration - 1e-4) {
                       event.currentTarget.pause();
                       setIsPlaying(false);
                       setPlayhead(timelineDuration);
+                      return;
+                    }
+
+                    const nextClip = timelineClips.find((c) => nextTime >= c.start && nextTime < c.end);
+                    if (nextClip) {
+                      // Có clip tiếp theo liền kề
+                      if (nextClip.sourceId === clip.sourceId) {
+                        // Cùng video nguồn: chỉ cần tua trực tiếp không làm pause video
+                        const targetSourceTime = (nextClip.startFrame - 1) / nextClip.source.frameRate;
+                        event.currentTarget.currentTime = Math.max(0, targetSourceTime);
+                        setActiveClipId(nextClip.clipId);
+                        setPlayhead(nextClip.start);
+                        if (event.currentTarget.paused) {
+                          void event.currentTarget.play().catch(() => {});
+                        }
+                      } else {
+                        // Khác video nguồn: cần chuyển source và tiếp tục play
+                        playAfterSourceChangeRef.current = true;
+                        seekGlobal(nextClip.start);
+                      }
+                    } else {
+                      // Đi vào khoảng trống (gap / màn hình đen)
+                      transitioningToGapRef.current = true;
+                      event.currentTarget.pause();
+                      setPlayhead(nextTime);
                     }
                     return;
                   }
@@ -2130,15 +2267,39 @@ export default function JoinSplitVideoPage() {
                   setPlayhead(snapPlayheadTime(clip.start + elapsed, false));
                 }}
                 onPlay={() => setIsPlaying(true)}
-                onPause={() => setIsPlaying(false)}
-                onEnded={() => {
+                onPause={() => {
+                  if (transitioningToGapRef.current) {
+                    transitioningToGapRef.current = false;
+                    return;
+                  }
+                  setIsPlaying(false);
+                }}
+                onEnded={(event) => {
                   const currentClip = (activeClipId && timelineClips.find((c) => c.clipId === activeClipId))
                     || timelineClips.find((c) => playhead >= c.start && playhead < c.end);
-                  const index = currentClip ? timelineClips.findIndex((clip) => clip.clipId === currentClip.clipId) : -1;
-                  const next = timelineClips[index + 1];
-                  if (next) {
-                    playAfterSourceChangeRef.current = true;
-                    seekGlobal(next.start);
+                  if (currentClip) {
+                    const nextTime = currentClip.end;
+                    if (nextTime >= timelineDuration - 1e-4) {
+                      setIsPlaying(false);
+                      setPlayhead(timelineDuration);
+                    } else {
+                      const nextClip = timelineClips.find((c) => nextTime >= c.start && nextTime < c.end);
+                      if (nextClip) {
+                        if (nextClip.sourceId === currentClip.sourceId) {
+                          const targetSourceTime = (nextClip.startFrame - 1) / nextClip.source.frameRate;
+                          event.currentTarget.currentTime = Math.max(0, targetSourceTime);
+                          setActiveClipId(nextClip.clipId);
+                          setPlayhead(nextClip.start);
+                          void event.currentTarget.play().catch(() => {});
+                        } else {
+                          playAfterSourceChangeRef.current = true;
+                          seekGlobal(nextClip.start);
+                        }
+                      } else {
+                        transitioningToGapRef.current = true;
+                        setPlayhead(nextTime);
+                      }
+                    }
                   } else {
                     setIsPlaying(false);
                   }
@@ -2170,13 +2331,15 @@ export default function JoinSplitVideoPage() {
               aria-label="Tua preview video"
               type="range"
               min={0}
-              max={activeClip ? timelineDuration : selectedSource?.durationSeconds || 1}
+              max={timelineClips.length > 0 ? timelineDuration : selectedSource?.durationSeconds || 1}
               step={selectedSource ? 1 / selectedSource.frameRate : 0.04}
-              value={activeClip ? Math.min(playhead, timelineDuration) : localPlayhead}
-              onChange={(event) => activeClip ? seekGlobal(Number(event.target.value)) : seekFrame(Math.round(Number(event.target.value) * (selectedSource?.frameRate || 1)) + 1)}
+              value={timelineClips.length > 0 ? Math.min(playhead, timelineDuration) : localPlayhead}
+              onChange={(event) => timelineClips.length > 0 ? seekGlobal(Number(event.target.value)) : seekFrame(Math.round(Number(event.target.value) * (selectedSource?.frameRate || 1)) + 1)}
               className="min-w-0 flex-1 accent-sky-400"
             />
-            <span className="min-w-24 text-right font-mono text-[10px] text-slate-400">{formatTime(localPlayhead)}</span>
+            <span className="min-w-28 text-right font-mono text-[10px] text-slate-400">
+              {timelineClips.length > 0 ? `${formatTime(playhead)} / ${formatTime(timelineDuration)}` : formatTime(localPlayhead)}
+            </span>
             <button type="button" onClick={() => setMuted((value) => !value)} className="rounded-md border border-slate-700 p-1.5 text-slate-300 hover:text-white" aria-label={muted ? "Bật tiếng" : "Tắt tiếng"} title={muted ? "Bật tiếng" : "Tắt tiếng"}>
               {muted || volume === 0 ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
             </button>
@@ -2202,6 +2365,32 @@ export default function JoinSplitVideoPage() {
         <div className="flex min-h-[220px] flex-[0_0_38%] flex-col border-b border-slate-800 bg-slate-950">
           <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-slate-800 bg-slate-900/90 px-3 py-2">
             <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => {
+                  const nextState = !magnetEnabled;
+                  setMagnetEnabled(nextState);
+                  if (nextState) {
+                    setTimelineClipItems((items) => items.map((item) => ({ ...item, offsetSeconds: undefined })));
+                    setNotice("Đã bật chế độ Magnet: các clip tự động hút sát nhau, không để lại khoảng trống.");
+                  } else {
+                    setTimelineClipItems((items) => items.map((item) => {
+                      const clip = timelineClips.find((c) => c.clipId === item.id);
+                      return { ...item, offsetSeconds: clip ? clip.start : item.offsetSeconds };
+                    }));
+                    setNotice("Đã tắt chế độ Magnet: các khoảng trống được giữ nguyên.");
+                  }
+                }}
+                className={`inline-flex items-center gap-1 rounded border px-2 py-1 text-[11px] font-semibold transition-colors ${
+                  magnetEnabled
+                    ? "border-amber-400/60 bg-amber-400/20 text-amber-200 hover:bg-amber-400/30"
+                    : "border-slate-700 bg-slate-800/40 text-slate-400 hover:text-slate-200"
+                }`}
+                title={magnetEnabled ? "Magnet đang BẬT: xóa clip sẽ tự động kéo các video sau hút vào trước (Click để tắt)" : "Magnet đang TẮT: xóa clip sẽ giữ nguyên vị trí tạo khoảng trống màn hình đen (Click để bật)"}
+              >
+                <Magnet className={`h-3 w-3 ${magnetEnabled ? "text-amber-400" : "text-slate-400"}`} />
+                Magnet
+              </button>
               <button
                 type="button"
                 onClick={splitClipAtPlayhead}
@@ -2367,7 +2556,7 @@ export default function JoinSplitVideoPage() {
               <div className="relative h-[calc(100%-1.75rem)] min-h-44">
                 {timelineClips.length === 0 ? (
                   <div className="flex h-full min-h-28 items-center justify-center text-xs text-slate-500">
-                    Kéo video từ cột trái vào đây · các clip sẽ tự xếp nối tiếp, không có gap
+                    Kéo video từ cột trái vào đây để bắt đầu biên tập
                   </div>
                 ) : (
                   timelineClips.map((clip, clipIndex) => {

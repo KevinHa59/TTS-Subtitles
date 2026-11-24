@@ -57,6 +57,7 @@ export interface JoinSplitTimelineClipItem {
   sourceId: string;
   startFrame: number;
   endFrame: number;
+  offsetSeconds?: number;
 }
 
 export interface JoinSplitVideoRangeStatus extends JoinSplitVideoRange {
