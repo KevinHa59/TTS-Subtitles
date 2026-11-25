@@ -8,6 +8,8 @@ import {
   LoaderCircle,
   Magnet,
   Minus,
+  MoveLeft,
+  MoveRight,
   Pause,
   Play,
   Plus,
@@ -99,6 +101,7 @@ interface SavedWorkspace {
   timelineJoinOutput: JoinSplitVideoExportFile | null;
   queueJoinOutput: JoinSplitVideoExportFile | null;
   joinQueuesAfterExport: boolean;
+  forceCopy: boolean;
   muted: boolean;
   volume: number;
 }
@@ -168,9 +171,12 @@ export default function JoinSplitVideoPage() {
   const [fitViewResetVersion, setFitViewResetVersion] = useState(0);
   const [snapDistancePx, setSnapDistancePx] = useState(8);
   const [preferKeyframeCuts, setPreferKeyframeCuts] = useState(false);
+  const [frameTolerance, setFrameTolerance] = useState(5);
+  const [durationTolerance, setDurationTolerance] = useState(5);
   const [timelineJoinOutput, setTimelineJoinOutput] = useState<JoinSplitVideoExportFile | null>(null);
   const [queueJoinOutput, setQueueJoinOutput] = useState<JoinSplitVideoExportFile | null>(null);
   const [joinQueuesAfterExport, setJoinQueuesAfterExport] = useState(false);
+  const [forceCopy, setForceCopy] = useState(false);
   const [uploadingName, setUploadingName] = useState<string | null>(null);
   const [uploadJobs, setUploadJobs] = useState<UploadJob[]>([]);
   const [workspaceHydrated, setWorkspaceHydrated] = useState(false);
@@ -346,6 +352,7 @@ export default function JoinSplitVideoPage() {
           saved.queueJoinOutput ? exportById.get(saved.queueJoinOutput.id) || null : null,
         );
         setJoinQueuesAfterExport(saved.joinQueuesAfterExport === true);
+        setForceCopy(saved.forceCopy === true);
         setMuted(saved.muted === true);
         setVolume(typeof saved.volume === "number" && Number.isFinite(saved.volume)
           ? Math.max(0, Math.min(1, saved.volume))
@@ -389,6 +396,7 @@ export default function JoinSplitVideoPage() {
       timelineJoinOutput,
       queueJoinOutput,
       joinQueuesAfterExport,
+      forceCopy,
       muted,
       volume,
     };
@@ -406,6 +414,7 @@ export default function JoinSplitVideoPage() {
     activeSourceId,
     cutFromTime,
     cutToTime,
+    forceCopy,
     joinQueuesAfterExport,
     magnetEnabled,
     muted,
@@ -735,6 +744,139 @@ export default function JoinSplitVideoPage() {
       setPlayhead(nextClip?.start || 0);
     }
     setNotice("Đã xóa clip khỏi timeline; video gốc vẫn còn trong danh sách input.");
+  };
+
+  const handleSwapClips = useCallback((clipId1: string, clipId2: string) => {
+    setTimelineClipItems((current) => {
+      const idx1 = current.findIndex((c) => c.id === clipId1);
+      const idx2 = current.findIndex((c) => c.id === clipId2);
+      if (idx1 < 0 || idx2 < 0 || idx1 === idx2) return current;
+      const next = [...current];
+      const temp = next[idx1];
+      next[idx1] = next[idx2];
+      next[idx2] = temp;
+      return next;
+    });
+    setNotice("Đã hoán đổi vị trí thành công giữa 2 clip.");
+  }, []);
+
+  const handleMoveClipOffset = useCallback((clipId: string, direction: -1 | 1) => {
+    setTimelineClipItems((current) => {
+      const idx = current.findIndex((c) => c.id === clipId);
+      if (idx < 0) return current;
+      const targetIdx = idx + direction;
+      if (targetIdx < 0 || targetIdx >= current.length) return current;
+      const next = [...current];
+      const temp = next[idx];
+      next[idx] = next[targetIdx];
+      next[targetIdx] = temp;
+      return next;
+    });
+  }, []);
+
+  const addActiveClipToQueue = () => {
+    if (!activeClipId || !timelineClips.length) return;
+    const activeClip = timelineClips.find((c) => c.clipId === activeClipId);
+    if (!activeClip) return;
+    const source = sourceById.get(activeClip.sourceId);
+    if (!source) return;
+    let startFrame = activeClip.startFrame;
+    let endFrame = activeClip.endFrame;
+    if (preferKeyframeCuts && source.keyframeTimes?.length) {
+      const keyframeFrames = source.keyframeTimes
+        .map((time) => Math.round(time * source.frameRate) + 1)
+        .filter((f) => f >= 1 && f <= source.frameCount)
+        .sort((a, b) => a - b);
+      if (keyframeFrames.length > 0) {
+        const prevKeyframe = keyframeFrames.filter((f) => f <= startFrame).at(-1);
+        if (prevKeyframe !== undefined) startFrame = prevKeyframe;
+        const nextKeyframe = keyframeFrames.find((f) => f > endFrame);
+        if (nextKeyframe !== undefined) endFrame = nextKeyframe - 1;
+      }
+    }
+    const range = { id: crypto.randomUUID(), sourceId: activeClip.sourceId, startFrame, endFrame };
+    setQueue((current) => [...current, range]);
+    setNotice(`Đã thêm clip vào queue: ${source.fileName} · frame ${startFrame}–${endFrame}${preferKeyframeCuts ? " (snapped to keyframe)" : ""}`);
+    setError(null);
+  };
+
+  const addAllClipsToQueue = () => {
+    if (!timelineClips.length) return;
+    let addedCount = 0;
+    const newRanges: JoinSplitVideoRange[] = [];
+    for (const clip of timelineClips) {
+      const source = sourceById.get(clip.sourceId);
+      if (!source) continue;
+      let startFrame = clip.startFrame;
+      let endFrame = clip.endFrame;
+      if (preferKeyframeCuts && source.keyframeTimes?.length) {
+        const keyframeFrames = source.keyframeTimes
+          .map((time) => Math.round(time * source.frameRate) + 1)
+          .filter((f) => f >= 1 && f <= source.frameCount)
+          .sort((a, b) => a - b);
+        if (keyframeFrames.length > 0) {
+          const prevKeyframe = keyframeFrames.filter((f) => f <= startFrame).at(-1);
+          if (prevKeyframe !== undefined) startFrame = prevKeyframe;
+          const nextKeyframe = keyframeFrames.find((f) => f > endFrame);
+          if (nextKeyframe !== undefined) endFrame = nextKeyframe - 1;
+        }
+      }
+      addedCount++;
+      newRanges.push({ id: crypto.randomUUID(), sourceId: clip.sourceId, startFrame, endFrame });
+    }
+    setQueue((current) => [...current, ...newRanges]);
+    setNotice(`Đã thêm ${addedCount} clip vào queue${preferKeyframeCuts ? " (snapped to keyframe)" : ""}.`);
+    setError(null);
+  };
+
+  const createSingleMergedQueue = () => {
+    if (!timelineClips.length) return;
+    const allSegments = timelineClips.map((clip) => ({
+      clipId: clip.clipId,
+      sourceId: clip.sourceId,
+      start: clip.start,
+      end: clip.end,
+      frameRate: clip.source.frameRate,
+      frameCount: clip.source.frameCount,
+      startFrame: clip.startFrame,
+      endFrame: clip.endFrame,
+    }));
+    const segments = getJoinSplitTimelineSegments(0, timelineDuration, allSegments);
+    if (!segments.length) {
+      setError("Không thể tạo queue từ timeline rỗng.");
+      return;
+    }
+    let snappedSegments = segments;
+    if (preferKeyframeCuts) {
+      snappedSegments = segments.map((segment) => {
+        const source = sourceById.get(segment.sourceId);
+        if (!source?.keyframeTimes?.length) return segment;
+        const keyframeFrames = source.keyframeTimes
+          .map((time) => Math.round(time * source.frameRate) + 1)
+          .filter((f) => f >= 1 && f <= source.frameCount)
+          .sort((a, b) => a - b);
+        if (!keyframeFrames.length) return segment;
+        let startFrame = segment.startFrame;
+        let endFrame = segment.endFrame;
+        const prevKeyframe = keyframeFrames.filter((f) => f <= startFrame).at(-1);
+        if (prevKeyframe !== undefined) startFrame = prevKeyframe;
+        const nextKeyframe = keyframeFrames.find((f) => f > endFrame);
+        if (nextKeyframe !== undefined) endFrame = nextKeyframe - 1;
+        return { ...segment, startFrame, endFrame };
+      });
+    }
+    const firstSegment = snappedSegments[0];
+    const lastSegment = snappedSegments[snappedSegments.length - 1];
+    const range = {
+      id: crypto.randomUUID(),
+      sourceId: firstSegment.sourceId,
+      startFrame: firstSegment.startFrame,
+      endFrame: lastSegment.endFrame,
+      ...(snappedSegments.length > 1 ? { segments: snappedSegments } : {}),
+    };
+    setQueue((current) => [...current, range]);
+    setNotice(`Đã tạo 1 queue gộp toàn bộ ${timelineClips.length} clip (${snappedSegments.length} segment)${preferKeyframeCuts ? " (snapped to keyframe)" : ""}.`);
+    setError(null);
   };
 
   const removeTimelineSource = (sourceId: string) => {
@@ -1227,6 +1369,7 @@ export default function JoinSplitVideoPage() {
             progressId,
             preferKeyframeCuts,
             queueIndex: queueIndex + 1,
+            forceCopy,
           }),
         });
         const result = await responseJson<{ files: JoinSplitVideoExportFile[] }>(response);
@@ -1304,6 +1447,7 @@ export default function JoinSplitVideoPage() {
             exportIds: exportedFiles.map((file) => file.id),
             referenceSourceId,
             progressId,
+            forceCopy,
           }),
         });
         const result = await responseJson<{ file: JoinSplitVideoExportFile }>(response);
@@ -1438,6 +1582,7 @@ export default function JoinSplitVideoPage() {
           referenceSourceId,
           progressId,
           preferKeyframeCuts,
+          forceCopy,
         }),
       });
       currentExportProgressIdRef.current = null;
@@ -2403,6 +2548,26 @@ export default function JoinSplitVideoPage() {
               </button>
               <button
                 type="button"
+                onClick={() => activeClipId && handleMoveClipOffset(activeClipId, -1)}
+                disabled={!activeClipId || timelineClipItems.findIndex((c) => c.id === activeClipId) === 0}
+                title="Di chuyển clip sang trái (Hoán đổi với clip trước)"
+                className="inline-flex items-center gap-1 rounded border border-sky-500/50 bg-sky-950/30 px-2 py-1 text-[11px] font-semibold text-sky-200 hover:bg-sky-900/50 disabled:opacity-40"
+              >
+                <MoveLeft className="h-3 w-3" />
+                Dịch trái
+              </button>
+              <button
+                type="button"
+                onClick={() => activeClipId && handleMoveClipOffset(activeClipId, 1)}
+                disabled={!activeClipId || timelineClipItems.findIndex((c) => c.id === activeClipId) === timelineClipItems.length - 1}
+                title="Di chuyển clip sang phải (Hoán đổi với clip sau)"
+                className="inline-flex items-center gap-1 rounded border border-sky-500/50 bg-sky-950/30 px-2 py-1 text-[11px] font-semibold text-sky-200 hover:bg-sky-900/50 disabled:opacity-40"
+              >
+                <MoveRight className="h-3 w-3" />
+                Dịch phải
+              </button>
+              <button
+                type="button"
                 onClick={() => {
                   if (activeClipId) removeTimelineClip(activeClipId);
                   else if (activeSourceId) removeTimelineSource(activeSourceId);
@@ -2454,19 +2619,74 @@ export default function JoinSplitVideoPage() {
               >
                 Split to queues
               </button>
-              <label
-                className="inline-flex items-center gap-1 text-[10px] text-slate-300"
-                title="Cut From lùi về keyframe trước đó; Cut To kết thúc ngay trước keyframe tiếp theo để tăng khả năng stream-copy."
-              >
-                <input
-                  type="checkbox"
-                  checked={preferKeyframeCuts}
-                  onChange={(event) => setPreferKeyframeCuts(event.target.checked)}
-                  className="accent-amber-400"
-                  aria-label="Ưu tiên keyframe để giảm encode"
-                />
-                Ưu tiên keyframe
-              </label>
+              <div className="inline-flex flex-wrap items-center gap-1.5 border-l border-slate-700 pl-2 ml-1">
+                <label className="flex items-center gap-1 text-[10px] text-slate-300" title="Tự snap frame start/end về keyframe gần nhất để tối ưu Stream-copy">
+                  <input
+                    type="checkbox"
+                    checked={preferKeyframeCuts}
+                    onChange={(e) => setPreferKeyframeCuts(e.target.checked)}
+                    className="accent-sky-400"
+                  />
+                  Keyframe
+                </label>
+                <div className="inline-flex items-center gap-1">
+                  <label className="text-[10px] text-slate-300">Frame Tol %:</label>
+                  <input
+                    type="number"
+                    value={frameTolerance}
+                    min={1}
+                    max={50}
+                    step={1}
+                    onChange={(e) => setFrameTolerance(parseFloat(e.target.value) || 5)}
+                    className="w-12 rounded border border-sky-400/40 bg-slate-900 px-1 py-0.5 text-[10px] text-sky-200 focus:outline-none"
+                  />
+                  <label className="text-[10px] text-slate-300 ml-1">Dur Tol %:</label>
+                  <input
+                    type="number"
+                    value={durationTolerance}
+                    min={1}
+                    max={50}
+                    step={0.5}
+                    onChange={(e) => setDurationTolerance(parseFloat(e.target.value) || 5)}
+                    className="w-12 rounded border border-sky-400/40 bg-slate-900 px-1 py-0.5 text-[10px] text-sky-200 focus:outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => { setFrameTolerance(5); setDurationTolerance(5); }}
+                    className="rounded border border-slate-700 px-1 py-0.5 text-[10px] text-slate-300 hover:bg-slate-800"
+                    title="Đặt về mặc định (5%)"
+                  >
+                    Reset
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  onClick={addActiveClipToQueue}
+                  disabled={!activeClipId || !timelineClips.length}
+                  className="rounded border border-sky-400/40 px-2 py-1 text-[10px] font-semibold text-sky-200 hover:bg-sky-950/40 disabled:opacity-40"
+                  title="Thêm clip đang chọn vào queue"
+                >
+                  Add clip to queue
+                </button>
+                <button
+                  type="button"
+                  onClick={addAllClipsToQueue}
+                  disabled={!timelineClips.length}
+                  className="rounded border border-emerald-400/40 px-2 py-1 text-[10px] font-semibold text-emerald-200 hover:bg-emerald-950/40 disabled:opacity-40"
+                  title="Thêm tất cả các clip vào queue (mỗi clip = 1 queue item)"
+                >
+                  Add all Clips to queues
+                </button>
+                <button
+                  type="button"
+                  onClick={createSingleMergedQueue}
+                  disabled={!timelineClips.length}
+                  className="rounded border border-violet-400/40 px-2 py-1 text-[10px] font-semibold text-violet-200 hover:bg-violet-950/40 disabled:opacity-40"
+                  title="Tạo 1 queue duy nhất gộp toàn bộ clips (chỉ export 1 lần, không cần join sau)"
+                >
+                  Tạo 1 Queue gộp tất cả
+                </button>
+              </div>
               <button type="button" onClick={addLastCut} disabled={!queue.length} title="Thêm phần còn lại sau frame cuối của range cuối trong queue" className="rounded border border-violet-400/40 px-2 py-1 text-[11px] text-violet-200 hover:bg-violet-400/10 disabled:opacity-40">Last Cut</button>
               <button
                 type="button"
@@ -2835,6 +3055,16 @@ export default function JoinSplitVideoPage() {
                   className="accent-emerald-400"
                 />
                 Join queues
+              </label>
+              <label className="flex items-center gap-1 text-[10px] text-slate-300" title="Bỏ qua kiểm tra tương thích. Chỉ dùng khi các clip cùng nguồn/setting.">
+                <input
+                  type="checkbox"
+                  checked={forceCopy}
+                  onChange={(event) => setForceCopy(event.target.checked)}
+                  disabled={exporting || joining}
+                  className="accent-amber-400"
+                />
+                Force Copy
               </label>
               <button type="button" onClick={() => void exportQueue()} disabled={!queue.length || !referenceSourceId || exporting || joining} className="rounded bg-emerald-500 px-3 py-1.5 text-[10px] font-bold text-slate-950 hover:bg-emerald-400 disabled:opacity-40">
                 {exporting ? "Đang Export…" : "Export Queue"}

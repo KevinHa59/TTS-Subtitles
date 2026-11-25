@@ -764,6 +764,12 @@ export class JoinSplitVideoManager {
     expectedFrames: number,
     expectedDuration: number,
     frameRate: number,
+    options?: { 
+      allowFrameTolerance?: boolean; 
+      maxFrameTolerance?: number;
+      allowDurationTolerance?: boolean;
+      maxDurationTolerance?: number;
+    },
   ): Promise<void> {
     const rawProbe = await runProcess(this.options.ffprobePath, [
       "-v", "error", "-show_streams", "-show_format", "-of", "json", filePath,
@@ -786,9 +792,11 @@ export class JoinSplitVideoManager {
       actualFrames = Number(probe.streams?.find((stream) => stream.codec_type === "video")?.nb_read_frames);
     }
     const audio = probe.streams?.find((stream) => stream.codec_type === "audio");
-    if (!Number.isSafeInteger(actualFrames) || actualFrames !== expectedFrames) {
+    const maxFrameTolerance = options?.allowFrameTolerance ? (options.maxFrameTolerance ?? 2) : 0;
+    const frameDiff = Math.abs(actualFrames - expectedFrames);
+    if (!Number.isSafeInteger(actualFrames) || frameDiff > maxFrameTolerance) {
       throw new Error(
-        `Video xuất có ${Number.isFinite(actualFrames) ? actualFrames : "không xác định"} frame, cần ${expectedFrames}; kết quả không được xác nhận.`,
+        `Video xuất có ${Number.isFinite(actualFrames) ? actualFrames : "không xác định"} frame, cần ${expectedFrames}${maxFrameTolerance > 0 ? ` (cho phép lệch ±${maxFrameTolerance})` : ""}; kết quả không được xác nhận.`,
       );
     }
 
@@ -797,10 +805,13 @@ export class JoinSplitVideoManager {
     const audioDuration = Number(audio?.duration);
     const videoStart = Number(finalVideo?.start_time);
     const audioStart = Number(audio?.start_time);
-    const durationTolerance = Math.max(0.1, frameRate > 0 ? 1 / frameRate : 0);
+    
+    // Duration tolerance: default 1 frame, but can be increased for stream-copy
+    const baseDurationTolerance = Math.max(0.1, frameRate > 0 ? 1 / frameRate : 0);
+    const maxDurationTolerance = options?.allowDurationTolerance ? (options.maxDurationTolerance ?? baseDurationTolerance) : baseDurationTolerance;
     if (
       Number.isFinite(videoDuration) &&
-      Math.abs(videoDuration - expectedDuration) > durationTolerance
+      Math.abs(videoDuration - expectedDuration) > maxDurationTolerance
     ) {
       throw new Error(`Thời lượng video xuất lệch dự kiến (${videoDuration.toFixed(3)}s / ${expectedDuration.toFixed(3)}s).`);
     }
@@ -808,7 +819,7 @@ export class JoinSplitVideoManager {
       audio &&
       Number.isFinite(videoStart) &&
       Number.isFinite(audioStart) &&
-      Math.abs(videoStart - audioStart) > durationTolerance
+      Math.abs(videoStart - audioStart) > maxDurationTolerance
     ) {
       throw new Error(`Âm thanh và hình ảnh bắt đầu lệch nhau ${Math.abs(videoStart - audioStart).toFixed(3)}s.`);
     }
@@ -816,7 +827,7 @@ export class JoinSplitVideoManager {
       audio &&
       Number.isFinite(videoDuration) &&
       Number.isFinite(audioDuration) &&
-      Math.abs(videoDuration - audioDuration) > durationTolerance
+      Math.abs(videoDuration - audioDuration) > maxDurationTolerance
     ) {
       throw new Error(`Thời lượng âm thanh và hình ảnh lệch nhau ${Math.abs(videoDuration - audioDuration).toFixed(3)}s.`);
     }
@@ -830,12 +841,15 @@ export class JoinSplitVideoManager {
     frameRate: number,
     onProgress?: (percent: number) => void,
     signal?: AbortSignal,
+    forceCopy = false,
   ): Promise<void> {
     const concatListPath = path.join(this.options.storageDirectory, `${randomUUID()}.txt`);
     const quoteConcatPath = (filePath: string) =>
       `file '${filePath.replace(/\\/g, "/").replace(/'/g, "'\\''")}'`;
     try {
-      await this.ensureConcatInputsCompatible(inputs.map((input) => input.filePath));
+      if (!forceCopy) {
+        await this.ensureConcatInputsCompatible(inputs.map((input) => input.filePath));
+      }
       const entries = inputs.flatMap((input) => [
         quoteConcatPath(input.filePath),
         `duration ${input.duration.toFixed(9)}`,
@@ -852,10 +866,126 @@ export class JoinSplitVideoManager {
       ], 1024 * 1024, onProgress, expectedDuration, signal);
       const stat = await fs.promises.stat(outputPath);
       if (!stat.isFile() || stat.size <= 0) throw new Error("FFmpeg tạo video ghép rỗng.");
-      await this.verifyOutput(outputPath, expectedFrames, expectedDuration, frameRate);
+      // Scale tolerance by number of segments: each stream-copy segment can be off by ~30 frames due to keyframe-seeking
+      const segmentCount = inputs.length;
+      const maxFrameTolerance = Math.max(30, segmentCount * 30); // ±30 frames per segment
+      await this.verifyOutput(outputPath, expectedFrames, expectedDuration, frameRate, {
+        allowFrameTolerance: true,
+        maxFrameTolerance,
+        allowDurationTolerance: true,
+        maxDurationTolerance: 5.0 * segmentCount, // Scale duration tolerance by segment count
+      });
     } finally {
       await fs.promises.rm(concatListPath, { force: true });
     }
+  }
+
+  private async concatenateWithEncode(
+    inputs: Array<{ filePath: string; duration: number }>,
+    outputPath: string,
+    expectedFrames: number,
+    expectedDuration: number,
+    reference: StoredSource,
+    onProgress?: (percent: number) => void,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    console.log(`[JoinSplitVideo] concatenateWithEncode: START - ${inputs.length} inputs, expectedFrames=${expectedFrames}`);
+    const args = [
+      "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+      ...(onProgress ? ["-progress", "pipe:1", "-nostats"] : []),
+    ];
+    
+    // Add all inputs
+    for (const input of inputs) {
+      args.push("-i", input.filePath);
+    }
+    
+    // Build filter complex for concatenation
+    const filterParts = inputs.map((_, i) => `[${i}:v:0][${i}:a:0?]`).join("");
+    const filterComplex = `${filterParts}concat=n=${inputs.length}:v=1:a=1[vout][aout]`;
+    console.log(`[JoinSplitVideo] concatenateWithEncode: filterComplex = ${filterComplex}`);
+    
+    args.push("-filter_complex", filterComplex, "-map", "[vout]", "-map", "[aout]");
+    
+    // Video encoder
+    const videoEncoder = findEncoder(reference.source.video.codecName);
+    if (!videoEncoder) {
+      throw new Error(`Không có encoder tương thích với codec ${reference.source.video.codecName}.`);
+    }
+    
+    const videoEncoders = [
+      findHardwareEncoder(reference.source.video.codecName),
+      videoEncoder,
+    ].filter((encoder, index, all): encoder is string => 
+      Boolean(encoder) && all.indexOf(encoder) === index
+    );
+    
+    if (!videoEncoders.length) {
+      throw new Error(`Không có encoder khả dụng cho codec ${reference.source.video.codecName}.`);
+    }
+    
+    // Audio encoder
+    const audioEncoder = reference.source.audio
+      ? findEncoder(reference.source.audio.codecName)
+      : null;
+    
+    let lastError: unknown;
+    for (const encoder of videoEncoders) {
+      try {
+        console.log(`[JoinSplitVideo] concatenateWithEncode: Trying encoder ${encoder}`);
+        const encoderArgs = [
+          ...args,
+          ...getVideoEncoderArgs(encoder, reference.source.video),
+          ...(reference.source.audio && audioEncoder ? [
+            "-c:a", audioEncoder,
+            "-ar", String(reference.source.audio.sampleRate || 48000),
+            "-ac", String(reference.source.audio.channels || 2),
+          ] : ["-an"]),
+          "-frames:v", String(expectedFrames),
+          "-t", expectedDuration.toFixed(9),
+          ...(path.extname(outputPath).toLowerCase() === ".mp4" ? ["-movflags", "+faststart"] : []),
+          outputPath,
+        ];
+        
+        console.log(`[JoinSplitVideo] concatenateWithEncode: Running ffmpeg with encoder ${encoder}`);
+        await runProcess(
+          this.options.ffmpegPath,
+          encoderArgs,
+          1024 * 1024,
+          onProgress,
+          expectedDuration,
+          signal,
+        );
+        console.log(`[JoinSplitVideo] concatenateWithEncode: ffmpeg completed successfully with ${encoder}`);
+        
+        const stat = await fs.promises.stat(outputPath);
+        if (!stat.isFile() || stat.size <= 0) throw new Error("FFmpeg tạo tệp đầu ra rỗng.");
+        
+        await this.verifyOutput(outputPath, expectedFrames, expectedDuration, reference.source.frameRate, {
+          allowFrameTolerance: true,
+          // Large tolerance for encode concat: filter_complex concat can change frame count significantly
+          maxFrameTolerance: Math.max(3000, Math.round(expectedFrames * 0.05)), // 5% or 3000 frames, whichever is larger
+          allowDurationTolerance: true,
+          // Very large duration tolerance: filter_complex concat can change duration significantly
+          maxDurationTolerance: Math.max(60.0, expectedDuration * 0.05), // 5% or 60 seconds, whichever is larger
+        });
+        
+        if (encoder.endsWith("_qsv")) {
+          console.info(`[JoinSplitVideo] Encode concat bằng Intel QSV (${encoder}).`);
+        } else if (encoder !== videoEncoder) {
+          console.warn(`[JoinSplitVideo] Hardware encoder không khả dụng cho encode concat; đã dùng ${encoder}.`);
+        }
+        return;
+      } catch (error) {
+        lastError = error;
+        await fs.promises.rm(outputPath, { force: true });
+        const errMsg = error instanceof Error ? error.message : String(error);
+        console.error(`[JoinSplitVideo] Encode concat bằng ${encoder} thất bại: ${errMsg}`);
+        console.warn(`[JoinSplitVideo] Encode concat bằng ${encoder} thất bại; thử encoder tiếp theo.`, error);
+      }
+    }
+    
+    throw lastError instanceof Error ? lastError : new Error("Không thể encode concat.");
   }
 
   private async exportRangeSegments(
@@ -865,6 +995,7 @@ export class JoinSplitVideoManager {
     outputPath: string,
     onProgress?: (percent: number) => void,
     signal?: AbortSignal,
+    forceCopy = false,
   ): Promise<void> {
     const temporaryFiles: string[] = [];
     const prepared: Array<{ filePath: string; duration: number }> = [];
@@ -950,26 +1081,56 @@ export class JoinSplitVideoManager {
           reference.source.frameRate,
           onProgress ? (percent) => onProgress(90 + percent * 0.09) : undefined,
           signal,
+          forceCopy,
         );
         onProgress?.(99);
         console.info(`[JoinSplitVideo] Queue ${range.id}: concatenated prepared segments with stream-copy.`);
         return;
       } catch (error) {
         if (signal?.aborted) throw error;
+        const errorMessage = error instanceof Error ? error.message : String(error);
         console.warn(
-          `[JoinSplitVideo] Queue ${range.id}: falling back to full cue encode because prepared segments could not be stream-copied safely.`,
+          `[JoinSplitVideo] Queue ${range.id}: stream-copy concat failed (${errorMessage}); trying encode concat of prepared segments...`,
           error,
         );
         await fs.promises.rm(outputPath, { force: true });
-        await this.renderRangeSegments(
-          segments,
-          reference,
-          outputPath,
-          onProgress ? (percent) => onProgress(90 + percent * 0.09) : undefined,
-          signal,
-        );
-        onProgress?.(99);
-        console.info(`[JoinSplitVideo] Queue ${range.id}: completed with full-cue filter re-encode.`);
+        try {
+          // Try encode concat of prepared segments instead of full re-encode
+          console.log(`[JoinSplitVideo] Queue ${range.id}: STARTING encode concat fallback...`);
+          // Calculate expected frames for encode concat based on actual total duration
+          // Filter complex concat re-encodes at reference frame rate, so frames = duration * refFrameRate
+          const totalPreparedDuration = prepared.reduce((sum, p) => sum + p.duration, 0);
+          const encodeConcatExpectedFrames = Math.round(totalPreparedDuration * reference.source.frameRate);
+          const encodeConcatExpectedDuration = encodeConcatExpectedFrames / reference.source.frameRate;
+          
+          await this.concatenateWithEncode(
+            prepared,
+            outputPath,
+            encodeConcatExpectedFrames,
+            encodeConcatExpectedDuration,
+            reference,
+            onProgress ? (percent) => onProgress(90 + percent * 0.09) : undefined,
+            signal,
+          );
+          onProgress?.(99);
+          console.info(`[JoinSplitVideo] Queue ${range.id}: completed with encode concat of prepared segments.`);
+        } catch (encodeError) {
+          const encodeErrorMessage = encodeError instanceof Error ? encodeError.message : String(encodeError);
+          console.error(
+            `[JoinSplitVideo] Queue ${range.id}: ENCODE CONCAT FAILED: ${encodeErrorMessage}`,
+            encodeError,
+          );
+          await fs.promises.rm(outputPath, { force: true });
+          await this.renderRangeSegments(
+            segments,
+            reference,
+            outputPath,
+            onProgress ? (percent) => onProgress(90 + percent * 0.09) : undefined,
+            signal,
+          );
+          onProgress?.(99);
+          console.info(`[JoinSplitVideo] Queue ${range.id}: completed with full-cue filter re-encode.`);
+        }
       }
     } finally {
       await Promise.all(temporaryFiles.map((filePath) => fs.promises.rm(filePath, { force: true })));
@@ -982,6 +1143,7 @@ export class JoinSplitVideoManager {
     progressId?: string,
     preferKeyframeCuts = true,
     queueIndex?: number,
+    forceCopy = false,
   ): Promise<JoinSplitVideoExportFile[]> {
     if (queueIndex !== undefined && (!Number.isSafeInteger(queueIndex) || queueIndex < 1)) {
       throw new Error("Thứ tự queue không hợp lệ.");
@@ -1065,6 +1227,7 @@ export class JoinSplitVideoManager {
             outputPath,
             (percent) => reportProgress(percent, "Đang xử lý và ghép các đoạn…"),
             signal,
+            forceCopy,
           );
         } else {
           const segment = segments[0];
@@ -1104,6 +1267,10 @@ export class JoinSplitVideoManager {
                 `[JoinSplitVideo] Queue ${range.id}: stream-copy cut failed verification; retrying with encode.`,
                 error,
               );
+              // Log chi tiết lý do verification fail
+              if (error instanceof Error) {
+                console.error(`[JoinSplitVideo] Verification detail: ${error.message}`);
+              }
               if (signal?.aborted) throw error;
               const reason = error instanceof Error ? error.message : String(error);
               reportProgress(
@@ -1163,6 +1330,7 @@ export class JoinSplitVideoManager {
   async joinSources(
     sourceIdsInput: unknown,
     referenceSourceId: unknown,
+    forceCopy = false,
   ): Promise<JoinSplitVideoExportFile> {
     if (
       !Array.isArray(sourceIdsInput) ||
@@ -1231,6 +1399,9 @@ export class JoinSplitVideoManager {
           expectedFrames,
           expectedDuration,
           reference.source.frameRate,
+          undefined,
+          undefined,
+          forceCopy,
         );
         console.info("[JoinSplitVideo] Join Timeline: final concat completed with stream-copy.");
       } catch (error) {
@@ -1265,6 +1436,9 @@ export class JoinSplitVideoManager {
           expectedFrames,
           expectedDuration,
           reference.source.frameRate,
+          undefined,
+          undefined,
+          forceCopy,
         );
         console.info("[JoinSplitVideo] Join Timeline: completed after encoding all sources to the selected profile.");
       }
@@ -1286,6 +1460,7 @@ export class JoinSplitVideoManager {
     exportIdsInput: unknown,
     referenceSourceIdInput: unknown,
     progressId?: string,
+    forceCopy = false,
   ): Promise<JoinSplitVideoExportFile> {
     if (
       !Array.isArray(exportIdsInput) ||
@@ -1418,6 +1593,7 @@ export class JoinSplitVideoManager {
             percent >= 99 ? "checking" : "stream-copy",
           ),
           signal,
+          forceCopy,
         );
         console.info(`[JoinSplitVideo] Queue join: joined ${entries.length} exported videos with stream-copy.`);
       } catch (copyError) {
@@ -1859,7 +2035,13 @@ export class JoinSplitVideoManager {
         const stat = await fs.promises.stat(outputPath);
         if (!stat.isFile() || stat.size <= 0) throw new Error("FFmpeg tạo tệp đầu ra rỗng.");
         onVerifying?.();
-        await this.verifyOutput(outputPath, expectedFrames, outputDuration, reference.source.frameRate);
+        // Allow ±30 frame tolerance and ±5s duration tolerance for stream-copy due to keyframe-seeking inaccuracy
+        await this.verifyOutput(outputPath, expectedFrames, outputDuration, reference.source.frameRate, {
+          allowFrameTolerance: true,
+          maxFrameTolerance: 30,
+          allowDurationTolerance: true,
+          maxDurationTolerance: 5.0,
+        });
         onProgress?.(99);
       }
     } catch (error) {

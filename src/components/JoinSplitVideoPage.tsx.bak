@@ -1,0 +1,3358 @@
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { createPortal } from "react-dom";
+import {
+  Download,
+  Flag,
+  Film,
+  FolderOpen,
+  LoaderCircle,
+  Magnet,
+  Minus,
+  MoveLeft,
+  MoveRight,
+  Pause,
+  Play,
+  Plus,
+  Scissors,
+  Trash2,
+  Video,
+  Volume2,
+  VolumeX,
+  X,
+} from "lucide-react";
+import type {
+  JoinSplitTimelineClipItem,
+  JoinSplitVideoExportFile,
+  JoinSplitVideoRange,
+  JoinSplitVideoRangeStatus,
+  JoinSplitVideoSegment,
+  JoinSplitVideoSource,
+} from "../types/joinSplitVideo";
+import {
+  getJoinSplitRangeSegments,
+  getJoinSplitRangeTimelineBounds,
+  getJoinSplitTimelinePartitionSegments,
+  getJoinSplitTimelineSegments,
+  snapCutTimeToKeyframe,
+  snapJoinSplitTimelineTime,
+  snapJoinSplitTimelineTimeToTargets,
+} from "../utils/joinSplitVideoTimeline";
+
+const API = "/api/join-split-video";
+const MIN_ZOOM = 24;
+const MAX_ZOOM = 2400;
+const ZOOM_STEP = 1.2;
+const FRAME_TICK_LABEL_SPACING_PX = 34;
+const TIME_TICK_LABEL_SPACING_PX = 100;
+const MAX_SNAP_DISTANCE_PX = 100;
+
+interface TimelineClip {
+  clipId: string;
+  sourceId: string;
+  start: number;
+  end: number;
+  duration: number;
+  startFrame: number;
+  endFrame: number;
+  source: JoinSplitVideoSource;
+}
+
+interface SelectionRectangle {
+  startX: number;
+  startY: number;
+  currentX: number;
+  currentY: number;
+}
+
+interface UploadJob {
+  id: string;
+  fileName: string;
+  percent: number;
+  stage: string;
+  status: "uploading" | "analyzing" | "error";
+  error?: string;
+}
+
+interface SavedWorkspace {
+  selectedSourceIds: string[];
+  timelineSourceIds: string[];
+  timelineClipItems?: JoinSplitTimelineClipItem[];
+  magnetEnabled?: boolean;
+  activeClipId?: string | null;
+  activeSourceId: string | null;
+  playhead: number;
+  cutFromTime: number | null;
+  cutToTime: number | null;
+  queue: JoinSplitVideoRange[];
+  splitMarkers: number[];
+  selectedQueueId: string | null;
+  queueExportState: Record<string, {
+    status: "pending" | "exporting" | "done" | "error" | "cancelled";
+    output?: JoinSplitVideoExportFile;
+    error?: string;
+    progress?: number;
+    message?: string;
+    strategy?: "checking" | "stream-copy" | "encode" | "fallback";
+  }>;
+  referenceSourceId: string;
+  zoom: number;
+  snapDistancePx: number;
+  preferKeyframeCuts: boolean;
+  timelineJoinOutput: JoinSplitVideoExportFile | null;
+  queueJoinOutput: JoinSplitVideoExportFile | null;
+  joinQueuesAfterExport: boolean;
+  muted: boolean;
+  volume: number;
+}
+
+const WORKSPACE_STORAGE_KEY = "join-split-video-workspace";
+
+function frameTime(frame: number, frameRate: number): number {
+  return Math.max(0, (frame - 1) / frameRate);
+}
+
+function formatTime(seconds: number): string {
+  const safe = Math.max(0, Number.isFinite(seconds) ? seconds : 0);
+  const whole = Math.floor(safe);
+  const milliseconds = Math.floor((safe - whole) * 1000);
+  const hours = Math.floor(whole / 3600);
+  const minutes = Math.floor((whole % 3600) / 60);
+  const secs = whole % 60;
+  return `${hours ? `${String(hours).padStart(2, "0")}:` : ""}${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}.${String(milliseconds).padStart(3, "0")}`;
+}
+
+function getTimeTickInterval(zoom: number): number {
+  const rawInterval = TIME_TICK_LABEL_SPACING_PX / zoom;
+  const magnitude = 10 ** Math.floor(Math.log10(rawInterval));
+  for (const multiplier of [1, 2, 5, 10]) {
+    const interval = multiplier * magnitude;
+    if (interval >= rawInterval) return interval;
+  }
+  return 10 * magnitude;
+}
+
+async function responseJson<T>(response: Response): Promise<T> {
+  const result = await response.json().catch(() => ({})) as T & { error?: string };
+  if (!response.ok) throw new Error(result.error || `YÃªu cáº§u tháº¥t báº¡i (${response.status}).`);
+  return result;
+}
+
+export default function JoinSplitVideoPage() {
+  const [sources, setSources] = useState<JoinSplitVideoSource[]>([]);
+  const [selectedSourceIds, setSelectedSourceIds] = useState<string[]>([]);
+  const [selectionRectangle, setSelectionRectangle] = useState<SelectionRectangle | null>(null);
+  const [timelineClipItems, setTimelineClipItems] = useState<JoinSplitTimelineClipItem[]>([]);
+  const [magnetEnabled, setMagnetEnabled] = useState(true);
+  const [activeClipId, setActiveClipId] = useState<string | null>(null);
+  const [activeSourceId, setActiveSourceId] = useState<string | null>(null);
+  const timelineSourceIds = useMemo(
+    () => Array.from(new Set(timelineClipItems.map((item) => item.sourceId))),
+    [timelineClipItems],
+  );
+  const [playhead, setPlayhead] = useState(0);
+  const [cutFromTime, setCutFromTime] = useState<number | null>(null);
+  const [cutToTime, setCutToTime] = useState<number | null>(null);
+  const [splitMarkers, setSplitMarkers] = useState<number[]>([]);
+  const [selectedSplitMarker, setSelectedSplitMarker] = useState<number | null>(null);
+  const [queue, setQueue] = useState<JoinSplitVideoRange[]>([]);
+  const [selectedQueueId, setSelectedQueueId] = useState<string | null>(null);
+  const [queueExportState, setQueueExportState] = useState<Record<string, {
+    status: "pending" | "exporting" | "done" | "error" | "cancelled";
+    output?: JoinSplitVideoExportFile;
+    error?: string;
+    progress?: number;
+    message?: string;
+    strategy?: "checking" | "stream-copy" | "encode" | "fallback";
+  }>>({});
+  const [rangeStatuses, setRangeStatuses] = useState<JoinSplitVideoRangeStatus[]>([]);
+  const [referenceSourceId, setReferenceSourceId] = useState<string>("");
+  const [zoom, setZoom] = useState(180);
+  const [fitViewResetVersion, setFitViewResetVersion] = useState(0);
+  const [snapDistancePx, setSnapDistancePx] = useState(8);
+  const [preferKeyframeCuts, setPreferKeyframeCuts] = useState(false);
+  const [frameTolerance, setFrameTolerance] = useState(5);
+  const [durationTolerance, setDurationTolerance] = useState(5);
+  const [timelineJoinOutput, setTimelineJoinOutput] = useState<JoinSplitVideoExportFile | null>(null);
+  const [queueJoinOutput, setQueueJoinOutput] = useState<JoinSplitVideoExportFile | null>(null);
+  const [joinQueuesAfterExport, setJoinQueuesAfterExport] = useState(false);
+  const [uploadingName, setUploadingName] = useState<string | null>(null);
+  const [uploadJobs, setUploadJobs] = useState<UploadJob[]>([]);
+  const [workspaceHydrated, setWorkspaceHydrated] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [joining, setJoining] = useState(false);
+  const [queueJoinProgress, setQueueJoinProgress] = useState<{ percent: number; message: string } | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [muted, setMuted] = useState(false);
+  const [volume, setVolume] = useState(1);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [isDropTarget, setIsDropTarget] = useState(false);
+  const [queuePanelHost, setQueuePanelHost] = useState<HTMLDivElement | null>(null);
+  const queueStopRequestedRef = useRef(false);
+  const currentExportProgressIdRef = useRef<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const uploadInProgressRef = useRef(false);
+  const skipWorkspaceSaveRef = useRef(false);
+  const sourceListRef = useRef<HTMLDivElement | null>(null);
+  const selectionDragRef = useRef<{
+    startClientX: number;
+    startClientY: number;
+    currentClientX: number;
+    currentClientY: number;
+    initialSelectedIds: string[];
+    additive: boolean;
+  } | null>(null);
+  const selectionAnchorIndexRef = useRef<number | null>(null);
+  const previewRef = useRef<HTMLVideoElement | null>(null);
+  const timelineScrollRef = useRef<HTMLDivElement | null>(null);
+  const timelineContentRef = useRef<HTMLDivElement | null>(null);
+  const [timelineViewportWidth, setTimelineViewportWidth] = useState(0);
+  const [timelineScrollLeft, setTimelineScrollLeft] = useState(0);
+  const isScrubbingRef = useRef(false);
+  const queueCueDragRef = useRef<{
+    rangeId: string;
+    mode: "move" | "start" | "end";
+    initialPointerTime: number;
+    initialStart: number;
+    initialEnd: number;
+  } | null>(null);
+  const playAfterSourceChangeRef = useRef(false);
+  const transitioningToGapRef = useRef(false);
+
+  useEffect(() => {
+    if (!previewRef.current) return;
+    previewRef.current.volume = volume;
+    previewRef.current.muted = muted;
+  }, [activeSourceId, muted, volume]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const result = await responseJson<{
+          sources: JoinSplitVideoSource[];
+          exports: JoinSplitVideoExportFile[];
+        }>(await fetch(`${API}/files`));
+        if (cancelled) return;
+
+        let saved: Partial<SavedWorkspace> = {};
+        try {
+          const savedText = window.localStorage.getItem(WORKSPACE_STORAGE_KEY);
+          if (savedText) saved = JSON.parse(savedText) as Partial<SavedWorkspace>;
+        } catch (storageError) {
+          console.error("[JoinSplitVideo] KhÃ´ng thá»ƒ Ä‘á»c tráº¡ng thÃ¡i Ä‘Ã£ lÆ°u:", storageError);
+          setError("KhÃ´ng thá»ƒ Ä‘á»c tráº¡ng thÃ¡i Join/Split Ä‘Ã£ lÆ°u trong trÃ¬nh duyá»‡t.");
+        }
+
+        const sourceIds = new Set(result.sources.map((source) => source.id));
+        const sourceMap = new Map(result.sources.map((source) => [source.id, source]));
+        const exportById = new Map(result.exports.map((output) => [output.id, output]));
+        const savedQueue = Array.isArray(saved.queue)
+          ? saved.queue.filter((range) =>
+              Boolean(range && typeof range.id === "string") &&
+              getJoinSplitRangeSegments(range).length > 0 &&
+              getJoinSplitRangeSegments(range).every((segment) => sourceIds.has(segment.sourceId)),
+            )
+          : [];
+        const restoredQueueState: SavedWorkspace["queueExportState"] = {};
+        if (saved.queueExportState && typeof saved.queueExportState === "object") {
+          for (const [rangeId, state] of Object.entries(saved.queueExportState)) {
+            if (!savedQueue.some((range) => range.id === rangeId)) continue;
+            if (state.status === "done" && state.output && exportById.has(state.output.id)) {
+              restoredQueueState[rangeId] = { ...state, output: exportById.get(state.output.id)! };
+            } else if (state.status === "exporting") {
+              restoredQueueState[rangeId] = {
+                status: "pending",
+                message: "TÃ¡c vá»¥ trÆ°á»›c bá»‹ giÃ¡n Ä‘oáº¡n; hÃ£y xuáº¥t láº¡i.",
+              };
+            } else if (state.status === "error" || state.status === "cancelled") {
+              restoredQueueState[rangeId] = state;
+            }
+          }
+        }
+
+        setSources(result.sources);
+        setSelectedSourceIds(
+          Array.isArray(saved.selectedSourceIds)
+            ? saved.selectedSourceIds.filter((id) => sourceIds.has(id))
+            : [],
+        );
+        const restoredClipItems: JoinSplitTimelineClipItem[] = [];
+        if (Array.isArray(saved.timelineClipItems) && saved.timelineClipItems.length > 0) {
+          for (const item of saved.timelineClipItems) {
+            const src = sourceMap.get(item.sourceId);
+            if (!src) continue;
+            const startFrame = Math.max(1, Math.min(src.frameCount, Number.isFinite(item.startFrame) ? item.startFrame : 1));
+            const endFrame = Math.max(startFrame, Math.min(src.frameCount, Number.isFinite(item.endFrame) ? item.endFrame : src.frameCount));
+            restoredClipItems.push({
+              id: typeof item.id === "string" ? item.id : crypto.randomUUID(),
+              sourceId: item.sourceId,
+              startFrame,
+              endFrame,
+              offsetSeconds: typeof item.offsetSeconds === "number" && Number.isFinite(item.offsetSeconds) ? Math.max(0, item.offsetSeconds) : undefined,
+            });
+          }
+        } else if (Array.isArray(saved.timelineSourceIds)) {
+          for (const id of saved.timelineSourceIds) {
+            const src = sourceMap.get(id);
+            if (!src) continue;
+            restoredClipItems.push({
+              id: crypto.randomUUID(),
+              sourceId: id,
+              startFrame: 1,
+              endFrame: src.frameCount,
+            });
+          }
+        }
+        setTimelineClipItems(restoredClipItems);
+        setMagnetEnabled(saved.magnetEnabled !== false);
+        setActiveClipId(
+          typeof saved.activeClipId === "string" && restoredClipItems.some((c) => c.id === saved.activeClipId)
+            ? saved.activeClipId
+            : restoredClipItems[0]?.id || null,
+        );
+        setActiveSourceId(
+          typeof saved.activeSourceId === "string" && sourceIds.has(saved.activeSourceId)
+            ? saved.activeSourceId
+            : null,
+        );
+        setPlayhead(typeof saved.playhead === "number" && Number.isFinite(saved.playhead) ? saved.playhead : 0);
+        setCutFromTime(typeof saved.cutFromTime === "number" && Number.isFinite(saved.cutFromTime)
+          ? saved.cutFromTime
+          : null);
+        setCutToTime(typeof saved.cutToTime === "number" && Number.isFinite(saved.cutToTime)
+          ? saved.cutToTime
+          : null);
+        setSplitMarkers(
+          Array.isArray(saved.splitMarkers)
+            ? [...new Set(saved.splitMarkers.filter((time) => Number.isFinite(time)))].sort((a, b) => a - b)
+            : [],
+        );
+        setQueue(savedQueue);
+        setSelectedQueueId(
+          typeof saved.selectedQueueId === "string" && savedQueue.some((range) => range.id === saved.selectedQueueId)
+            ? saved.selectedQueueId
+            : null,
+        );
+        setQueueExportState(restoredQueueState);
+        setReferenceSourceId(
+          typeof saved.referenceSourceId === "string" && sourceIds.has(saved.referenceSourceId)
+            ? saved.referenceSourceId
+            : result.sources[0]?.id || "",
+        );
+        setZoom(typeof saved.zoom === "number" && Number.isFinite(saved.zoom) ? saved.zoom : 180);
+        setSnapDistancePx(typeof saved.snapDistancePx === "number" ? saved.snapDistancePx : 8);
+        setPreferKeyframeCuts(saved.preferKeyframeCuts === true);
+        setTimelineJoinOutput(
+          saved.timelineJoinOutput ? exportById.get(saved.timelineJoinOutput.id) || null : null,
+        );
+        setQueueJoinOutput(
+          saved.queueJoinOutput ? exportById.get(saved.queueJoinOutput.id) || null : null,
+        );
+        setJoinQueuesAfterExport(saved.joinQueuesAfterExport === true);
+        setMuted(saved.muted === true);
+        setVolume(typeof saved.volume === "number" && Number.isFinite(saved.volume)
+          ? Math.max(0, Math.min(1, saved.volume))
+          : 1);
+        setWorkspaceHydrated(true);
+      } catch (loadError) {
+        if (!cancelled) {
+          setError(loadError instanceof Error ? loadError.message : "KhÃ´ng thá»ƒ khÃ´i phá»¥c tráº¡ng thÃ¡i Join/Split.");
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!workspaceHydrated) return;
+    if (skipWorkspaceSaveRef.current) {
+      skipWorkspaceSaveRef.current = false;
+      return;
+    }
+    const saved: SavedWorkspace = {
+      selectedSourceIds,
+      timelineSourceIds,
+      timelineClipItems,
+      magnetEnabled,
+      activeClipId,
+      activeSourceId,
+      playhead,
+      cutFromTime,
+      cutToTime,
+      splitMarkers,
+      queue,
+      selectedQueueId,
+      queueExportState,
+      referenceSourceId,
+      zoom,
+      snapDistancePx,
+      preferKeyframeCuts,
+      timelineJoinOutput,
+      queueJoinOutput,
+      joinQueuesAfterExport,
+      muted,
+      volume,
+    };
+    const timer = window.setTimeout(() => {
+      try {
+        window.localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify(saved));
+      } catch (saveError) {
+        console.error("[JoinSplitVideo] KhÃ´ng thá»ƒ lÆ°u tráº¡ng thÃ¡i trang:", saveError);
+        setError("KhÃ´ng thá»ƒ lÆ°u tráº¡ng thÃ¡i Join/Split vÃ o trÃ¬nh duyá»‡t.");
+      }
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [
+    activeClipId,
+    activeSourceId,
+    cutFromTime,
+    cutToTime,
+    joinQueuesAfterExport,
+    magnetEnabled,
+    muted,
+    playhead,
+    preferKeyframeCuts,
+    queue,
+    queueExportState,
+    queueJoinOutput,
+    referenceSourceId,
+    selectedQueueId,
+    selectedSourceIds,
+    splitMarkers,
+    snapDistancePx,
+    timelineClipItems,
+    timelineJoinOutput,
+    timelineSourceIds,
+    volume,
+    workspaceHydrated,
+    zoom,
+  ]);
+
+  const sourceById = useMemo(
+    () => new Map(sources.map((source) => [source.id, source])),
+    [sources],
+  );
+  const timelineClips = useMemo(() => {
+    let prevEnd = 0;
+    return timelineClipItems.flatMap((item) => {
+      const source = sourceById.get(item.sourceId);
+      if (!source) return [];
+      const startFrame = Math.max(1, Math.min(source.frameCount, item.startFrame));
+      const endFrame = Math.max(startFrame, Math.min(source.frameCount, item.endFrame));
+      const frameSpan = endFrame - startFrame + 1;
+      const duration = frameSpan / source.frameRate;
+      const start = (magnetEnabled || typeof item.offsetSeconds !== "number")
+        ? prevEnd
+        : Math.max(prevEnd, item.offsetSeconds);
+      const end = start + duration;
+      prevEnd = end;
+      const clip: TimelineClip = {
+        clipId: item.id,
+        sourceId: item.sourceId,
+        start,
+        end,
+        duration,
+        startFrame,
+        endFrame,
+        source,
+      };
+      return [clip];
+    });
+  }, [magnetEnabled, sourceById, timelineClipItems]);
+  const keyframeTimelineClips = useMemo(
+    () => timelineClips.map((clip) => ({
+      ...clip,
+      frameRate: clip.source.frameRate,
+      frameCount: clip.source.frameCount,
+      startFrame: clip.startFrame,
+      endFrame: clip.endFrame,
+      keyframeTimes: clip.source.keyframeTimes,
+    })),
+    [timelineClips],
+  );
+  const timelineDuration = timelineClips.at(-1)?.end || 0;
+  const fitZoom = timelineDuration > 0 && timelineViewportWidth > 0
+    ? Math.max(0.01, timelineViewportWidth / timelineDuration)
+    : MIN_ZOOM;
+  const minimumZoom = Math.min(MIN_ZOOM, fitZoom);
+  const fitTimeline = useCallback(() => {
+    setZoom(fitZoom);
+    setFitViewResetVersion((version) => version + 1);
+  }, [fitZoom]);
+  const timelineWidth = Math.max(
+    timelineViewportWidth,
+    timelineDuration > 0 ? timelineDuration * zoom : 900,
+  );
+  const selectedSource = activeSourceId ? sourceById.get(activeSourceId) : undefined;
+
+  useLayoutEffect(() => {
+    if (fitViewResetVersion === 0) return;
+    const container = timelineScrollRef.current;
+    if (!container) return;
+    container.scrollLeft = 0;
+    setTimelineScrollLeft(0);
+  }, [fitViewResetVersion]);
+
+  const activeClip = useMemo(() => {
+    if (timelineClips.length > 0) {
+      const matchAtPlayhead = timelineClips.find((c) => playhead >= c.start && playhead < c.end);
+      if (matchAtPlayhead) return matchAtPlayhead;
+    }
+    if (activeClipId) {
+      const match = timelineClips.find((clip) => clip.clipId === activeClipId);
+      if (match) return match;
+    }
+    if (activeSourceId) {
+      const match = timelineClips.find((clip) => clip.sourceId === activeSourceId);
+      if (match) return match;
+    }
+    return timelineClips[0];
+  }, [activeClipId, activeSourceId, playhead, timelineClips]);
+  const playheadClip = useMemo(
+    () => timelineClips.find((c) => playhead >= c.start && playhead < c.end),
+    [playhead, timelineClips],
+  );
+  const isInGap = timelineClips.length > 0 && !playheadClip;
+  const localPlayhead = activeClip
+    ? Math.max(0, Math.min(activeClip.duration, playhead - activeClip.start))
+    : playhead;
+  const currentFrame = activeClip && selectedSource
+    ? Math.max(
+        activeClip.startFrame,
+        Math.min(
+          activeClip.endFrame,
+          activeClip.startFrame + Math.floor(localPlayhead * selectedSource.frameRate + 1e-6),
+        ),
+      )
+    : 1;
+  const isIncompatible = useMemo(() => {
+    if (!referenceSourceId) return false;
+    const reference = sourceById.get(referenceSourceId);
+    if (!reference) return false;
+    const signature = (source: JoinSplitVideoSource) =>
+      JSON.stringify([source.video, source.audio || null]);
+    return timelineClips.some((clip) => signature(clip.source) !== signature(reference));
+  }, [referenceSourceId, sourceById, timelineClips]);
+
+  const uploadFiles = useCallback(async (files: FileList | File[]) => {
+    const candidates = Array.from(files).filter((file) => file.type.startsWith("video/") || /\.(mp4|mkv|mov|avi|webm|m4v)$/i.test(file.name));
+    if (!candidates.length) {
+      setError("KhÃ´ng tÃ¬m tháº¥y video há»£p lá»‡ trong tá»‡p Ä‘Ã£ chá»n.");
+      return;
+    }
+    if (uploadInProgressRef.current) return;
+    uploadInProgressRef.current = true;
+    setError(null);
+    setNotice(null);
+    try {
+      for (const file of candidates) {
+        const uploadId = crypto.randomUUID();
+        const updateJob = (update: Partial<UploadJob>) => {
+          setUploadJobs((current) => current.map((job) =>
+            job.id === uploadId ? { ...job, ...update } : job,
+          ));
+        };
+        setUploadingName(file.name);
+        setUploadJobs((current) => [...current, {
+          id: uploadId,
+          fileName: file.name,
+          percent: 0,
+          stage: "Äang táº£i video lÃªnâ€¦",
+          status: "uploading",
+        }]);
+
+        let resolveUploadSent!: () => void;
+        const uploadSent = new Promise<void>((resolve) => {
+          resolveUploadSent = resolve;
+        });
+        let uploadResponseReceived = false;
+        const uploadRequest = new Promise<{ source: JoinSplitVideoSource }>((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          xhr.open("POST", `${API}/files`);
+          xhr.setRequestHeader("Content-Type", "application/octet-stream");
+          xhr.setRequestHeader("X-File-Name", encodeURIComponent(file.name));
+          xhr.setRequestHeader("X-Upload-Id", uploadId);
+          xhr.upload.addEventListener("progress", (event) => {
+            if (!event.lengthComputable) return;
+            updateJob({
+              percent: Math.min(60, Math.round(event.loaded / event.total * 60)),
+              stage: "Äang táº£i video lÃªnâ€¦",
+              status: "uploading",
+            });
+          });
+          xhr.upload.addEventListener("load", () => {
+            updateJob({ percent: 60, stage: "Äang phÃ¢n tÃ­ch videoâ€¦", status: "analyzing" });
+            resolveUploadSent();
+          });
+          xhr.addEventListener("load", () => {
+            try {
+              const result = JSON.parse(xhr.responseText) as { source?: JoinSplitVideoSource; error?: string };
+              if (xhr.status < 200 || xhr.status >= 300) {
+                reject(new Error(result.error || `YÃªu cáº§u tháº¥t báº¡i (${xhr.status}).`));
+              } else if (!result.source) {
+                reject(new Error("MÃ¡y chá»§ khÃ´ng tráº£ vá» thÃ´ng tin video."));
+              } else {
+                resolve({ source: result.source });
+              }
+            } catch (parseError) {
+              reject(parseError instanceof Error ? parseError : new Error("Pháº£n há»“i táº£i video khÃ´ng há»£p lá»‡."));
+            }
+          });
+          xhr.addEventListener("error", () => reject(new Error(`KhÃ´ng thá»ƒ táº£i ${file.name} lÃªn mÃ¡y chá»§.`)));
+          xhr.addEventListener("abort", () => reject(new Error(`ÄÃ£ há»§y táº£i ${file.name}.`)));
+          xhr.send(file);
+        });
+        const pollProgress = async () => {
+          await uploadSent;
+          while (!uploadResponseReceived) {
+            try {
+              const response = await fetch(`${API}/files/upload-progress/${encodeURIComponent(uploadId)}`);
+              if (response.ok) {
+                const progress = await responseJson<{
+                  status: "processing" | "done" | "error";
+                  percent: number;
+                  stage: string;
+                  error?: string;
+                }>(response);
+                updateJob({
+                  percent: progress.percent,
+                  stage: progress.stage,
+                  status: progress.status === "error" ? "error" : "analyzing",
+                  ...(progress.error ? { error: progress.error } : {}),
+                });
+              } else if (response.status !== 404) {
+                console.warn(`KhÃ´ng thá»ƒ Ä‘á»c tiáº¿n trÃ¬nh táº£i video (${response.status}).`);
+              }
+            } catch (pollError) {
+              console.warn("KhÃ´ng thá»ƒ Ä‘á»c tiáº¿n trÃ¬nh phÃ¢n tÃ­ch video:", pollError);
+            }
+            await new Promise((resolve) => window.setTimeout(resolve, 400));
+          }
+        };
+        const polling = pollProgress();
+        try {
+          const result = await uploadRequest;
+          uploadResponseReceived = true;
+          await polling;
+          setSources((current) => [...current, result.source]);
+          setSelectedSourceIds((current) => current.length ? current : [result.source.id]);
+          setActiveSourceId((current) => current || result.source.id);
+          setReferenceSourceId((current) => current || result.source.id);
+          setUploadJobs((current) => current.filter((job) => job.id !== uploadId));
+          setNotice(`ÄÃ£ táº£i vÃ  phÃ¢n tÃ­ch ${file.name}.`);
+        } catch (uploadError) {
+          uploadResponseReceived = true;
+          resolveUploadSent();
+          await polling;
+          const message = uploadError instanceof Error ? uploadError.message : `KhÃ´ng thá»ƒ táº£i ${file.name}.`;
+          updateJob({ status: "error", stage: "Táº£i hoáº·c phÃ¢n tÃ­ch tháº¥t báº¡i.", error: message });
+          setError(message);
+        }
+      }
+    } finally {
+      uploadInProgressRef.current = false;
+      setUploadingName(null);
+    }
+  }, []);
+
+  const selectSource = (sourceId: string, event?: MouseEvent) => {
+    setError(null);
+    const sourceIndex = sources.findIndex((source) => source.id === sourceId);
+    if (event?.shiftKey && sourceIndex >= 0) {
+      const anchorIndex = selectionAnchorIndexRef.current ?? sourceIndex;
+      const start = Math.min(anchorIndex, sourceIndex);
+      const end = Math.max(anchorIndex, sourceIndex);
+      const rangeIds = sources.slice(start, end + 1).map((source) => source.id);
+      setSelectedSourceIds((current) =>
+        event.ctrlKey || event.metaKey
+          ? [...new Set([...current, ...rangeIds])]
+          : rangeIds,
+      );
+      setActiveSourceId(sourceId);
+      setPlayhead(timelineClips.find((item) => item.sourceId === sourceId)?.start || 0);
+      return;
+    }
+    if (event?.ctrlKey || event?.metaKey) {
+      setSelectedSourceIds((current) => {
+        const next = current.includes(sourceId)
+          ? current.filter((id) => id !== sourceId)
+          : [...current, sourceId];
+        if (!current.includes(sourceId)) selectionAnchorIndexRef.current = sourceIndex;
+        return next;
+      });
+      setActiveSourceId(sourceId);
+      setPlayhead(timelineClips.find((item) => item.sourceId === sourceId)?.start || 0);
+      return;
+    }
+    selectionAnchorIndexRef.current = sourceIndex;
+    setSelectedSourceIds([sourceId]);
+    setActiveSourceId(sourceId);
+    const clip = timelineClips.find((item) => item.sourceId === sourceId);
+    if (clip) setPlayhead(clip.start);
+    else setPlayhead(0);
+  };
+
+  const appendToTimeline = (sourceIds: string[]) => {
+    const validSources = sourceIds.map((id) => sourceById.get(id)).filter((s): s is JoinSplitVideoSource => Boolean(s));
+    if (!validSources.length) return;
+    const newItems: JoinSplitTimelineClipItem[] = validSources.map((source) => ({
+      id: crypto.randomUUID(),
+      sourceId: source.id,
+      startFrame: 1,
+      endFrame: source.frameCount,
+    }));
+    setTimelineClipItems((current) => [...current, ...newItems]);
+    setActiveClipId(newItems[0].id);
+    setActiveSourceId(newItems[0].sourceId);
+    setNotice(`ÄÃ£ thÃªm ${newItems.length} clip vÃ o timeline, khÃ´ng táº¡o khoáº£ng trá»‘ng.`);
+    setError(null);
+  };
+
+  const removeTimelineClip = (clipId: string) => {
+    const clipIndex = timelineClipItems.findIndex((c) => c.id === clipId);
+    if (clipIndex < 0) return;
+    const clipToDelete = timelineClips.find((c) => c.clipId === clipId);
+    const nextClipItems = timelineClipItems.filter((c) => c.id !== clipId);
+    if (!magnetEnabled && clipToDelete) {
+      for (let i = clipIndex; i < nextClipItems.length; i++) {
+        const item = nextClipItems[i];
+        if (typeof item.offsetSeconds !== "number") {
+          const originalClip = timelineClips.find((c) => c.clipId === item.id);
+          if (originalClip) {
+            nextClipItems[i] = { ...item, offsetSeconds: originalClip.start };
+          }
+        }
+      }
+    }
+    setTimelineClipItems(nextClipItems);
+    if (nextClipItems.length === 0) {
+      setActiveClipId(null);
+      setPlayhead(0);
+    } else if (activeClipId === clipId) {
+      const nextItem = nextClipItems[Math.min(clipIndex, nextClipItems.length - 1)];
+      setActiveClipId(nextItem.id);
+      setActiveSourceId(nextItem.sourceId);
+      const nextClip = timelineClips.find((c) => c.clipId === nextItem.id);
+      setPlayhead(nextClip?.start || 0);
+    }
+    setNotice("ÄÃ£ xÃ³a clip khá»i timeline; video gá»‘c váº«n cÃ²n trong danh sÃ¡ch input.");
+  };
+
+  // HoÃ¡n Ä‘á»•i vá»‹ trÃ­ hai clip báº¥t ká»³ dá»±a theo clipId
+  const handleSwapClips = useCallback((clipId1: string, clipId2: string) => {
+    setTimelineClipItems((current) => {
+      const idx1 = current.findIndex((c) => c.id === clipId1);
+      const idx2 = current.findIndex((c) => c.id === clipId2);
+      if (idx1 < 0 || idx2 < 0 || idx1 === idx2) return current;
+
+      const next = [...current];
+      const temp = next[idx1];
+      next[idx1] = next[idx2];
+      next[idx2] = temp;
+      return next;
+    });
+    setNotice("ÄÃ£ hoÃ¡n Ä‘á»•i vá»‹ trÃ­ thÃ nh cÃ´ng giá»¯a 2 clip.");
+  }, []);
+
+  // Di chuyá»ƒn clip sang trÃ¡i hoáº·c pháº£i 1 vá»‹ trÃ­ (DÃ¹ng cho nÃºt mÅ©i tÃªn [â†] / [â†’])
+  const handleMoveClipOffset = useCallback((clipId: string, direction: -1 | 1) => {
+    setTimelineClipItems((current) => {
+      const idx = current.findIndex((c) => c.id === clipId);
+      if (idx < 0) return current;
+      const targetIdx = idx + direction;
+      if (targetIdx < 0 || targetIdx >= current.length) return current; // KhÃ´ng dá»‹ch chuyá»ƒn quÃ¡ biÃªn
+
+      const next = [...current];
+      const temp = next[idx];
+      next[idx] = next[targetIdx];
+      next[targetIdx] = temp;
+      return next;
+    });
+  }, []);
+
+  const removeTimelineSource = (sourceId: string) => {
+    const nextClipItems = timelineClipItems.filter((c) => c.sourceId !== sourceId);
+    if (!magnetEnabled) {
+      for (let i = 0; i < nextClipItems.length; i++) {
+        const item = nextClipItems[i];
+        if (typeof item.offsetSeconds !== "number") {
+          const originalClip = timelineClips.find((c) => c.clipId === item.id);
+          if (originalClip) {
+            nextClipItems[i] = { ...item, offsetSeconds: originalClip.start };
+          }
+        }
+      }
+    }
+    setTimelineClipItems(nextClipItems);
+    if (nextClipItems.length === 0) {
+      setActiveClipId(null);
+      setPlayhead(0);
+    } else if (activeSourceId === sourceId) {
+      const nextItem = nextClipItems[0];
+      setActiveClipId(nextItem.id);
+      setActiveSourceId(nextItem.sourceId);
+      const nextClip = timelineClips.find((c) => c.clipId === nextItem.id);
+      setPlayhead(nextClip?.start || 0);
+    }
+    setNotice("ÄÃ£ xÃ³a video khá»i timeline; video váº«n cÃ²n trong danh sÃ¡ch input.");
+  };
+
+  const removeSource = async (sourceId: string) => {
+    try {
+      const response = await fetch(`${API}/files/${encodeURIComponent(sourceId)}`, { method: "DELETE" });
+      await responseJson<{ success: boolean }>(response);
+      setSources((current) => current.filter((source) => source.id !== sourceId));
+      setSelectedSourceIds((current) => current.filter((id) => id !== sourceId));
+      setTimelineClipItems((current) => current.filter((clip) => clip.sourceId !== sourceId));
+      setQueue((current) => current.filter((range) =>
+        !getJoinSplitRangeSegments(range).some((segment) => segment.sourceId === sourceId),
+      ));
+      setQueueExportState((current) => {
+        const next = { ...current };
+        for (const range of queue) {
+          if (getJoinSplitRangeSegments(range).some((segment) => segment.sourceId === sourceId)) {
+            delete next[range.id];
+          }
+        }
+        return next;
+      });
+      if (queue.some((range) =>
+        getJoinSplitRangeSegments(range).some((segment) => segment.sourceId === sourceId) &&
+        range.id === selectedQueueId,
+      )) setSelectedQueueId(null);
+      if (activeSourceId === sourceId) {
+        const nextId = sources.find((source) => source.id !== sourceId)?.id || null;
+        setActiveSourceId(nextId);
+        setPlayhead(0);
+      }
+      if (referenceSourceId === sourceId) {
+        setReferenceSourceId(sources.find((source) => source.id !== sourceId)?.id || "");
+      }
+      setNotice("ÄÃ£ xÃ³a video khá»i danh sÃ¡ch.");
+    } catch (removeError) {
+      setError(removeError instanceof Error ? removeError.message : "KhÃ´ng thá»ƒ xÃ³a video.");
+    }
+  };
+
+  const snapPlayheadTime = useCallback(
+    (requestedTime: number, snapToClipEdges = true) => {
+      const snapClips = timelineClips.map((clip) => ({
+          start: clip.start,
+          end: clip.end,
+          frameRate: clip.source.frameRate,
+      }));
+      if (!snapToClipEdges) {
+        return snapJoinSplitTimelineTime(
+          requestedTime,
+          snapClips,
+          zoom,
+          snapDistancePx,
+          false,
+        );
+      }
+      const cueBoundaries = queue.flatMap((range) => {
+        const bounds = getJoinSplitRangeTimelineBounds(
+          getJoinSplitRangeSegments(range),
+          timelineClips.map((clip) => ({
+            clipId: clip.clipId,
+            sourceId: clip.sourceId,
+            start: clip.start,
+            end: clip.end,
+            frameRate: clip.source.frameRate,
+            frameCount: clip.source.frameCount,
+            startFrame: clip.startFrame,
+            endFrame: clip.endFrame,
+          })),
+        );
+        return bounds ? [bounds.start, bounds.end] : [];
+      });
+      return snapJoinSplitTimelineTimeToTargets(
+        requestedTime,
+        snapClips,
+        zoom,
+        snapDistancePx,
+        cueBoundaries,
+      );
+    },
+    [queue, snapDistancePx, timelineClips, zoom],
+  );
+  const snapCueEdgeTime = useCallback(
+    (requestedTime: number) => snapJoinSplitTimelineTimeToTargets(
+      requestedTime,
+      timelineClips.map((clip) => ({
+        start: clip.start,
+        end: clip.end,
+        frameRate: clip.source.frameRate,
+      })),
+      zoom,
+      snapDistancePx,
+      [playhead],
+    ),
+    [playhead, snapDistancePx, timelineClips, zoom],
+  );
+
+  const seekGlobal = useCallback((requestedTime: number) => {
+    if (!timelineClips.length) return;
+    const time = snapPlayheadTime(requestedTime);
+    const clip = timelineClips.find((item) => time >= item.start && time < item.end);
+    if (clip) {
+      const localTime = Math.min(clip.duration, time - clip.start);
+      if (previewRef.current) {
+        try {
+          const sourceFrameTime = (clip.startFrame - 1) / clip.source.frameRate + localTime;
+          previewRef.current.currentTime = Math.max(0, sourceFrameTime);
+        } catch {
+          setError("KhÃ´ng thá»ƒ tua tá»›i frame Ä‘Ã£ chá»n.");
+        }
+      }
+      setActiveClipId(clip.clipId);
+      setActiveSourceId(clip.sourceId);
+    } else {
+      if (previewRef.current) {
+        previewRef.current.pause();
+      }
+    }
+    setPlayhead(time);
+  }, [snapPlayheadTime, timelineClips]);
+
+  const seekFrame = useCallback((frame: number) => {
+    if (!selectedSource || !activeClip) return;
+    const targetFrame = Math.max(activeClip.startFrame, Math.min(activeClip.endFrame, frame));
+    const offsetSeconds = (targetFrame - activeClip.startFrame) / selectedSource.frameRate;
+    seekGlobal(activeClip.start + offsetSeconds);
+  }, [activeClip, seekGlobal, selectedSource]);
+
+  const setCutFrom = () => {
+    const exactFrameTime = snapPlayheadTime(playhead);
+    const keyframeTime = preferKeyframeCuts
+      ? snapCutTimeToKeyframe(exactFrameTime, keyframeTimelineClips, "start")
+      : null;
+    setCutFromTime(keyframeTime ?? exactFrameTime);
+    if (preferKeyframeCuts && keyframeTime === null) {
+      setNotice("KhÃ´ng cÃ³ keyframe kháº£ dá»¥ng táº¡i vá»‹ trÃ­ nÃ y; Ä‘Ã£ giá»¯ frame chÃ­nh xÃ¡c.");
+    }
+  };
+
+  const setCutTo = () => {
+    const exactFrameTime = snapPlayheadTime(playhead);
+    const keyframeTime = preferKeyframeCuts
+      ? snapCutTimeToKeyframe(exactFrameTime, keyframeTimelineClips, "end")
+      : null;
+    setCutToTime(keyframeTime ?? exactFrameTime);
+    if (preferKeyframeCuts && keyframeTime === null) {
+      setNotice("KhÃ´ng cÃ³ keyframe kháº£ dá»¥ng táº¡i vá»‹ trÃ­ nÃ y; Ä‘Ã£ giá»¯ frame chÃ­nh xÃ¡c.");
+    }
+  };
+
+  const seekTimelineStart = () => {
+    if (!timelineClips.length) return;
+    seekGlobal(0);
+  };
+
+  const seekTimelineEnd = () => {
+    if (!timelineClips.length) return;
+    seekGlobal(timelineDuration);
+  };
+
+  const splitClipAtPlayhead = () => {
+    if (!timelineClips.length) return;
+    const time = playhead;
+    const targetClip = timelineClips.find((c) => time > c.start + 1e-4 && time < c.end - 1e-4);
+    if (!targetClip) {
+      setNotice("Playhead pháº£i náº±m bÃªn trong má»™t clip (khÃ´ng á»Ÿ mÃ©p Ä‘áº§u/cuá»‘i clip) Ä‘á»ƒ cáº¯t.");
+      return;
+    }
+    const localTime = time - targetClip.start;
+    const splitFrame = Math.max(
+      targetClip.startFrame,
+      Math.min(
+        targetClip.endFrame - 1,
+        targetClip.startFrame + Math.floor(localTime * targetClip.source.frameRate + 1e-6),
+      ),
+    );
+    if (splitFrame < targetClip.startFrame || splitFrame >= targetClip.endFrame) {
+      setNotice("Vá»‹ trÃ­ cáº¯t quÃ¡ sÃ¡t mÃ©p clip.");
+      return;
+    }
+    const clipIndex = timelineClipItems.findIndex((c) => c.id === targetClip.clipId);
+    if (clipIndex < 0) return;
+    const firstPiece: JoinSplitTimelineClipItem = {
+      id: targetClip.clipId,
+      sourceId: targetClip.sourceId,
+      startFrame: targetClip.startFrame,
+      endFrame: splitFrame,
+      offsetSeconds: !magnetEnabled ? targetClip.start : undefined,
+    };
+    const splitOffset = (splitFrame - targetClip.startFrame + 1) / targetClip.source.frameRate;
+    const secondPiece: JoinSplitTimelineClipItem = {
+      id: crypto.randomUUID(),
+      sourceId: targetClip.sourceId,
+      startFrame: splitFrame + 1,
+      endFrame: targetClip.endFrame,
+      offsetSeconds: !magnetEnabled ? targetClip.start + splitOffset : undefined,
+    };
+    const nextClips = [...timelineClipItems];
+    nextClips.splice(clipIndex, 1, firstPiece, secondPiece);
+    setTimelineClipItems(nextClips);
+    setActiveClipId(secondPiece.id);
+    setNotice(`ÄÃ£ cáº¯t clip "${targetClip.source.fileName}" táº¡i frame ${splitFrame}.`);
+    setError(null);
+  };
+
+  const addSplitMarker = () => {
+    if (!timelineClips.length) return;
+    const marker = snapPlayheadTime(playhead);
+    if (marker <= 0 || marker >= timelineDuration) {
+      setNotice("Má»‘c split pháº£i náº±m bÃªn trong timeline, khÃ´ng á»Ÿ Ä‘áº§u/cuá»‘i.");
+      return;
+    }
+    if (splitMarkers.some((time) => Math.abs(time - marker) < 1e-6)) {
+      setSelectedSplitMarker(marker);
+      setSelectedQueueId(null);
+      setNotice(`ÄÃ£ cÃ³ má»‘c split táº¡i ${formatTime(marker)}.`);
+      return;
+    }
+    setSplitMarkers((current) => [...current, marker].sort((a, b) => a - b));
+    setSelectedSplitMarker(marker);
+    setSelectedQueueId(null);
+    setError(null);
+    setNotice(`ÄÃ£ Ä‘Ã¡nh dáº¥u split táº¡i ${formatTime(marker)}.`);
+  };
+
+  const removeLastSplitMarker = () => {
+    if (splitMarkers.at(-1) === selectedSplitMarker) setSelectedSplitMarker(null);
+    setSplitMarkers((current) => current.slice(0, -1));
+  };
+
+  const splitTimelineToQueues = () => {
+    const validMarkers = splitMarkers.filter((time) => time > 0 && time < timelineDuration);
+    if (!validMarkers.length) {
+      setError("HÃ£y Ä‘Ã¡nh dáº¥u Ã­t nháº¥t má»™t má»‘c split trÃªn timeline.");
+      return;
+    }
+    if (
+      queue.length > 0 &&
+      !window.confirm("Táº¡o queue tá»« cÃ¡c má»‘c split vÃ  thay tháº¿ toÃ n bá»™ queue hiá»‡n táº¡i?")
+    ) {
+      return;
+    }
+    const partitions = getJoinSplitTimelinePartitionSegments(
+      validMarkers,
+      timelineClips.map((clip) => ({
+        clipId: clip.clipId,
+        sourceId: clip.sourceId,
+        start: clip.start,
+        end: clip.end,
+        frameRate: clip.source.frameRate,
+        frameCount: clip.source.frameCount,
+        startFrame: clip.startFrame,
+        endFrame: clip.endFrame,
+      })),
+    );
+    const nextQueue = partitions.flatMap((segments) => {
+      const first = segments[0];
+      const last = segments.at(-1);
+      if (!first || !last) return [];
+      return [{
+        id: crypto.randomUUID(),
+        sourceId: first.sourceId,
+        startFrame: first.startFrame,
+        endFrame: last.endFrame,
+        ...(segments.length > 1 ? { segments } : {}),
+      }];
+    });
+    if (nextQueue.length !== partitions.length) {
+      setError("KhÃ´ng thá»ƒ táº¡o queue cho má»™t hoáº·c nhiá»u Ä‘oáº¡n. Kiá»ƒm tra timeline vÃ  má»‘c split.");
+      return;
+    }
+    setQueue(nextQueue);
+    setQueueExportState({});
+    setSelectedQueueId(nextQueue[0]?.id || null);
+    setQueueJoinOutput(null);
+    setError(null);
+    setNotice(`ÄÃ£ táº¡o ${nextQueue.length} queue theo ${validMarkers.length} má»‘c split.`);
+  };
+
+  const addRangeToQueue = (segments: JoinSplitVideoRange["segments"]) => {
+    if (!segments?.length) {
+      setError("Khoáº£ng frame khÃ´ng há»£p lá»‡. HÃ£y kiá»ƒm tra Ä‘iá»ƒm Ä‘áº§u vÃ  Ä‘iá»ƒm cuá»‘i.");
+      return false;
+    }
+    const first = segments[0];
+    const last = segments[segments.length - 1];
+    setQueue((current) => [
+      ...current,
+      {
+        id: crypto.randomUUID(),
+        sourceId: first.sourceId,
+        startFrame: first.startFrame,
+        endFrame: first.endFrame,
+        ...(segments.length > 1 ? { segments } : {}),
+      },
+    ]);
+    setError(null);
+    setNotice(`ÄÃ£ thÃªm ${segments.length > 1 ? `${segments.length} Ä‘oáº¡n liÃªn tiáº¿p` : `${sourceById.get(first.sourceId)?.fileName || "video"} Â· frame ${first.startFrame}â€“${last.endFrame}`} vÃ o queue.`);
+    setCutFromTime(null);
+    setCutToTime(null);
+    return true;
+  };
+
+  const addActiveClipToQueue = () => {
+    if (!activeClipId || !timelineClips.length) return;
+    
+    const activeClip = timelineClips.find((c) => c.clipId === activeClipId);
+    if (!activeClip) return;
+    
+    const source = sourceById.get(activeClip.sourceId);
+    if (!source) return;
+    
+    let startFrame = activeClip.startFrame;
+    let endFrame = activeClip.endFrame;
+    
+    if (preferKeyframeCuts && source.keyframeTimes?.length) {
+      // Find nearest keyframe <= startFrame
+      const keyframeFrames = source.keyframeTimes
+        .map((time) => Math.round(time * source.frameRate) + 1)
+        .filter((f) => f >= 1 && f <= source.frameCount)
+        .sort((a, b) => a - b);
+      
+      if (keyframeFrames.length > 0) {
+        // Snap start to previous keyframe
+        const prevKeyframe = keyframeFrames.filter((f) => f <= startFrame).at(-1);
+        if (prevKeyframe !== undefined) startFrame = prevKeyframe;
+        
+        // Snap end to next keyframe (endFrame + 1 for exclusive end)
+        const nextKeyframe = keyframeFrames.find((f) => f > endFrame);
+        if (nextKeyframe !== undefined) endFrame = nextKeyframe - 1;
+      }
+    }
+    
+    // Create a single-segment range for this clip
+    const range = {
+      id: crypto.randomUUID(),
+      sourceId: activeClip.sourceId,
+      startFrame,
+      endFrame,
+    };
+    
+    setQueue((current) => [...current, range]);
+    setNotice(`ÄÃ£ thÃªm clip vÃ o queue: ${source.fileName} Â· frame ${startFrame}â€“${endFrame}${preferKeyframeCuts ? " (snapped to keyframe)" : ""}`);
+    setError(null);
+  };
+
+  const addAllClipsToQueue = () => {
+    if (!timelineClips.length) return;
+    
+    let addedCount = 0;
+    const newRanges: JoinSplitVideoRange[] = [];
+    
+    for (const clip of timelineClips) {
+      const source = sourceById.get(clip.sourceId);
+      if (!source) continue;
+      
+      let startFrame = clip.startFrame;
+      let endFrame = clip.endFrame;
+      
+      if (preferKeyframeCuts && source.keyframeTimes?.length) {
+        const keyframeFrames = source.keyframeTimes
+          .map((time) => Math.round(time * source.frameRate) + 1)
+          .filter((f) => f >= 1 && f <= source.frameCount)
+          .sort((a, b) => a - b);
+        
+        if (keyframeFrames.length > 0) {
+          const prevKeyframe = keyframeFrames.filter((f) => f <= startFrame).at(-1);
+          if (prevKeyframe !== undefined) startFrame = prevKeyframe;
+          
+          const nextKeyframe = keyframeFrames.find((f) => f > endFrame);
+          if (nextKeyframe !== undefined) endFrame = nextKeyframe - 1;
+        }
+      }
+      
+      addedCount++;
+      newRanges.push({
+        id: crypto.randomUUID(),
+        sourceId: clip.sourceId,
+        startFrame,
+        endFrame,
+      });
+    }
+    
+    setQueue((current) => [...current, ...newRanges]);
+    setNotice(`ÄÃ£ thÃªm ${addedCount} clip vÃ o queue${preferKeyframeCuts ? " (snapped to keyframe)" : ""}.`);
+    setError(null);
+  };
+
+  const createSingleMergedQueue = () => {
+    if (!timelineClips.length) return;
+    
+    // Táº¡o segments bao phá»§ toÃ n bá»™ timeline (táº¥t cáº£ clips)
+    const allSegments = timelineClips.map((clip) => ({
+      clipId: clip.clipId,
+      sourceId: clip.sourceId,
+      start: clip.start,
+      end: clip.end,
+      frameRate: clip.source.frameRate,
+      frameCount: clip.source.frameCount,
+      startFrame: clip.startFrame,
+      endFrame: clip.endFrame,
+    }));
+    
+    // Láº¥y segments cho toÃ n bá»™ timeline
+    const segments = getJoinSplitTimelineSegments(0, timelineDuration, allSegments);
+    
+    if (!segments.length) {
+      setError("KhÃ´ng thá»ƒ táº¡o queue tá»« timeline rá»—ng.");
+      return;
+    }
+    
+    // Snap segments to keyframe náº¿u báº­t preferKeyframeCuts
+    let snappedSegments = segments;
+    if (preferKeyframeCuts) {
+      snappedSegments = segments.map((segment) => {
+        const source = sourceById.get(segment.sourceId);
+        if (!source?.keyframeTimes?.length) return segment;
+        
+        const keyframeFrames = source.keyframeTimes
+          .map((time) => Math.round(time * source.frameRate) + 1)
+          .filter((f) => f >= 1 && f <= source.frameCount)
+          .sort((a, b) => a - b);
+        
+        if (!keyframeFrames.length) return segment;
+        
+        let startFrame = segment.startFrame;
+        let endFrame = segment.endFrame;
+        
+        // Snap start to previous keyframe
+        const prevKeyframe = keyframeFrames.filter((f) => f <= startFrame).at(-1);
+        if (prevKeyframe !== undefined) startFrame = prevKeyframe;
+        
+        // Snap end to next keyframe (exclusive end)
+        const nextKeyframe = keyframeFrames.find((f) => f > endFrame);
+        if (nextKeyframe !== undefined) endFrame = nextKeyframe - 1;
+        
+        return { ...segment, startFrame, endFrame };
+      });
+    }
+    
+    const firstSegment = snappedSegments[0];
+    const lastSegment = snappedSegments[snappedSegments.length - 1];
+    
+    const range = {
+      id: crypto.randomUUID(),
+      sourceId: firstSegment.sourceId,
+      startFrame: firstSegment.startFrame,
+      endFrame: lastSegment.endFrame,
+      ...(snappedSegments.length > 1 ? { segments: snappedSegments } : {}),
+    };
+    
+    setQueue((current) => [...current, range]);
+    setNotice(`ÄÃ£ táº¡o 1 queue gá»™p toÃ n bá»™ ${timelineClips.length} clip (${snappedSegments.length} segment)${preferKeyframeCuts ? " (snapped to keyframe)" : ""}.`);
+    setError(null);
+  };
+
+  const addCurrentRange = () => {
+    if (!timelineClips.length) return;
+    const startTime = cutFromTime ?? 0;
+    const endTime = cutToTime ?? timelineDuration;
+    if (endTime < startTime) {
+      setError("Äiá»ƒm káº¿t thÃºc pháº£i náº±m sau Ä‘iá»ƒm báº¯t Ä‘áº§u.");
+      return;
+    }
+    addRangeToQueue(getJoinSplitTimelineSegments(
+      startTime,
+      endTime,
+      timelineClips.map((clip) => ({
+        clipId: clip.clipId,
+        sourceId: clip.sourceId,
+        start: clip.start,
+        end: clip.end,
+        frameRate: clip.source.frameRate,
+        frameCount: clip.source.frameCount,
+        startFrame: clip.startFrame,
+        endFrame: clip.endFrame,
+      })),
+    ));
+  };
+
+  const addLastCut = () => {
+    const lastRange = queue.at(-1);
+    if (!lastRange) {
+      setError("Queue Ä‘ang trá»‘ng. HÃ£y thÃªm má»™t Ä‘oáº¡n cáº¯t trÆ°á»›c.");
+      return;
+    }
+    const segments = getJoinSplitRangeSegments(lastRange);
+    const lastSegment = segments.at(-1)!;
+    const source = sourceById.get(lastSegment.sourceId);
+    if (!source) {
+      setError("Video nguá»“n cá»§a Ä‘oáº¡n cuá»‘i trong queue khÃ´ng cÃ²n kháº£ dá»¥ng.");
+      return;
+    }
+    const startFrame = lastSegment.endFrame + 1;
+    if (startFrame > source.frameCount) {
+      setError("Äoáº¡n cuá»‘i trong queue Ä‘Ã£ tá»›i frame cuá»‘i cá»§a video.");
+      return;
+    }
+    addRangeToQueue([{ sourceId: source.id, startFrame, endFrame: source.frameCount }]);
+  };
+
+  const togglePlayback = async () => {
+    if (!timelineClips.length && !selectedSource) return;
+    if (isPlaying) {
+      if (previewRef.current && !previewRef.current.paused) {
+        previewRef.current.pause();
+      }
+      setIsPlaying(false);
+      return;
+    }
+
+    if (playhead >= timelineDuration - 1e-4) {
+      setPlayhead(0);
+      seekGlobal(0);
+    }
+
+    const currentClip = timelineClips.find((c) => playhead >= c.start && playhead < c.end);
+    if (currentClip) {
+      const video = previewRef.current;
+      if (video) {
+        try {
+          const localTime = Math.max(0, playhead - currentClip.start);
+          const targetSourceTime = (currentClip.startFrame - 1) / currentClip.source.frameRate + localTime;
+          video.currentTime = targetSourceTime;
+          await video.play();
+          setIsPlaying(true);
+        } catch (playError) {
+          setError(playError instanceof Error ? playError.message : "KhÃ´ng thá»ƒ phÃ¡t video.");
+        }
+      } else {
+        setIsPlaying(true);
+      }
+    } else {
+      // Äang á»Ÿ trong khoáº£ng trá»‘ng (gap)
+      if (previewRef.current && !previewRef.current.paused) {
+        previewRef.current.pause();
+      }
+      setIsPlaying(true);
+    }
+  };
+
+  useEffect(() => {
+    const container = timelineScrollRef.current;
+    if (!container) return;
+    const updateWidth = () => setTimelineViewportWidth(container.clientWidth);
+    updateWidth();
+    const observer = new ResizeObserver(updateWidth);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
+
+  const exportQueue = async () => {
+    if (!queue.length || !referenceSourceId) return;
+    queueStopRequestedRef.current = false;
+    setExporting(true);
+    setError(null);
+    setQueueJoinOutput(null);
+    setNotice(`Äang xuáº¥t 0/${queue.length} queue itemâ€¦`);
+    setQueueExportState(Object.fromEntries(queue.map((range) => [range.id, { status: "pending" as const }])));
+    let completed = 0;
+    let failed = 0;
+    const exportedFiles: JoinSplitVideoExportFile[] = [];
+    for (const [queueIndex, range] of queue.entries()) {
+      if (queueStopRequestedRef.current) {
+        setQueueExportState((current) => ({
+          ...current,
+          [range.id]: current[range.id]?.status === "pending"
+            ? { status: "cancelled", message: "ChÆ°a cháº¡y vÃ¬ queue Ä‘Ã£ dá»«ng." }
+            : current[range.id],
+        }));
+        continue;
+      }
+      setQueueExportState((current) => ({
+        ...current,
+        [range.id]: { status: "exporting", progress: 0, message: "Äang khá»Ÿi táº¡oâ€¦" },
+      }));
+      setNotice(`Äang xuáº¥t ${completed + failed + 1}/${queue.length} queue itemâ€¦`);
+      const progressId = crypto.randomUUID();
+      currentExportProgressIdRef.current = progressId;
+      let shouldPoll = true;
+      const progressPoll = (async () => {
+        while (shouldPoll) {
+          const progressResponse = await fetch(`${API}/export/progress/${encodeURIComponent(progressId)}`);
+          if (progressResponse.ok) {
+            const progress = await responseJson<{
+              status: "running" | "done" | "error" | "cancelled";
+              percent: number;
+              message: string;
+              strategy?: "checking" | "stream-copy" | "encode" | "fallback";
+            }>(progressResponse);
+            setQueueExportState((current) => ({
+              ...current,
+              [range.id]: current[range.id]?.status === "exporting"
+                ? {
+                    ...current[range.id],
+                    progress: progress.percent,
+                    message: progress.message,
+                    strategy: progress.strategy,
+                  }
+                : current[range.id],
+            }));
+          } else if (progressResponse.status !== 404) {
+            throw new Error(`KhÃ´ng Ä‘á»c Ä‘Æ°á»£c tiáº¿n trÃ¬nh xuáº¥t (${progressResponse.status}).`);
+          }
+          await new Promise((resolve) => window.setTimeout(resolve, 400));
+        }
+      })().catch((pollError: unknown) => {
+        console.error("[JoinSplitVideo] KhÃ´ng thá»ƒ cáº­p nháº­t tiáº¿n trÃ¬nh xuáº¥t:", pollError);
+      });
+      try {
+        const response = await fetch(`${API}/export`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ranges: [range],
+            referenceSourceId,
+            progressId,
+            preferKeyframeCuts,
+            queueIndex: queueIndex + 1,
+          }),
+        });
+        const result = await responseJson<{ files: JoinSplitVideoExportFile[] }>(response);
+        const output = result.files[0];
+        if (!output) throw new Error("KhÃ´ng nháº­n Ä‘Æ°á»£c tá»‡p Ä‘áº§u ra.");
+        exportedFiles.push(output);
+        setQueueExportState((current) => ({
+          ...current,
+          [range.id]: {
+            ...current[range.id],
+            status: "done",
+            progress: 100,
+            message: current[range.id]?.message || "ÄÃ£ xuáº¥t xong.",
+            output,
+          },
+        }));
+        completed += 1;
+      } catch (exportError) {
+        const message = exportError instanceof Error ? exportError.message : "KhÃ´ng thá»ƒ xuáº¥t video.";
+        setQueueExportState((current) => ({
+          ...current,
+          [range.id]: queueStopRequestedRef.current
+            ? { status: "cancelled", message: "ÄÃ£ dá»«ng theo yÃªu cáº§u." }
+            : { status: "error", error: message },
+        }));
+        if (!queueStopRequestedRef.current) failed += 1;
+      } finally {
+        shouldPoll = false;
+        await progressPoll;
+        if (currentExportProgressIdRef.current === progressId) currentExportProgressIdRef.current = null;
+      }
+    }
+    setExporting(false);
+    if (queueStopRequestedRef.current) {
+      setJoining(false);
+      setNotice(`ÄÃ£ dá»«ng queue. HoÃ n táº¥t ${completed}/${queue.length} má»¥c; cÃ¡c má»¥c chÆ°a cháº¡y Ä‘Æ°á»£c giá»¯ láº¡i.`);
+      return;
+    }
+    if (failed) {
+      setError(`Xuáº¥t xong ${completed}/${queue.length} queue item; ${failed} má»¥c bá»‹ lá»—i. Xem thÃ´ng tin táº¡i tá»«ng má»¥c.`);
+      setNotice(null);
+      return;
+    }
+
+    if (joinQueuesAfterExport && exportedFiles.length > 1) {
+      setJoining(true);
+      const progressId = crypto.randomUUID();
+      currentExportProgressIdRef.current = progressId;
+      setQueueJoinProgress({ percent: 0, message: "Äang chuáº©n bá»‹ ghÃ©p queueâ€¦" });
+      setNotice(`ÄÃ£ xuáº¥t ${completed} queue item. Äang ghÃ©p thÃ nh má»™t videoâ€¦`);
+      let shouldPoll = true;
+      const progressPoll = (async () => {
+        while (shouldPoll) {
+          const progressResponse = await fetch(`${API}/export/progress/${encodeURIComponent(progressId)}`);
+          if (progressResponse.ok) {
+            const progress = await responseJson<{
+              status: "running" | "done" | "error" | "cancelled";
+              percent: number;
+              message: string;
+            }>(progressResponse);
+            setQueueJoinProgress({ percent: progress.percent, message: progress.message });
+          } else if (progressResponse.status !== 404) {
+            throw new Error(`KhÃ´ng Ä‘á»c Ä‘Æ°á»£c tiáº¿n trÃ¬nh ghÃ©p queue (${progressResponse.status}).`);
+          }
+          await new Promise((resolve) => window.setTimeout(resolve, 400));
+        }
+      })().catch((pollError: unknown) => {
+        console.error("[JoinSplitVideo] KhÃ´ng thá»ƒ cáº­p nháº­t tiáº¿n trÃ¬nh ghÃ©p queue:", pollError);
+      });
+      try {
+        const response = await fetch(`${API}/exports/join`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            exportIds: exportedFiles.map((file) => file.id),
+            referenceSourceId,
+            progressId,
+          }),
+        });
+        const result = await responseJson<{ file: JoinSplitVideoExportFile }>(response);
+        setQueueJoinOutput(result.file);
+        setQueueJoinProgress({ percent: 100, message: "ÄÃ£ ghÃ©p queue xong." });
+        setNotice(`ÄÃ£ xuáº¥t vÃ  ghÃ©p ${completed} queue item thÃ nh ${result.file.fileName}.`);
+      } catch (joinError) {
+        const message = joinError instanceof Error ? joinError.message : "KhÃ´ng thá»ƒ ghÃ©p cÃ¡c video queue.";
+        setError(message);
+        setQueueJoinProgress((current) => current
+          ? { ...current, message: queueStopRequestedRef.current ? "ÄÃ£ dá»«ng theo yÃªu cáº§u." : message }
+          : null);
+        setNotice(null);
+      } finally {
+        shouldPoll = false;
+        await progressPoll;
+        if (currentExportProgressIdRef.current === progressId) currentExportProgressIdRef.current = null;
+        setJoining(false);
+      }
+    } else {
+      setNotice(`ÄÃ£ xuáº¥t ${completed} queue item.`);
+    }
+  };
+
+  const stopQueue = async () => {
+    queueStopRequestedRef.current = true;
+    setNotice("Äang dá»«ng queue vÃ  tÃ¡c vá»¥ FFmpeg hiá»‡n táº¡iâ€¦");
+
+    // Náº¿u Ä‘ang trong giai Ä‘oáº¡n joining (ghÃ©p queue), dá»«ng ngay láº­p tá»©c trÃªn client
+    if (joining) {
+      setJoining(false);
+      setQueueJoinProgress(null);
+      setNotice("ÄÃ£ dá»«ng quÃ¡ trÃ¬nh ghÃ©p queue.");
+      // Thá»­ cancel join tiáº¿n trÃ¬nh trÃªn server náº¿u cÃ³ progressId
+      const joinProgressId = currentExportProgressIdRef.current;
+      if (joinProgressId) {
+        try {
+          await fetch(`${API}/export/cancel/${encodeURIComponent(joinProgressId)}`, { method: "POST" });
+        } catch {
+          // Bá» qua lá»—i cancel join
+        }
+      }
+      currentExportProgressIdRef.current = null;
+      return;
+    }
+
+    const progressId = currentExportProgressIdRef.current;
+    if (!progressId) return;
+    try {
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const response = await fetch(`${API}/export/cancel/${encodeURIComponent(progressId)}`, { method: "POST" });
+        if (response.ok) return;
+        if (response.status !== 409 || attempt === 4) {
+          await responseJson<{ success: boolean }>(response);
+          return;
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, 150));
+      }
+    } catch (stopError) {
+      setError(stopError instanceof Error ? stopError.message : "KhÃ´ng thá»ƒ dá»«ng tÃ¡c vá»¥ xuáº¥t.");
+    }
+  };
+
+  const cleanSavedData = async () => {
+    if (uploadingName || exporting || joining) return;
+    const confirmed = window.confirm(
+      "Dá»n toÃ n bá»™ video Ä‘Ã£ táº£i lÃªn, video Ä‘Ã£ xuáº¥t vÃ  tá»‡p táº¡m cá»§a trang Join/Split? File gá»‘c trÃªn mÃ¡y tÃ­nh sáº½ khÃ´ng bá»‹ xÃ³a.",
+    );
+    if (!confirmed) return;
+    setError(null);
+    try {
+      await responseJson<{ success: boolean }>(
+        await fetch(`${API}/cleanup`, { method: "POST" }),
+      );
+      skipWorkspaceSaveRef.current = true;
+      try {
+        window.localStorage.removeItem(WORKSPACE_STORAGE_KEY);
+      } catch (storageError) {
+        console.error("[JoinSplitVideo] KhÃ´ng thá»ƒ xÃ³a tráº¡ng thÃ¡i Ä‘Ã£ lÆ°u:", storageError);
+        setError("ÄÃ£ dá»n video nhÆ°ng khÃ´ng thá»ƒ xÃ³a tráº¡ng thÃ¡i trong trÃ¬nh duyá»‡t.");
+      }
+      previewRef.current?.pause();
+      setSources([]);
+      setSelectedSourceIds([]);
+      setTimelineClipItems([]);
+      setActiveClipId(null);
+      setActiveSourceId(null);
+      setPlayhead(0);
+      setCutFromTime(null);
+      setCutToTime(null);
+      setSplitMarkers([]);
+      setSelectedSplitMarker(null);
+      setQueue([]);
+      setSelectedQueueId(null);
+      setQueueExportState({});
+      setRangeStatuses([]);
+      setReferenceSourceId("");
+      setTimelineJoinOutput(null);
+      setQueueJoinOutput(null);
+      setNotice("ÄÃ£ dá»n video Ä‘Ã£ táº£i lÃªn, video Ä‘Ã£ xuáº¥t vÃ  tá»‡p táº¡m.");
+    } catch (cleanupError) {
+      setError(cleanupError instanceof Error ? cleanupError.message : "KhÃ´ng thá»ƒ dá»n dá»¯ liá»‡u video.");
+    }
+  };
+
+  const joinTimeline = async () => {
+    if (!timelineClipItems.length || !referenceSourceId) return;
+    setJoining(true);
+    setError(null);
+    setNotice("Äang xuáº¥t video tá»« cÃ¡c clip trÃªn timeline (1 láº§n render)â€¦");
+    const segments: JoinSplitVideoSegment[] = timelineClipItems.map((item) => ({
+      sourceId: item.sourceId,
+      startFrame: item.startFrame,
+      endFrame: item.endFrame,
+    }));
+    try {
+      const firstSegment = segments[0];
+      const rangeId = crypto.randomUUID();
+      const progressId = crypto.randomUUID();
+      currentExportProgressIdRef.current = progressId;
+      const progressPoll = (async () => {
+        while (currentExportProgressIdRef.current === progressId) {
+          await new Promise((resolve) => window.setTimeout(resolve, 350));
+          if (currentExportProgressIdRef.current !== progressId) break;
+          try {
+            const progressResponse = await fetch(`${API}/export/progress/${encodeURIComponent(progressId)}`);
+            if (progressResponse.ok) {
+              const progress = await responseJson<{
+                percent?: number;
+                message?: string;
+                strategy?: "checking" | "stream-copy" | "encode" | "fallback";
+              }>(progressResponse);
+              setNotice(progress.message ? `[${progress.percent ?? 0}%] ${progress.message}` : "Äang xá»­ lÃ½ render videoâ€¦");
+            }
+          } catch {}
+        }
+      })();
+      const response = await fetch(`${API}/export`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ranges: [
+            {
+              id: rangeId,
+              sourceId: firstSegment.sourceId,
+              startFrame: firstSegment.startFrame,
+              endFrame: segments[segments.length - 1].endFrame,
+              segments,
+            },
+          ],
+          referenceSourceId,
+          progressId,
+          preferKeyframeCuts,
+        }),
+      });
+      currentExportProgressIdRef.current = null;
+      await progressPoll;
+      const result = await responseJson<{ files: JoinSplitVideoExportFile[] }>(response);
+      const exportedFile = result.files?.[0];
+      if (exportedFile) {
+        setTimelineJoinOutput(exportedFile);
+        setNotice(`ÄÃ£ xuáº¥t video hoÃ n chá»‰nh: ${exportedFile.fileName}.`);
+      } else {
+        throw new Error("KhÃ´ng nháº­n Ä‘Æ°á»£c file káº¿t quáº£ sau khi render.");
+      }
+    } catch (joinError) {
+      currentExportProgressIdRef.current = null;
+      setError(joinError instanceof Error ? joinError.message : "KhÃ´ng thá»ƒ xuáº¥t video timeline.");
+      setNotice(null);
+    } finally {
+      setJoining(false);
+    }
+  };
+
+  useEffect(() => {
+    if (queue.length === 0 || !referenceSourceId) {
+      setRangeStatuses([]);
+      return;
+    }
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      void fetch(`${API}/ranges/inspect`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ranges: queue, referenceSourceId, preferKeyframeCuts }),
+        signal: controller.signal,
+      })
+        .then((response) => responseJson<{ ranges: JoinSplitVideoRangeStatus[] }>(response))
+        .then((result) => setRangeStatuses(result.ranges))
+        .catch((inspectError: unknown) => {
+          if (!controller.signal.aborted) {
+            setError(inspectError instanceof Error ? inspectError.message : "KhÃ´ng thá»ƒ kiá»ƒm tra encoding.");
+          }
+        });
+    }, 250);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [preferKeyframeCuts, queue, referenceSourceId]);
+
+  useEffect(() => {
+    if (!timelineClips.length) return;
+    const clip = timelineClips.find((item) => playhead >= item.start && playhead < item.end);
+    if (clip) {
+      if (clip.sourceId !== activeSourceId) setActiveSourceId(clip.sourceId);
+      if (clip.clipId !== activeClipId) setActiveClipId(clip.clipId);
+    }
+  }, [activeClipId, activeSourceId, playhead, timelineClips]);
+
+  useEffect(() => {
+    if (!isPlaying) return;
+    const clipAtPlayhead = timelineClips.find((c) => playhead >= c.start && playhead < c.end);
+    if (clipAtPlayhead) return;
+
+    // Playhead Ä‘ang á»Ÿ trong khoáº£ng trá»‘ng (gap)
+    let animationFrameId: number;
+    let lastTime = performance.now();
+
+    const step = (now: number) => {
+      const dt = (now - lastTime) / 1000;
+      lastTime = now;
+      const nextTime = playhead + dt;
+
+      if (nextTime >= timelineDuration) {
+        setIsPlaying(false);
+        setPlayhead(timelineDuration);
+        return;
+      }
+
+      const enteringClip = timelineClips.find((c) => nextTime >= c.start && nextTime < c.end);
+      if (enteringClip) {
+        playAfterSourceChangeRef.current = true;
+        seekGlobal(enteringClip.start);
+      } else {
+        setPlayhead(nextTime);
+        animationFrameId = requestAnimationFrame(step);
+      }
+    };
+
+    animationFrameId = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(animationFrameId);
+  }, [isPlaying, playhead, seekGlobal, timelineClips, timelineDuration]);
+
+  useEffect(() => {
+    if (!selectedSource) return;
+    const video = previewRef.current;
+    if (!video) return;
+    const handleLoaded = () => {
+      const clip = timelineClips.find((c) => playhead >= c.start && playhead < c.end)
+        || (activeClipId && timelineClips.find((c) => c.clipId === activeClipId))
+        || timelineClips.find((c) => c.sourceId === selectedSource.id);
+      const localTime = clip ? Math.max(0, Math.min(clip.duration, playhead - clip.start)) : 0;
+      const targetSourceTime = clip ? (clip.startFrame - 1) / clip.source.frameRate + localTime : 0;
+      video.currentTime = Math.max(0, Math.min(targetSourceTime, video.duration || targetSourceTime));
+      if (playAfterSourceChangeRef.current) {
+        playAfterSourceChangeRef.current = false;
+        void video.play().then(() => setIsPlaying(true)).catch((playError: unknown) => {
+          setError(playError instanceof Error ? playError.message : "KhÃ´ng thá»ƒ phÃ¡t video káº¿ tiáº¿p.");
+        });
+      }
+    };
+    video.addEventListener("loadedmetadata", handleLoaded);
+    return () => video.removeEventListener("loadedmetadata", handleLoaded);
+  }, [activeClipId, playhead, selectedSource, timelineClips]);
+
+  useEffect(() => {
+    const container = timelineScrollRef.current;
+    if (!container) return;
+    const handleWheel = (event: WheelEvent) => {
+      if (!event.ctrlKey && !event.altKey) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const bounds = container.getBoundingClientRect();
+      const pointerX = event.clientX - bounds.left;
+      const currentScroll = container.scrollLeft;
+      const anchoredTime = (currentScroll + pointerX) / zoom;
+      const nextZoom = Math.max(
+        minimumZoom,
+        Math.min(
+          MAX_ZOOM,
+          Math.round(zoom * (event.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP) * 100) / 100,
+        ),
+      );
+      if (nextZoom === zoom) return;
+      setZoom(nextZoom);
+      requestAnimationFrame(() => {
+        if (timelineScrollRef.current) {
+          timelineScrollRef.current.scrollLeft = Math.max(0, anchoredTime * nextZoom - pointerX);
+        }
+      });
+    };
+    container.addEventListener("wheel", handleWheel, { passive: false });
+    return () => container.removeEventListener("wheel", handleWheel);
+  }, [minimumZoom, zoom]);
+
+  const deleteQueueRange = useCallback((rangeId: string) => {
+    setQueue((current) => current.filter((item) => item.id !== rangeId));
+    setQueueExportState((current) => {
+      const next = { ...current };
+      delete next[rangeId];
+      return next;
+    });
+    setSelectedQueueId((current) => current === rangeId ? null : current);
+  }, []);
+
+  useEffect(() => {
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element) || !target.closest("[data-split-marker]")) {
+        setSelectedSplitMarker(null);
+      }
+    };
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => document.removeEventListener("pointerdown", handlePointerDown);
+  }, []);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const target = event.target;
+      const isSplitMarkerButton = target instanceof HTMLElement &&
+        target.closest("[data-split-marker]") !== null;
+      if (
+        target instanceof HTMLElement &&
+        (target.isContentEditable ||
+          (["INPUT", "TEXTAREA", "SELECT", "BUTTON"].includes(target.tagName) && !isSplitMarkerButton))
+      ) return;
+      if ((event.key === "Delete" || event.key === "Backspace") && selectedSplitMarker !== null) {
+        event.preventDefault();
+        setSplitMarkers((current) => current.filter((time) => Math.abs(time - selectedSplitMarker) >= 1e-6));
+        setSelectedSplitMarker(null);
+        setNotice(`ÄÃ£ xÃ³a má»‘c split táº¡i ${formatTime(selectedSplitMarker)}.`);
+        return;
+      }
+      if (event.key === "Delete" && selectedQueueId) {
+        event.preventDefault();
+        deleteQueueRange(selectedQueueId);
+        return;
+      }
+      if ((event.key === "Delete" || event.key === "Backspace") && activeClipId) {
+        event.preventDefault();
+        removeTimelineClip(activeClipId);
+        setSelectedQueueId(null);
+        return;
+      }
+      if (event.key === "Delete" && activeSourceId && timelineSourceIds.includes(activeSourceId)) {
+        event.preventDefault();
+        removeTimelineSource(activeSourceId);
+        setSelectedQueueId(null);
+        return;
+      }
+      const step = event.shiftKey ? 10 : 1;
+      if (event.code === "Space") {
+        if (!selectedSource) return;
+        event.preventDefault();
+        void togglePlayback();
+      } else if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+        if (!selectedSource) return;
+        event.preventDefault();
+        seekFrame(currentFrame + (event.key === "ArrowLeft" ? -step : step));
+      } else if (event.key === "Home") {
+        if (!timelineClips.length) return;
+        event.preventDefault();
+        seekTimelineStart();
+      } else if (event.key === "End") {
+        if (!timelineClips.length) return;
+        event.preventDefault();
+        seekTimelineEnd();
+      } else if (event.key.toLowerCase() === "s" && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        event.preventDefault();
+        splitClipAtPlayhead();
+      } else if (event.key.toLowerCase() === "c" && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        event.preventDefault();
+        splitClipAtPlayhead();
+      } else if (event.key.toLowerCase() === "z" && event.shiftKey) {
+        event.preventDefault();
+        fitTimeline();
+      } else if (event.key === "+" || event.key === "=") {
+        event.preventDefault();
+        setZoom((current) => Math.min(MAX_ZOOM, Math.round(current * ZOOM_STEP * 100) / 100));
+      } else if (event.key === "-") {
+        event.preventDefault();
+        setZoom((current) => Math.max(minimumZoom, Math.round(current / ZOOM_STEP * 100) / 100));
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [activeClipId, activeSourceId, currentFrame, deleteQueueRange, fitTimeline, minimumZoom, removeTimelineClip, removeTimelineSource, selectedQueueId, selectedSource, selectedSplitMarker, seekFrame, splitClipAtPlayhead, timelineClips.length, timelineSourceIds]);
+
+  useEffect(() => {
+    const onPointerMove = (event: PointerEvent) => {
+      if (!timelineContentRef.current) return;
+      const bounds = timelineContentRef.current.getBoundingClientRect();
+      const requestedTime = (event.clientX - bounds.left) / zoom;
+      const drag = queueCueDragRef.current;
+      if (drag) {
+        const timelineEnd = timelineDuration;
+        const duration = drag.initialEnd - drag.initialStart;
+        const pointerDelta = requestedTime - drag.initialPointerTime;
+        let start = drag.initialStart;
+        let end = drag.initialEnd;
+        if (drag.mode === "move") {
+          const requestedStart = drag.initialStart + pointerDelta;
+          const requestedEnd = drag.initialEnd + pointerDelta;
+          const snappedStart = snapCueEdgeTime(requestedStart);
+          const snappedEnd = snapCueEdgeTime(requestedEnd);
+          const startAdjustment = Math.abs(snappedStart - requestedStart);
+          const endAdjustment = Math.abs(snappedEnd - requestedEnd);
+          const threshold = snapDistancePx / zoom;
+          if (startAdjustment <= threshold && startAdjustment <= endAdjustment) {
+            start = snappedStart;
+          } else if (endAdjustment <= threshold) {
+            start = snappedEnd - duration;
+          } else {
+            start = snapPlayheadTime(requestedStart);
+          }
+          start = Math.max(0, Math.min(timelineEnd - duration, start));
+          end = start + duration;
+        } else if (drag.mode === "start") {
+          start = Math.max(0, Math.min(drag.initialEnd - 1 / 240, snapCueEdgeTime(requestedTime)));
+        } else {
+          end = Math.max(drag.initialStart + 1 / 240, Math.min(timelineEnd, snapCueEdgeTime(requestedTime)));
+        }
+        const segments = getJoinSplitTimelineSegments(
+          start,
+          Math.max(start, end - 1e-7),
+          timelineClips.map((clip) => ({
+            clipId: clip.clipId,
+            sourceId: clip.sourceId,
+            start: clip.start,
+            end: clip.end,
+            frameRate: clip.source.frameRate,
+            frameCount: clip.source.frameCount,
+            startFrame: clip.startFrame,
+            endFrame: clip.endFrame,
+          })),
+        );
+        if (segments.length) {
+          setQueue((current) => current.map((range) => range.id === drag.rangeId
+            ? {
+                ...range,
+                sourceId: segments[0].sourceId,
+                startFrame: segments[0].startFrame,
+                endFrame: segments[0].endFrame,
+                ...(segments.length > 1 ? { segments } : { segments: undefined }),
+              }
+            : range));
+        }
+      } else if (isScrubbingRef.current) {
+        seekGlobal(requestedTime);
+      }
+    };
+    const onPointerUp = () => {
+      isScrubbingRef.current = false;
+      queueCueDragRef.current = null;
+    };
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+    return () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+    };
+  }, [seekGlobal, snapCueEdgeTime, snapDistancePx, snapPlayheadTime, timelineClips, timelineDuration, zoom]);
+
+  const [draggedClipId, setDraggedClipId] = useState<string | null>(null);
+  const [dropTargetClipId, setDropTargetClipId] = useState<string | null>(null);
+  const [dropPosition, setDropPosition] = useState<"before" | "after" | null>(null);
+
+  const reorderTimelineClips = (sourceId: string, targetId: string, position: "before" | "after") => {
+    if (sourceId === targetId) return;
+    const fromIndex = timelineClipItems.findIndex((c) => c.id === sourceId);
+    const toIndex = timelineClipItems.findIndex((c) => c.id === targetId);
+    if (fromIndex < 0 || toIndex < 0) return;
+    const nextItems = [...timelineClipItems];
+    const [moved] = nextItems.splice(fromIndex, 1);
+    const destinationIndex = position === "before"
+      ? (fromIndex < toIndex ? toIndex - 1 : toIndex)
+      : (fromIndex < toIndex ? toIndex : toIndex + 1);
+    const cleanMoved = magnetEnabled ? { ...moved, offsetSeconds: undefined } : moved;
+    nextItems.splice(Math.max(0, Math.min(nextItems.length, destinationIndex)), 0, cleanMoved);
+    setTimelineClipItems(nextItems);
+    setActiveClipId(moved.id);
+    setActiveSourceId(moved.sourceId);
+    setNotice("ÄÃ£ Ä‘á»•i thá»© tá»± clip trÃªn timeline.");
+  };
+
+  const handleDropOnTimeline = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setIsDropTarget(false);
+    const clipPayload = event.dataTransfer.getData("application/x-join-split-clip");
+    if (clipPayload) {
+      if (dropTargetClipId && dropPosition) {
+        reorderTimelineClips(clipPayload, dropTargetClipId, dropPosition);
+      }
+      setDraggedClipId(null);
+      setDropTargetClipId(null);
+      setDropPosition(null);
+      return;
+    }
+    const payload = event.dataTransfer.getData("application/x-join-split-video");
+    if (payload) {
+      try {
+        appendToTimeline(JSON.parse(payload) as string[]);
+        return;
+      } catch {
+        setError("KhÃ´ng Ä‘á»c Ä‘Æ°á»£c danh sÃ¡ch video kÃ©o vÃ o timeline.");
+      }
+    }
+    if (event.dataTransfer.files.length) void uploadFiles(event.dataTransfer.files);
+  };
+
+  const rulerFrameMode = timelineClips.some(
+    (clip) => zoom / clip.source.frameRate >= FRAME_TICK_LABEL_SPACING_PX,
+  );
+  const rulerTicks = useMemo(() => {
+    const visibleStart = Math.max(0, timelineScrollLeft / zoom);
+    const visibleEnd = (timelineScrollLeft + timelineViewportWidth) / zoom;
+    if (rulerFrameMode) {
+      return timelineClips.flatMap((clip) => {
+        if (clip.end < visibleStart || clip.start > visibleEnd) return [];
+        const framePixelWidth = zoom / clip.source.frameRate;
+        const frameStep = Math.max(1, Math.ceil(FRAME_TICK_LABEL_SPACING_PX / framePixelWidth));
+        const firstFrame = Math.max(
+          1,
+          Math.floor((visibleStart - clip.start) * clip.source.frameRate) + 1,
+        );
+        const lastFrame = Math.min(
+          clip.source.frameCount,
+          Math.ceil((visibleEnd - clip.start) * clip.source.frameRate) + 1,
+        );
+        const alignedFirst = Math.ceil(firstFrame / frameStep) * frameStep;
+        const ticks: Array<{ key: string; left: number; label: string }> = [];
+        for (let frame = alignedFirst; frame <= lastFrame; frame += frameStep) {
+          ticks.push({
+            key: `${clip.sourceId}-${frame}`,
+            left: (clip.start + frameTime(frame, clip.source.frameRate)) * zoom,
+            label: `F${frame}`,
+          });
+        }
+        return ticks;
+      });
+    }
+
+    const intervalSeconds = getTimeTickInterval(zoom);
+    const firstTick = Math.ceil(visibleStart / intervalSeconds) * intervalSeconds;
+    const ticks: Array<{ key: string; left: number; label: string }> = [];
+    for (let seconds = firstTick; seconds <= visibleEnd; seconds += intervalSeconds) {
+      ticks.push({
+        key: `time-${seconds}`,
+        left: seconds * zoom,
+        label: formatTime(seconds),
+      });
+    }
+    return ticks;
+  }, [timelineClips, timelineScrollLeft, timelineViewportWidth, zoom, rulerFrameMode]);
+
+  const beginSourceSelection = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (
+      event.button !== 0 ||
+      (event.target as HTMLElement).closest("[data-source-row], button")
+    ) return;
+    event.preventDefault();
+    const container = event.currentTarget;
+    const bounds = container.getBoundingClientRect();
+    const additive = event.ctrlKey || event.metaKey;
+    selectionDragRef.current = {
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      currentClientX: event.clientX,
+      currentClientY: event.clientY,
+      initialSelectedIds: additive ? selectedSourceIds : [],
+      additive,
+    };
+    setSelectionRectangle({
+      startX: event.clientX - bounds.left,
+      startY: event.clientY - bounds.top + container.scrollTop,
+      currentX: event.clientX - bounds.left,
+      currentY: event.clientY - bounds.top + container.scrollTop,
+    });
+    if (!additive) setSelectedSourceIds([]);
+    container.setPointerCapture(event.pointerId);
+  };
+
+  const updateSourceSelection = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = selectionDragRef.current;
+    if (!drag) return;
+    drag.currentClientX = event.clientX;
+    drag.currentClientY = event.clientY;
+    const container = event.currentTarget;
+    const bounds = container.getBoundingClientRect();
+    const left = Math.min(drag.startClientX, event.clientX);
+    const right = Math.max(drag.startClientX, event.clientX);
+    const top = Math.min(drag.startClientY, event.clientY);
+    const bottom = Math.max(drag.startClientY, event.clientY);
+    setSelectionRectangle({
+      startX: drag.startClientX - bounds.left,
+      startY: drag.startClientY - bounds.top + container.scrollTop,
+      currentX: event.clientX - bounds.left,
+      currentY: event.clientY - bounds.top + container.scrollTop,
+    });
+    if (right - left < 3 && bottom - top < 3) return;
+
+    const selectedIds = Array.from(
+      container.querySelectorAll<HTMLElement>("[data-source-row]"),
+    )
+      .filter((row) => {
+        const rowBounds = row.getBoundingClientRect();
+        return (
+          rowBounds.right >= left &&
+          rowBounds.left <= right &&
+          rowBounds.bottom >= top &&
+          rowBounds.top <= bottom
+        );
+      })
+      .map((row) => row.dataset.sourceId)
+      .filter((id): id is string => Boolean(id));
+    setSelectedSourceIds(
+      drag.additive
+        ? [...new Set([...drag.initialSelectedIds, ...selectedIds])]
+        : selectedIds,
+    );
+  };
+
+  const finishSourceSelection = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = selectionDragRef.current;
+    if (!drag) return;
+    const moved =
+      Math.abs(event.clientX - drag.startClientX) > 3 ||
+      Math.abs(event.clientY - drag.startClientY) > 3;
+    if (!moved && !drag.additive) setSelectedSourceIds([]);
+    selectionDragRef.current = null;
+    setSelectionRectangle(null);
+  };
+
+  const queueStatusById = useMemo(
+    () => new Map(rangeStatuses.map((status) => [status.id, status])),
+    [rangeStatuses],
+  );
+  const selectedQueueRange = queue.find((range) => range.id === selectedQueueId);
+  const selectedQueueSegments = selectedQueueRange
+    ? getJoinSplitRangeSegments(selectedQueueRange)
+    : [];
+  const selectedQueueBounds = getJoinSplitRangeTimelineBounds(
+    selectedQueueSegments,
+    timelineClips.map((clip) => ({
+      clipId: clip.clipId,
+      sourceId: clip.sourceId,
+      start: clip.start,
+      end: clip.end,
+      frameRate: clip.source.frameRate,
+      frameCount: clip.source.frameCount,
+      startFrame: clip.startFrame,
+      endFrame: clip.endFrame,
+    })),
+  );
+  const addQueueBesideSelected = (direction: "before" | "after") => {
+    if (!selectedQueueRange || !selectedQueueBounds || !timelineClips.length) return;
+    const rawStart = direction === "before"
+      ? Math.max(0, selectedQueueBounds.start - 5)
+      : selectedQueueBounds.end;
+    const rawEnd = direction === "before"
+      ? selectedQueueBounds.start
+      : Math.min(timelineDuration, selectedQueueBounds.end + 5);
+    if (rawEnd <= rawStart) {
+      setError(direction === "before"
+        ? "KhÃ´ng cÃ²n khoáº£ng trá»‘ng trÆ°á»›c cue Ä‘Ã£ chá»n."
+        : "KhÃ´ng cÃ²n khoáº£ng trá»‘ng sau cue Ä‘Ã£ chá»n.");
+      return;
+    }
+    const segments = getJoinSplitTimelineSegments(
+      rawStart,
+      Math.max(rawStart, rawEnd - 1e-7),
+      timelineClips.map((clip) => ({
+        clipId: clip.clipId,
+        sourceId: clip.sourceId,
+        start: clip.start,
+        end: clip.end,
+        frameRate: clip.source.frameRate,
+        frameCount: clip.source.frameCount,
+        startFrame: clip.startFrame,
+        endFrame: clip.endFrame,
+      })),
+    );
+    if (!segments.length) {
+      setError("KhÃ´ng thá»ƒ táº¡o queue cue trong khoáº£ng Ä‘Ã£ chá»n.");
+      return;
+    }
+    const first = segments[0];
+    const last = segments[segments.length - 1];
+    const newRange: JoinSplitVideoRange = {
+      id: crypto.randomUUID(),
+      sourceId: first.sourceId,
+      startFrame: first.startFrame,
+      endFrame: first.endFrame,
+      ...(segments.length > 1 ? { segments } : {}),
+    };
+    setQueue((current) => {
+      const selectedIndex = current.findIndex((range) => range.id === selectedQueueRange.id);
+      if (selectedIndex < 0) return [...current, newRange];
+      const insertAt = direction === "before" ? selectedIndex : selectedIndex + 1;
+      return [...current.slice(0, insertAt), newRange, ...current.slice(insertAt)];
+    });
+    setSelectedQueueId(newRange.id);
+    setError(null);
+    setNotice(`ÄÃ£ táº¡o queue cue ${direction === "before" ? "trÆ°á»›c" : "sau"} Â· ${first.startFrame}â€“${last.endFrame}.`);
+  };
+
+  return (
+    <div
+      className="flex h-full min-h-0 w-full overflow-hidden bg-slate-950 text-slate-100"
+      onClick={(event) => {
+        if (!(event.target as HTMLElement).closest("[data-queue-cue], [data-queue-item]")) {
+          setSelectedQueueId(null);
+        }
+      }}
+    >
+      <aside
+        className={`flex w-[405px] shrink-0 flex-col border-r border-slate-800 bg-slate-900/90 ${isDropTarget ? "ring-2 ring-inset ring-amber-400" : ""}`}
+        onDragOver={(event) => {
+          event.preventDefault();
+          setIsDropTarget(true);
+        }}
+        onDragLeave={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setIsDropTarget(false);
+        }}
+        onDrop={(event) => {
+          event.preventDefault();
+          setIsDropTarget(false);
+          if (event.dataTransfer.files.length) void uploadFiles(event.dataTransfer.files);
+        }}
+      >
+        <div className="flex min-h-0 flex-1 flex-col">
+        <div className="flex items-center justify-between border-b border-slate-800 px-3 py-3">
+          <div className="flex items-center gap-2">
+            <FolderOpen className="h-4 w-4 text-amber-300" />
+            <h2 className="text-sm font-semibold">Input Video</h2>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={cleanSavedData}
+              disabled={Boolean(uploadingName) || exporting || joining}
+              className="rounded-md border border-slate-700 p-1.5 text-slate-300 hover:border-rose-400/50 hover:text-rose-200 disabled:opacity-40"
+              title="Dá»n video Ä‘Ã£ lÆ°u vÃ  cache"
+              aria-label="Dá»n video Ä‘Ã£ lÆ°u vÃ  cache"
+            >
+              <Trash2 className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={Boolean(uploadingName) || exporting || joining}
+              className="rounded-md border border-slate-700 p-1.5 text-slate-300 hover:border-amber-400/50 hover:text-white disabled:opacity-40"
+              title="ThÃªm video"
+              aria-label="ThÃªm video"
+            >
+              <Plus className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+        <div className="flex items-center justify-between gap-2 border-b border-slate-800 px-3 py-2 text-[10px] text-slate-500">
+          <span>{sources.length} video Â· Ctrl/âŒ˜ + click Ä‘á»ƒ chá»n nhiá»u</span>
+          {selectedSourceIds.length > 0 && (
+            <button type="button" onClick={() => appendToTimeline(selectedSourceIds)} className="font-semibold text-amber-300 hover:text-amber-200">
+              ThÃªm vÃ o timeline
+            </button>
+          )}
+        </div>
+        <div
+          ref={sourceListRef}
+          className="relative min-h-0 flex-1 overflow-y-auto p-1.5"
+          onPointerDown={beginSourceSelection}
+          onPointerMove={updateSourceSelection}
+          onPointerUp={finishSourceSelection}
+          onPointerCancel={finishSourceSelection}
+        >
+          {selectionRectangle && (
+            <div
+              className="pointer-events-none absolute z-20 border border-sky-300 bg-sky-400/20"
+              style={{
+                left: Math.min(selectionRectangle.startX, selectionRectangle.currentX),
+                top: Math.min(selectionRectangle.startY, selectionRectangle.currentY),
+                width: Math.abs(selectionRectangle.currentX - selectionRectangle.startX),
+                height: Math.abs(selectionRectangle.currentY - selectionRectangle.startY),
+              }}
+            />
+          )}
+          {!sources.length && !uploadingName && (
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="flex h-36 w-full flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-slate-700 text-xs text-slate-500 hover:border-amber-400/50 hover:text-slate-300"
+            >
+              <Video className="h-6 w-6" />
+              Tháº£ video vÃ o Ä‘Ã¢y hoáº·c báº¥m Ä‘á»ƒ chá»n
+            </button>
+          )}
+          {sources.map((source) => {
+            const selected = selectedSourceIds.includes(source.id);
+            return (
+              <div
+                key={source.id}
+                data-source-row
+                data-source-id={source.id}
+                draggable
+                onDragStart={(event) => {
+                  const ids = selectedSourceIds.includes(source.id) ? selectedSourceIds : [source.id];
+                  setSelectedSourceIds(ids);
+                  event.dataTransfer.effectAllowed = "copy";
+                  event.dataTransfer.setData("application/x-join-split-video", JSON.stringify(ids));
+                  event.dataTransfer.setData("text/plain", source.fileName);
+                }}
+                onClick={(event) => selectSource(source.id, event)}
+                className={`group flex cursor-grab items-center gap-2 rounded-md px-2 py-2 text-xs active:cursor-grabbing ${selected ? "bg-amber-400/15 text-amber-100 ring-1 ring-inset ring-amber-300/40" : "text-slate-300 hover:bg-slate-800"}`}
+                title={`${source.fileName} Â· kÃ©o vÃ o timeline`}
+              >
+                <Film className="h-4 w-4 shrink-0 text-slate-400" />
+                <span className="min-w-0 flex-1 truncate">{source.fileName}</span>
+                <button
+                  type="button"
+                  aria-label={`XÃ³a ${source.fileName}`}
+                  title="XÃ³a video"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void removeSource(source.id);
+                  }}
+                  disabled={Boolean(uploadingName) || exporting || joining}
+                  className="rounded p-1 text-slate-500 opacity-0 hover:bg-rose-950/50 hover:text-rose-300 group-hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-30"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            );
+          })}
+          {uploadJobs.map((job) => (
+            <div key={job.id} className="rounded-md px-2 py-2 text-xs">
+              <div className="flex items-center gap-2">
+                {job.status === "error"
+                  ? <X className="h-4 w-4 shrink-0 text-rose-300" />
+                  : <LoaderCircle className="h-4 w-4 shrink-0 animate-spin text-amber-300" />}
+                <span className="min-w-0 flex-1 truncate text-slate-200" title={job.fileName}>{job.fileName}</span>
+                <span className={job.status === "error" ? "text-rose-300" : "text-amber-200"}>
+                  {job.status === "error" ? "Lá»—i" : `${job.percent}%`}
+                </span>
+              </div>
+              <div
+                className="ml-6 mt-1.5 h-1 overflow-hidden rounded-full bg-slate-700"
+                role="progressbar"
+                aria-label={`Tiáº¿n trÃ¬nh xá»­ lÃ½ ${job.fileName}`}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={job.percent}
+              >
+                <div
+                  className={`h-full rounded-full transition-[width] ${job.status === "error" ? "bg-rose-400" : "bg-amber-400"}`}
+                  style={{ width: `${job.percent}%` }}
+                />
+              </div>
+              <p className={`ml-6 mt-1 truncate ${job.status === "error" ? "text-rose-300" : "text-slate-500"}`} title={job.error || job.stage}>
+                {job.error || job.stage}
+              </p>
+            </div>
+          ))}
+        </div>
+        <div className="border-t border-slate-800 px-3 py-2 text-[10px] text-slate-500">
+          KÃ©o video vÃ o timeline Ä‘á»ƒ xáº¿p liá»n nhau.
+        </div>
+        </div>
+        <div ref={setQueuePanelHost} className="min-h-0 flex-1 border-t border-slate-700 bg-slate-900/70" />
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="video/*,.mkv,.avi,.m4v"
+          multiple
+          className="hidden"
+          onChange={(event) => {
+            if (event.currentTarget.files) void uploadFiles(event.currentTarget.files);
+            event.currentTarget.value = "";
+          }}
+        />
+      </aside>
+
+      <section className="flex min-w-0 flex-1 flex-col">
+        <div className="flex min-h-0 flex-1 flex-col border-b border-slate-800 bg-black">
+          <div className="flex h-9 shrink-0 items-center justify-between border-b border-slate-800 bg-slate-900 px-3">
+            <div className="flex min-w-0 items-center gap-2 text-xs">
+              <Video className="h-4 w-4 text-sky-300" />
+              <span className="font-semibold">Preview</span>
+              <span className="max-w-[35vw] truncate text-slate-400">{selectedSource?.fileName || "Chá»n video Ä‘á»ƒ preview"}</span>
+            </div>
+            {timelineClips.length > 0 ? (
+              <span className="font-mono text-[11px] text-slate-300">
+                {isInGap ? (
+                  <>Khoáº£ng trá»‘ng Â· {formatTime(playhead)} / {formatTime(timelineDuration)}</>
+                ) : (
+                  <>{currentFrame}/{selectedSource?.frameCount || 0} Â· {formatTime(playhead)} / {formatTime(timelineDuration)}</>
+                )}
+              </span>
+            ) : selectedSource ? (
+              <span className="font-mono text-[11px] text-slate-300">
+                {currentFrame}/{selectedSource.frameCount} Â· {formatTime(playhead)}
+              </span>
+            ) : null}
+          </div>
+          <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-black">
+            {isInGap ? (
+              <div className="flex h-full w-full items-center justify-center bg-black">
+                <span className="font-mono text-xs text-slate-600 select-none">[Khoáº£ng trá»‘ng - MÃ n hÃ¬nh Ä‘en]</span>
+              </div>
+            ) : selectedSource ? (
+              <video
+                ref={previewRef}
+                key={selectedSource.id}
+                src={`${API}/files/${encodeURIComponent(selectedSource.id)}/preview`}
+                muted={muted}
+                playsInline
+                preload="metadata"
+                onLoadedMetadata={(event) => {
+                  const clip = timelineClips.find((c) => playhead >= c.start && playhead < c.end)
+                    || (activeClipId && timelineClips.find((c) => c.clipId === activeClipId))
+                    || timelineClips.find((c) => c.sourceId === selectedSource.id);
+                  const localTime = clip ? Math.max(0, Math.min(clip.duration, playhead - clip.start)) : 0;
+                  const targetSourceTime = clip ? (clip.startFrame - 1) / clip.source.frameRate + localTime : 0;
+                  event.currentTarget.currentTime = Math.min(targetSourceTime, event.currentTarget.duration || targetSourceTime);
+                  if (playAfterSourceChangeRef.current) {
+                    playAfterSourceChangeRef.current = false;
+                    void event.currentTarget.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false));
+                  }
+                }}
+                onTimeUpdate={(event) => {
+                  if (!timelineClips.length) {
+                    setPlayhead(event.currentTarget.currentTime);
+                    return;
+                  }
+                  const clip = timelineClips.find((c) => playhead >= c.start && playhead < c.end)
+                    || (activeClipId && timelineClips.find((c) => c.clipId === activeClipId))
+                    || timelineClips[0];
+                  if (!clip) return;
+                  const currentSourceTime = event.currentTarget.currentTime;
+                  const sourceStartTime = (clip.startFrame - 1) / clip.source.frameRate;
+                  const sourceEndTime = clip.endFrame / clip.source.frameRate;
+
+                  // Kiá»ƒm tra Ä‘Ã£ phÃ¡t tá»›i cuá»‘i Ä‘oáº¡n cáº¯t hiá»‡n táº¡i cá»§a clip chÆ°a
+                  if (currentSourceTime >= sourceEndTime - 0.005) {
+                    const nextTime = clip.end;
+                    if (nextTime >= timelineDuration - 1e-4) {
+                      event.currentTarget.pause();
+                      setIsPlaying(false);
+                      setPlayhead(timelineDuration);
+                      return;
+                    }
+
+                    const nextClip = timelineClips.find((c) => nextTime >= c.start && nextTime < c.end);
+                    if (nextClip) {
+                      // CÃ³ clip tiáº¿p theo liá»n ká»
+                      if (nextClip.sourceId === clip.sourceId) {
+                        // CÃ¹ng video nguá»“n: chá»‰ cáº§n tua trá»±c tiáº¿p khÃ´ng lÃ m pause video
+                        const targetSourceTime = (nextClip.startFrame - 1) / nextClip.source.frameRate;
+                        event.currentTarget.currentTime = Math.max(0, targetSourceTime);
+                        setActiveClipId(nextClip.clipId);
+                        setPlayhead(nextClip.start);
+                        if (event.currentTarget.paused) {
+                          void event.currentTarget.play().catch(() => {});
+                        }
+                      } else {
+                        // KhÃ¡c video nguá»“n: cáº§n chuyá»ƒn source vÃ  tiáº¿p tá»¥c play
+                        playAfterSourceChangeRef.current = true;
+                        seekGlobal(nextClip.start);
+                      }
+                    } else {
+                      // Äi vÃ o khoáº£ng trá»‘ng (gap / mÃ n hÃ¬nh Ä‘en)
+                      transitioningToGapRef.current = true;
+                      event.currentTarget.pause();
+                      setPlayhead(nextTime);
+                    }
+                    return;
+                  }
+
+                  const elapsed = Math.max(0, Math.min(clip.duration, currentSourceTime - sourceStartTime));
+                  setPlayhead(snapPlayheadTime(clip.start + elapsed, false));
+                }}
+                onPlay={() => setIsPlaying(true)}
+                onPause={() => {
+                  if (transitioningToGapRef.current) {
+                    transitioningToGapRef.current = false;
+                    return;
+                  }
+                  setIsPlaying(false);
+                }}
+                onEnded={(event) => {
+                  const currentClip = (activeClipId && timelineClips.find((c) => c.clipId === activeClipId))
+                    || timelineClips.find((c) => playhead >= c.start && playhead < c.end);
+                  if (currentClip) {
+                    const nextTime = currentClip.end;
+                    if (nextTime >= timelineDuration - 1e-4) {
+                      setIsPlaying(false);
+                      setPlayhead(timelineDuration);
+                    } else {
+                      const nextClip = timelineClips.find((c) => nextTime >= c.start && nextTime < c.end);
+                      if (nextClip) {
+                        if (nextClip.sourceId === currentClip.sourceId) {
+                          const targetSourceTime = (nextClip.startFrame - 1) / nextClip.source.frameRate;
+                          event.currentTarget.currentTime = Math.max(0, targetSourceTime);
+                          setActiveClipId(nextClip.clipId);
+                          setPlayhead(nextClip.start);
+                          void event.currentTarget.play().catch(() => {});
+                        } else {
+                          playAfterSourceChangeRef.current = true;
+                          seekGlobal(nextClip.start);
+                        }
+                      } else {
+                        transitioningToGapRef.current = true;
+                        setPlayhead(nextTime);
+                      }
+                    }
+                  } else {
+                    setIsPlaying(false);
+                  }
+                }}
+                onError={() => setError("KhÃ´ng thá»ƒ preview video nÃ y báº±ng trÃ¬nh duyá»‡t.")}
+                className="max-h-full max-w-full object-contain"
+              />
+            ) : (
+              <div className="flex flex-col items-center gap-2 text-sm text-slate-500">
+                <Film className="h-9 w-9" />
+                ThÃªm video Ä‘á»ƒ báº¯t Ä‘áº§u
+              </div>
+            )}
+          </div>
+          <div className="flex shrink-0 items-center gap-3 border-t border-slate-800 bg-slate-900 px-3 py-2">
+            <button
+              type="button"
+              onClick={() => void togglePlayback()}
+              disabled={!selectedSource}
+              className="rounded-md bg-sky-500 p-1.5 text-white hover:bg-sky-400 disabled:opacity-40"
+              aria-label={isPlaying ? "Táº¡m dá»«ng" : "PhÃ¡t"}
+              title={isPlaying ? "Táº¡m dá»«ng (Space)" : "PhÃ¡t (Space)"}
+            >
+              {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+            </button>
+            <button type="button" onClick={() => seekFrame(currentFrame - 1)} disabled={!selectedSource} className="rounded border border-slate-700 px-2 py-1 text-xs disabled:opacity-40" title="Frame trÆ°á»›c (â†)">â† Frame</button>
+            <button type="button" onClick={() => seekFrame(currentFrame + 1)} disabled={!selectedSource} className="rounded border border-slate-700 px-2 py-1 text-xs disabled:opacity-40" title="Frame sau (â†’)">Frame â†’</button>
+            <input
+              aria-label="Tua preview video"
+              type="range"
+              min={0}
+              max={timelineClips.length > 0 ? timelineDuration : selectedSource?.durationSeconds || 1}
+              step={selectedSource ? 1 / selectedSource.frameRate : 0.04}
+              value={timelineClips.length > 0 ? Math.min(playhead, timelineDuration) : localPlayhead}
+              onChange={(event) => timelineClips.length > 0 ? seekGlobal(Number(event.target.value)) : seekFrame(Math.round(Number(event.target.value) * (selectedSource?.frameRate || 1)) + 1)}
+              className="min-w-0 flex-1 accent-sky-400"
+            />
+            <span className="min-w-28 text-right font-mono text-[10px] text-slate-400">
+              {timelineClips.length > 0 ? `${formatTime(playhead)} / ${formatTime(timelineDuration)}` : formatTime(localPlayhead)}
+            </span>
+            <button type="button" onClick={() => setMuted((value) => !value)} className="rounded-md border border-slate-700 p-1.5 text-slate-300 hover:text-white" aria-label={muted ? "Báº­t tiáº¿ng" : "Táº¯t tiáº¿ng"} title={muted ? "Báº­t tiáº¿ng" : "Táº¯t tiáº¿ng"}>
+              {muted || volume === 0 ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+            </button>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.01}
+              value={volume}
+              onChange={(event) => {
+                const nextVolume = Number(event.target.value);
+                setVolume(nextVolume);
+                if (previewRef.current) previewRef.current.volume = nextVolume;
+              }}
+              className="w-20 accent-sky-400"
+              aria-label="Ã‚m lÆ°á»£ng preview"
+              title={`Ã‚m lÆ°á»£ng ${Math.round(volume * 100)}%`}
+            />
+            <span className="w-8 text-right font-mono text-[9px] text-slate-500">{Math.round(volume * 100)}%</span>
+          </div>
+        </div>
+
+        <div className="flex min-h-[220px] flex-[0_0_38%] flex-col border-b border-slate-800 bg-slate-950">
+          <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-slate-800 bg-slate-900/90 px-3 py-2">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => {
+                  const nextState = !magnetEnabled;
+                  setMagnetEnabled(nextState);
+                  if (nextState) {
+                    setTimelineClipItems((items) => items.map((item) => ({ ...item, offsetSeconds: undefined })));
+                    setNotice("ÄÃ£ báº­t cháº¿ Ä‘á»™ Magnet: cÃ¡c clip tá»± Ä‘á»™ng hÃºt sÃ¡t nhau, khÃ´ng Ä‘á»ƒ láº¡i khoáº£ng trá»‘ng.");
+                  } else {
+                    setTimelineClipItems((items) => items.map((item) => {
+                      const clip = timelineClips.find((c) => c.clipId === item.id);
+                      return { ...item, offsetSeconds: clip ? clip.start : item.offsetSeconds };
+                    }));
+                    setNotice("ÄÃ£ táº¯t cháº¿ Ä‘á»™ Magnet: cÃ¡c khoáº£ng trá»‘ng Ä‘Æ°á»£c giá»¯ nguyÃªn.");
+                  }
+                }}
+                className={`inline-flex items-center gap-1 rounded border px-2 py-1 text-[11px] font-semibold transition-colors ${
+                  magnetEnabled
+                    ? "border-amber-400/60 bg-amber-400/20 text-amber-200 hover:bg-amber-400/30"
+                    : "border-slate-700 bg-slate-800/40 text-slate-400 hover:text-slate-200"
+                }`}
+                title={magnetEnabled ? "Magnet Ä‘ang Báº¬T: xÃ³a clip sáº½ tá»± Ä‘á»™ng kÃ©o cÃ¡c video sau hÃºt vÃ o trÆ°á»›c (Click Ä‘á»ƒ táº¯t)" : "Magnet Ä‘ang Táº®T: xÃ³a clip sáº½ giá»¯ nguyÃªn vá»‹ trÃ­ táº¡o khoáº£ng trá»‘ng mÃ n hÃ¬nh Ä‘en (Click Ä‘á»ƒ báº­t)"}
+              >
+                <Magnet className={`h-3 w-3 ${magnetEnabled ? "text-amber-400" : "text-slate-400"}`} />
+                Magnet
+              </button>
+              <button
+                type="button"
+                onClick={splitClipAtPlayhead}
+                disabled={!timelineClips.length}
+                title={`Cáº¯t Ä‘Ã´i clip táº¡i vá»‹ trÃ­ playhead ${formatTime(playhead)} (PhÃ­m C hoáº·c S)`}
+                className="inline-flex items-center gap-1 rounded bg-amber-400 px-2.5 py-1 text-[11px] font-bold text-slate-950 hover:bg-amber-300 disabled:opacity-40"
+              >
+                <Scissors className="h-3 w-3" />
+                Cáº¯t clip (C)
+              </button>
+              <button
+                type="button"
+                onClick={() => activeClipId && handleMoveClipOffset(activeClipId, -1)}
+                disabled={!activeClipId || timelineClipItems.findIndex((c) => c.id === activeClipId) === 0}
+                title="Di chuyá»ƒn clip sang trÃ¡i (HoÃ¡n Ä‘á»•i vá»›i clip trÆ°á»›c)"
+                className="inline-flex items-center gap-1 rounded border border-sky-500/50 bg-sky-950/30 px-2 py-1 text-[11px] font-semibold text-sky-200 hover:bg-sky-900/50 disabled:opacity-40"
+              >
+                <MoveLeft className="h-3 w-3" />
+                Dá»‹ch trÃ¡i
+              </button>
+              <button
+                type="button"
+                onClick={() => activeClipId && handleMoveClipOffset(activeClipId, 1)}
+                disabled={!activeClipId || timelineClipItems.findIndex((c) => c.id === activeClipId) === timelineClipItems.length - 1}
+                title="Di chuyá»ƒn clip sang pháº£i (HoÃ¡n Ä‘á»•i vá»›i clip sau)"
+                className="inline-flex items-center gap-1 rounded border border-sky-500/50 bg-sky-950/30 px-2 py-1 text-[11px] font-semibold text-sky-200 hover:bg-sky-900/50 disabled:opacity-40"
+              >
+                <MoveRight className="h-3 w-3" />
+                Dá»‹ch pháº£i
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (activeClipId) removeTimelineClip(activeClipId);
+                  else if (activeSourceId) removeTimelineSource(activeSourceId);
+                }}
+                disabled={!activeClipId && !activeSourceId}
+                title="XÃ³a clip Ä‘ang chá»n trÃªn timeline (Delete)"
+                className="inline-flex items-center gap-1 rounded border border-rose-500/50 bg-rose-950/30 px-2 py-1 text-[11px] font-semibold text-rose-200 hover:bg-rose-900/50 disabled:opacity-40"
+              >
+                <Trash2 className="h-3 w-3" />
+                XÃ³a clip
+              </button>
+              <button type="button" onClick={seekTimelineStart} disabled={!timelineClips.length} title="ÄÆ°a playhead vá» frame Ä‘áº§u cá»§a toÃ n timeline (Home)" className="rounded border border-slate-700 px-2 py-1 text-[11px] hover:border-slate-500 disabled:opacity-40">Start Frame</button>
+              <button type="button" onClick={seekTimelineEnd} disabled={!timelineClips.length} title="ÄÆ°a playhead tá»›i frame cuá»‘i cá»§a toÃ n timeline" className="rounded border border-slate-700 px-2 py-1 text-[11px] hover:border-slate-500 disabled:opacity-40">End Frame</button>
+              <button type="button" onClick={setCutFrom} disabled={!timelineClips.length} title="Äáº·t frame hiá»‡n táº¡i trÃªn timeline lÃ m Ä‘áº§u range" className="rounded border border-amber-400/40 px-2 py-1 text-[11px] text-amber-200 hover:bg-amber-400/10 disabled:opacity-40">Cut From Frame</button>
+              <button type="button" onClick={setCutTo} disabled={!timelineClips.length} title="Äáº·t frame hiá»‡n táº¡i trÃªn timeline lÃ m cuá»‘i range" className="rounded border border-amber-400/40 px-2 py-1 text-[11px] text-amber-200 hover:bg-amber-400/10 disabled:opacity-40">Cut To Frame</button>
+              <button
+                type="button"
+                onClick={addSplitMarker}
+                disabled={!timelineClips.length}
+                title={`ÄÃ¡nh dáº¥u split táº¡i playhead ${formatTime(playhead)}`}
+                className="rounded border border-cyan-400/50 px-2 py-1 text-[11px] text-cyan-200 hover:bg-cyan-400/10 disabled:opacity-40"
+              >
+                Mark to split
+              </button>
+              <button
+                type="button"
+                onClick={removeLastSplitMarker}
+                disabled={!splitMarkers.length}
+                title="XÃ³a má»‘c split Ä‘Æ°á»£c thÃªm gáº§n Ä‘Ã¢y nháº¥t"
+                className="rounded border border-cyan-400/30 px-2 py-1 text-[11px] text-cyan-200 hover:bg-cyan-400/10 disabled:opacity-40"
+              >
+                Undo mark
+              </button>
+              <button
+                type="button"
+                onClick={() => setSplitMarkers([])}
+                disabled={!splitMarkers.length}
+                title="XÃ³a toÃ n bá»™ má»‘c split"
+                className="rounded border border-slate-700 px-2 py-1 text-[11px] text-slate-300 hover:border-slate-500 disabled:opacity-40"
+              >
+                Clear marks
+              </button>
+              <button
+                type="button"
+                onClick={splitTimelineToQueues}
+                disabled={!splitMarkers.some((time) => time > 0 && time < timelineDuration)}
+                title="Chia toÃ n bá»™ timeline tá»« Ä‘áº§u Ä‘áº¿n cuá»‘i thÃ nh cÃ¡c queue theo má»‘c Ä‘Ã£ Ä‘Ã¡nh dáº¥u"
+                className="rounded bg-cyan-400 px-2.5 py-1 text-[11px] font-bold text-slate-950 hover:bg-cyan-300 disabled:opacity-40"
+              >
+                Split to queues
+              </button>
+              <div className="inline-flex items-center gap-1.5 border-l border-slate-700 pl-2 ml-1">
+                <label className="flex items-center gap-1 text-[10px] text-slate-300" title="Tá»± snap frame start/end vá» keyframe gáº§n nháº¥t Ä‘á»ƒ tá»‘i Æ°u Stream-copy">
+                  <input
+                    type="checkbox"
+                    checked={preferKeyframeCuts}
+                    onChange={(e) => setPreferKeyframeCuts(e.target.checked)}
+                    className="accent-sky-400"
+                  />
+                  Keyframe
+                </label>
+                <div className="ml-3">
+                  <label className="text-[10px] text-slate-300">Frame Tolerance %: </label>
+                  <input
+                    type="number"
+                    id="frameToleranceInput"
+                    value={5}
+                    min="1"
+                    max="50"
+                    step="1"
+                    onChange={(e) => setFrameTolerance(parseFloat(e.target.value) || 5)}
+                    className="w-20 rounded border border-sky-400/40 px-1 py-1 text-[10px] text-sky-200 focus:outline-none focus:ring-2 focus:ring-sky-500/30"
+                  />
+                  <label className="text-[10px] text-slate-300">Duration Tolerance %: </label>
+                  <input
+                    type="number"
+                    id="durationToleranceInput"
+                    value={5}
+                    min="1"
+                    max="50"
+                    step="0.5"
+                    onChange={(e) => setDurationTolerance(parseFloat(e.target.value) || 5)}
+                    className="w-20 rounded border border-sky-400/40 px-1 py-1 text-[10px] text-sky-200 focus:outline-none focus:ring-2 focus:ring-sky-500/30"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setFrameTolerance(5) && setDurationTolerance(5)}
+                    className="rounded border border-sky-400/40 px-1 py-1 text-[10px] text-sky-200 hover:bg-sky-950/40 disabled:opacity-40"
+                    title="Äáº·t vá» giÃ¡ trá»‹ máº·c Ä‘á»‹nh (5%)"
+                  >
+                    Default
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  onClick={addActiveClipToQueue}
+                  disabled={!activeClipId || !timelineClips.length}
+                  className="rounded border border-sky-400/40 px-2 py-1 text-[10px] font-semibold text-sky-200 hover:bg-sky-950/40 disabled:opacity-40"
+                  title="ThÃªm clip Ä‘ang chá»n vÃ o queue"
+                >
+                  Add clip to queue
+                </button>
+                <button
+                  type="button"
+                  onClick={addAllClipsToQueue}
+                  disabled={!timelineClips.length}
+                  className="rounded border border-emerald-400/40 px-2 py-1 text-[10px] font-semibold text-emerald-200 hover:bg-emerald-950/40 disabled:opacity-40"
+                  title="ThÃªm táº¥t cáº£ cÃ¡c clip vÃ o queue (má»—i clip = 1 queue item)"
+                >
+                  Add all Clips to queues
+                </button>
+                <button
+                  type="button"
+                  onClick={createSingleMergedQueue}
+                  disabled={!timelineClips.length}
+                  className="rounded border border-violet-400/40 px-2 py-1 text-[10px] font-semibold text-violet-200 hover:bg-violet-950/40 disabled:opacity-40"
+                  title="Táº¡o 1 queue duy nháº¥t gá»™p toÃ n bá»™ clips (chá»‰ export 1 láº§n, khÃ´ng cáº§n join sau)"
+                >
+                  Táº¡o 1 Queue gá»™p táº¥t cáº£
+                </button>
+              </div>
+              // (ÄÃ£ xÃ³a checkbox Æ¯u tiÃªn keyframe cÅ© táº¡i Ä‘Ã¢y)
+              <button type="button" onClick={addLastCut} disabled={!queue.length} title="ThÃªm pháº§n cÃ²n láº¡i sau frame cuá»‘i cá»§a range cuá»‘i trong queue" className="rounded border border-violet-400/40 px-2 py-1 text-[11px] text-violet-200 hover:bg-violet-400/10 disabled:opacity-40">Last Cut</button>
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  addQueueBesideSelected("before");
+                }}
+                disabled={!selectedQueueRange || !selectedQueueBounds}
+                title="Táº¡o cue dÃ i tá»‘i Ä‘a 5 giÃ¢y káº¿t thÃºc táº¡i Ä‘áº§u cue Ä‘ang chá»n"
+                className="rounded border border-violet-400/40 px-2 py-1 text-[11px] text-violet-200 hover:bg-violet-400/10 disabled:opacity-40"
+              >
+                Add queue before
+              </button>
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  addQueueBesideSelected("after");
+                }}
+                disabled={!selectedQueueRange || !selectedQueueBounds}
+                title="Táº¡o cue dÃ i tá»‘i Ä‘a 5 giÃ¢y báº¯t Ä‘áº§u táº¡i cuá»‘i cue Ä‘ang chá»n"
+                className="rounded border border-violet-400/40 px-2 py-1 text-[11px] text-violet-200 hover:bg-violet-400/10 disabled:opacity-40"
+              >
+                Add queue after
+              </button>
+              <button type="button" onClick={addCurrentRange} disabled={!timelineClips.length} className="inline-flex items-center gap-1 rounded bg-amber-400 px-2.5 py-1 text-[11px] font-bold text-slate-950 hover:bg-amber-300 disabled:opacity-40"><Scissors className="h-3 w-3" />Add to Queue</button>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <button type="button" onClick={() => setZoom((current) => Math.max(minimumZoom, current / ZOOM_STEP))} disabled={zoom <= minimumZoom} className="rounded border border-slate-700 p-1 text-slate-300 hover:text-white disabled:opacity-40" aria-label="Thu nhá» timeline"><Minus className="h-3.5 w-3.5" /></button>
+              <button type="button" onClick={fitTimeline} className="rounded border border-slate-700 px-1.5 py-1 text-[10px] text-slate-300 hover:text-white" title="Thu nhá» Ä‘á»ƒ tháº¥y toÃ n bá»™ timeline">Fit</button>
+              <span className="min-w-[58px] text-center font-mono text-[10px] text-slate-400">{zoom < 10 ? zoom.toFixed(2) : Math.round(zoom)} px/s</span>
+              <button type="button" onClick={() => setZoom((current) => Math.min(MAX_ZOOM, Math.round(current * ZOOM_STEP * 100) / 100))} className="rounded border border-slate-700 p-1 text-slate-300 hover:text-white" aria-label="PhÃ³ng to timeline"><Plus className="h-3.5 w-3.5" /></button>
+              <label className="inline-flex items-center gap-1 text-[10px] text-slate-400" title="Khoáº£ng snap Ä‘áº¿n Ä‘áº§u/cuá»‘i clip theo pixel mÃ n hÃ¬nh">
+                Snap
+                <input
+                  type="number"
+                  min={0}
+                  max={MAX_SNAP_DISTANCE_PX}
+                  step={1}
+                  value={snapDistancePx}
+                  onChange={(event) => {
+                    const value = Number(event.currentTarget.value);
+                    setSnapDistancePx(
+                      Number.isFinite(value)
+                        ? Math.max(0, Math.min(MAX_SNAP_DISTANCE_PX, value))
+                        : 0,
+                    );
+                  }}
+                  className="w-12 rounded border border-slate-700 bg-slate-950 px-1.5 py-1 text-center font-mono text-[10px] text-slate-200"
+                  aria-label="Khoáº£ng snap theo pixel"
+                />
+                px
+              </label>
+              <span className="hidden text-[10px] text-slate-500 xl:inline">{rulerFrameMode ? "Ruler hiá»ƒn thá»‹ sá»‘ frame" : "Ctrl/Alt + cuá»™n Ä‘á»ƒ zoom"} Â· Space phÃ¡t/dá»«ng Â· â†/â†’ tá»«ng frame Â· Shift + â†/â†’ 10 frame</span>
+            </div>
+          </div>
+          <div
+            ref={timelineScrollRef}
+            className="min-h-0 flex-1 overflow-auto overscroll-contain"
+            onScroll={(event) => setTimelineScrollLeft(event.currentTarget.scrollLeft)}
+            onDragOver={(event) => {
+              event.preventDefault();
+              event.dataTransfer.dropEffect = "copy";
+            }}
+            onDrop={handleDropOnTimeline}
+          >
+            <div
+              ref={timelineContentRef}
+              className="relative min-h-full"
+              style={{ width: `${timelineWidth}px`, minWidth: "100%" }}
+              onPointerDown={(event) => {
+                if (!(event.target as HTMLElement).closest("[data-queue-cue]")) {
+                  setSelectedQueueId(null);
+                }
+                if ((event.target as HTMLElement).closest("button, [data-queue-cue]")) return;
+                isScrubbingRef.current = true;
+                seekGlobal((event.clientX - event.currentTarget.getBoundingClientRect().left) / zoom);
+              }}
+            >
+              <div className="relative h-7 border-b border-slate-800 bg-slate-900/70">
+                {rulerTicks.map((tick) => (
+                  <div key={tick.key} className={`absolute inset-y-0 border-l pl-1 pt-1 font-mono text-[9px] ${rulerFrameMode ? "border-sky-500/50 text-sky-300" : "border-slate-700/70 text-slate-500"}`} style={{ left: `${tick.left}px` }}>
+                    {tick.label}
+                  </div>
+                ))}
+              </div>
+              <div className="relative h-[calc(100%-1.75rem)] min-h-44">
+                {timelineClips.length === 0 ? (
+                  <div className="flex h-full min-h-28 items-center justify-center text-xs text-slate-500">
+                    KÃ©o video tá»« cá»™t trÃ¡i vÃ o Ä‘Ã¢y Ä‘á»ƒ báº¯t Ä‘áº§u biÃªn táº­p
+                  </div>
+                ) : (
+                  timelineClips.map((clip, clipIndex) => {
+                    const clipWidth = clip.duration * zoom;
+                    const isSelected = activeClipId === clip.clipId;
+                    const isDraggingThis = draggedClipId === clip.clipId;
+                    const isTarget = dropTargetClipId === clip.clipId;
+                    return (
+                      <div
+                        key={clip.clipId}
+                        data-timeline-clip
+                        data-clip-id={clip.clipId}
+                        draggable
+                        onDragStart={(event) => {
+                          event.dataTransfer.effectAllowed = "move";
+                          event.dataTransfer.setData("application/x-join-split-clip", clip.clipId);
+                          setDraggedClipId(clip.clipId);
+                        }}
+                        onDragEnd={() => {
+                          setDraggedClipId(null);
+                          setDropTargetClipId(null);
+                          setDropPosition(null);
+                        }}
+                        onDragOver={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          if (draggedClipId && draggedClipId !== clip.clipId) {
+                            event.dataTransfer.dropEffect = "move";
+                            const rect = event.currentTarget.getBoundingClientRect();
+                            const midX = rect.left + rect.width / 2;
+                            const pos = event.clientX < midX ? "before" : "after";
+                            setDropTargetClipId(clip.clipId);
+                            setDropPosition(pos);
+                          }
+                        }}
+                        onDragLeave={() => {
+                          if (dropTargetClipId === clip.clipId) {
+                            setDropTargetClipId(null);
+                            setDropPosition(null);
+                          }
+                        }}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setSelectedQueueId(null);
+                          setActiveClipId(clip.clipId);
+                          setActiveSourceId(clip.sourceId);
+                          const localOffset = Math.max(0, (event.clientX - event.currentTarget.getBoundingClientRect().left) / zoom);
+                          seekGlobal(clip.start + Math.min(clip.duration, localOffset));
+                        }}
+                        className={`group absolute left-0 top-10 flex h-16 cursor-grab items-center overflow-hidden border-y border-r text-left transition-all active:cursor-grabbing ${clipWidth >= 52 ? "px-2 pr-8" : clipWidth >= 20 ? "px-0.5" : "px-0"} ${isDraggingThis ? "opacity-30" : ""} ${isSelected ? "border-amber-300 bg-amber-500/30 text-amber-100 ring-2 ring-inset ring-amber-300" : activeSourceId === clip.sourceId ? "border-sky-300 bg-sky-500/25 text-sky-100" : "border-slate-600 bg-slate-700/60 text-slate-200 hover:bg-slate-600/70"}`}
+                        style={{ left: `${clip.start * zoom}px`, width: `${clipWidth}px` }}
+                        title={`[${clipIndex + 1}] ${clip.source.fileName} Â· Frame ${clip.startFrame}-${clip.endFrame} (${clip.endFrame - clip.startFrame + 1}f) Â· ${formatTime(clip.duration)} Â· KÃ©o Ä‘á»ƒ Ä‘á»•i vá»‹ trÃ­`}
+                      >
+                        {isTarget && dropPosition === "before" && (
+                          <div className="absolute inset-y-0 left-0 z-20 w-1 bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.8)]" />
+                        )}
+                        {isTarget && dropPosition === "after" && (
+                          <div className="absolute inset-y-0 right-0 z-20 w-1 bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.8)]" />
+                        )}
+                        {clipWidth >= 20 && <Film className="h-3.5 w-3.5 shrink-0" />}
+                        {clipWidth >= 72 && (
+                          <>
+                            <span className="truncate text-[11px] font-medium">
+                              #{clipIndex + 1} {clip.source.fileName}
+                            </span>
+                            <span className="ml-auto shrink-0 pl-1 font-mono text-[9px] opacity-70">
+                              {clip.startFrame}-{clip.endFrame} ({clip.endFrame - clip.startFrame + 1}f)
+                            </span>
+                          </>
+                        )}
+                        <div className="absolute right-1 top-1 flex items-center gap-0.5 hidden group-hover:flex">
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              handleMoveClipOffset(clip.clipId, -1);
+                            }}
+                            disabled={clipIndex === 0}
+                            className="rounded p-0.5 text-slate-400 hover:bg-sky-950/80 hover:text-sky-300 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-slate-400"
+                            title="Dá»‹ch trÃ¡i (HoÃ¡n Ä‘á»•i vá»›i clip trÆ°á»›c)"
+                            aria-label="Dá»‹ch trÃ¡i"
+                          >
+                            <MoveLeft className="h-3 w-3" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              handleMoveClipOffset(clip.clipId, 1);
+                            }}
+                            disabled={clipIndex === timelineClips.length - 1}
+                            className="rounded p-0.5 text-slate-400 hover:bg-sky-950/80 hover:text-sky-300 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-slate-400"
+                            title="Dá»‹ch pháº£i (HoÃ¡n Ä‘á»•i vá»›i clip sau)"
+                            aria-label="Dá»‹ch pháº£i"
+                          >
+                            <MoveRight className="h-3 w-3" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              removeTimelineClip(clip.clipId);
+                            }}
+                            className="rounded p-0.5 text-slate-400 hover:bg-rose-950/80 hover:text-rose-300"
+                            title="XÃ³a Ä‘oáº¡n nÃ y khá»i timeline"
+                            aria-label="XÃ³a Ä‘oáº¡n nÃ y khá»i timeline"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+                {timelineClips.length > 0 && (
+                  <>
+                    {selectedQueueBounds && (
+                      <div
+                        className="pointer-events-none absolute top-10 z-[5] h-16 border-y-2 border-fuchsia-300 bg-fuchsia-400/20"
+                        style={{
+                          left: `${selectedQueueBounds.start * zoom}px`,
+                          width: `${Math.max(1, (selectedQueueBounds.end - selectedQueueBounds.start) * zoom)}px`,
+                        }}
+                        aria-label="Khoáº£ng queue Ä‘ang chá»n"
+                      />
+                    )}
+                    {timelineClips.map((clip) => {
+                      const cutStart = cutFromTime !== null &&
+                        cutFromTime >= clip.start && cutFromTime <= clip.end
+                        ? cutFromTime
+                        : null;
+                      const cutEnd = cutToTime !== null &&
+                        cutToTime >= clip.start && cutToTime <= clip.end
+                        ? cutToTime
+                        : null;
+                      return (
+                        <div key={`marker-${clip.sourceId}`}>
+                          {cutStart !== null && (
+                            <div className="pointer-events-none absolute top-8 z-10 h-20 border-l-2 border-emerald-400" style={{ left: `${cutStart * zoom}px` }}>
+                              <span className="absolute -top-3 left-1 whitespace-nowrap text-[9px] font-bold text-emerald-300">IN</span>
+                            </div>
+                          )}
+                          {cutEnd !== null && (
+                            <div className="pointer-events-none absolute top-8 z-10 h-20 border-l-2 border-rose-400" style={{ left: `${cutEnd * zoom}px` }}>
+                              <span className="absolute -top-3 left-1 whitespace-nowrap text-[9px] font-bold text-rose-300">OUT</span>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                    {splitMarkers
+                      .filter((marker) => marker > 0 && marker < timelineDuration)
+                      .map((marker, index) => (
+                        <div
+                          key={`split-marker-${marker}`}
+                          className="pointer-events-none absolute top-0 z-30 h-24"
+                          style={{ left: `${marker * zoom}px` }}
+                        >
+                          <div
+                            className={`absolute left-0 top-6 h-[4.5rem] border-l-2 ${
+                              selectedSplitMarker === marker ? "border-cyan-100" : "border-cyan-300"
+                            }`}
+                          />
+                          <button
+                            type="button"
+                            data-split-marker
+                            aria-label={`Chá»n má»‘c split S${index + 1} táº¡i ${formatTime(marker)}`}
+                            aria-pressed={selectedSplitMarker === marker}
+                            title={`Má»‘c split S${index + 1} Â· ${formatTime(marker)} Â· chá»n rá»“i nháº¥n Delete Ä‘á»ƒ xÃ³a`}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setSelectedSplitMarker(marker);
+                              setSelectedQueueId(null);
+                              seekGlobal(marker);
+                            }}
+                            className={`pointer-events-auto absolute -left-2 -top-1 flex h-5 w-5 items-center justify-center rounded-full border shadow ${
+                              selectedSplitMarker === marker
+                                ? "border-cyan-100 bg-cyan-300 text-slate-950"
+                                : "border-cyan-300 bg-slate-950 text-cyan-200 hover:bg-cyan-950"
+                            }`}
+                          >
+                            <Flag className="h-3 w-3" />
+                          </button>
+                        </div>
+                      ))}
+                    <div className="absolute left-0 top-28 h-8 w-full border-y border-slate-800 bg-slate-900/40">
+                      <span className="absolute left-2 top-1 z-10 rounded bg-slate-950/80 px-1 text-[9px] text-slate-500">
+                        QUEUE
+                      </span>
+                      {queue.map((range, index) => {
+                        const bounds = getJoinSplitRangeTimelineBounds(
+                          getJoinSplitRangeSegments(range),
+                          timelineClips.map((clip) => ({
+                            clipId: clip.clipId,
+                            sourceId: clip.sourceId,
+                            start: clip.start,
+                            end: clip.end,
+                            frameRate: clip.source.frameRate,
+                            frameCount: clip.source.frameCount,
+                            startFrame: clip.startFrame,
+                            endFrame: clip.endFrame,
+                          })),
+                        );
+                        if (!bounds) return null;
+                        const isSelected = selectedQueueId === range.id;
+                        const cueWidth = (bounds.end - bounds.start) * zoom;
+                        return (
+                          <div
+                            key={`queue-cue-${range.id}`}
+                            data-queue-cue
+                            onPointerDown={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              const mode = (event.target as HTMLElement).closest<HTMLElement>("[data-queue-edge]")?.dataset.queueEdge;
+                              queueCueDragRef.current = {
+                                rangeId: range.id,
+                                mode: mode === "start" || mode === "end" ? mode : "move",
+                                initialPointerTime: (event.clientX - (timelineContentRef.current?.getBoundingClientRect().left || 0)) / zoom,
+                                initialStart: bounds.start,
+                                initialEnd: bounds.end,
+                              };
+                              setSelectedQueueId(range.id);
+                            }}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setSelectedQueueId(range.id);
+                              seekGlobal(bounds.start);
+                            }}
+                            className={`group absolute top-0 z-10 flex h-full cursor-grab items-center justify-center overflow-hidden rounded border text-[9px] font-semibold active:cursor-grabbing ${
+                              isSelected
+                                ? "border-fuchsia-200 bg-fuchsia-500/60 text-white"
+                                : "border-violet-300/70 bg-violet-500/40 text-violet-100 hover:bg-violet-500/60"
+                            }`}
+                            style={{
+                              left: `${bounds.start * zoom}px`,
+                              width: `${cueWidth}px`,
+                            }}
+                            title={`Queue ${index + 1} Â· ${formatTime(bounds.start)}â€“${formatTime(bounds.end)} Â· kÃ©o Ä‘á»ƒ di chuyá»ƒn, kÃ©o hai mÃ©p Ä‘á»ƒ chá»‰nh`}
+                          >
+                            {cueWidth >= 20 && <span className="truncate px-1">{index + 1}</span>}
+                            <span
+                              data-queue-edge="start"
+                              className="absolute inset-y-0 left-0 w-2 cursor-ew-resize rounded-l bg-white/20 opacity-0 group-hover:opacity-100"
+                              aria-label="Äiá»u chá»‰nh Ä‘áº§u queue"
+                            />
+                            <span
+                              data-queue-edge="end"
+                              className="absolute inset-y-0 right-0 w-2 cursor-ew-resize rounded-r bg-white/20 opacity-0 group-hover:opacity-100"
+                              aria-label="Äiá»u chá»‰nh cuá»‘i queue"
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div className="pointer-events-none absolute top-6 z-20 h-full border-l-2 border-red-500" style={{ left: `${playhead * zoom}px` }}>
+                      <div className="absolute -left-[5px] top-0 h-2.5 w-2.5 rounded-b-sm bg-red-500" />
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {queuePanelHost && createPortal(<div className="flex h-full min-h-0 flex-col bg-slate-900/70">
+          <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-slate-800 px-3 py-2">
+            <div>
+              <h3 className="text-xs font-semibold">Video in queue</h3>
+              <p className="text-[10px] text-slate-500">Chá»n profile chung Ä‘á»ƒ phÃ¢n tÃ­ch stream-copy / encode Â· Chá»n video hoáº·c queue cue rá»“i nháº¥n Delete Ä‘á»ƒ xÃ³a.</p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="flex items-center gap-1.5 text-[10px] text-slate-400">
+                Profile chung
+                <select
+                  value={referenceSourceId}
+                  onChange={(event) => setReferenceSourceId(event.target.value)}
+                  disabled={!sources.length}
+                  className="max-w-48 rounded border border-slate-700 bg-slate-950 px-2 py-1 text-[10px] text-slate-200"
+                >
+                  {sources.map((source) => (
+                    <option key={source.id} value={source.id}>{source.fileName} Â· {source.video.width}Ã—{source.video.height} Â· {source.frameRate.toFixed(3)} fps</option>
+                  ))}
+                </select>
+              </label>
+              <button type="button" onClick={() => void joinTimeline()} disabled={!timelineClipItems.length || !referenceSourceId || joining || exporting} className="rounded border border-sky-400/40 px-2.5 py-1.5 text-[10px] font-semibold text-sky-200 hover:bg-sky-950/40 disabled:opacity-40">
+                {joining ? "Äang xuáº¥tâ€¦" : "Xuáº¥t Timeline"}
+              </button>
+              {timelineJoinOutput && (
+                <a
+                  href={`${API}/exports/${encodeURIComponent(timelineJoinOutput.id)}/download`}
+                  download={timelineJoinOutput.fileName}
+                  className="rounded border border-sky-400/30 px-2 py-1.5 text-[10px] text-sky-200 hover:bg-sky-950/40"
+                  title={timelineJoinOutput.fileName}
+                >
+                  Táº£i video timeline
+                </a>
+              )}
+              <div className="flex items-center gap-1">
+                <label className="flex items-center gap-1 text-[10px] text-slate-300">
+                  <input
+                    type="checkbox"
+                    checked={joinQueuesAfterExport}
+                    onChange={(event) => setJoinQueuesAfterExport(event.target.checked)}
+                    disabled={queue.length < 2 || exporting || joining}
+                    className="accent-emerald-400"
+                  />
+                  Join queues
+                </label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setJoinQueuesAfterExport(false);
+                    setNotice("ÄÃ£ bá» chá»n Join queues.");
+                  }}
+                  disabled={!joinQueuesAfterExport}
+                  title="Bá» chá»n Join queues (reset náº¿u bá»‹ káº¹t)"
+                  className="ml-1 p-1 rounded hover:bg-slate-700 text-[10px] text-slate-400 hover:text-slate-100 disabled:opacity-30 disabled:hover:bg-transparent"
+                  aria-label="Reset Join queues"
+                >
+                  âœ•
+                </button>
+              </div>
+              <button type="button" onClick={() => void exportQueue()} disabled={!queue.length || !referenceSourceId || exporting || joining} className="rounded bg-emerald-500 px-3 py-1.5 text-[10px] font-bold text-slate-950 hover:bg-emerald-400 disabled:opacity-40">
+                {exporting ? "Äang Exportâ€¦" : "Export Queue"}
+              </button>
+              <button
+                type="button"
+                onClick={() => void stopQueue()}
+                disabled={!exporting && !joining}
+                className="rounded border border-rose-400/40 px-2.5 py-1.5 text-[10px] font-semibold text-rose-200 hover:bg-rose-950/40 disabled:opacity-40"
+              >
+                {joining ? "Dá»«ng ghÃ©p" : "Dá»«ng queue"}
+              </button>
+              {queueJoinOutput && (
+                <a
+                  href={`${API}/exports/${encodeURIComponent(queueJoinOutput.id)}/download`}
+                  download={queueJoinOutput.fileName}
+                  className="rounded border border-emerald-400/40 px-2 py-1.5 text-[10px] font-semibold text-emerald-200 hover:bg-emerald-950/40"
+                  title={queueJoinOutput.fileName}
+                >
+                  Táº£i video Ä‘Ã£ join
+                </a>
+              )}
+            </div>
+          </div>
+          {joining && queueJoinProgress && (
+            <div className="border-b border-emerald-400/20 bg-emerald-950/10 px-3 py-2">
+              <div className="mb-1 flex items-center justify-between gap-2 text-[10px] text-slate-300">
+                <span className="truncate">{queueJoinProgress.message}</span>
+                <span className="shrink-0 font-mono">{Math.round(queueJoinProgress.percent)}%</span>
+              </div>
+              <div
+                className="h-1.5 overflow-hidden rounded-full bg-slate-800"
+                role="progressbar"
+                aria-label="Tiáº¿n trÃ¬nh ghÃ©p cÃ¡c video queue"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={queueJoinProgress.percent}
+                aria-valuetext={`${Math.round(queueJoinProgress.percent)}% Â· ${queueJoinProgress.message}`}
+              >
+                <div
+                  className="h-full rounded-full bg-emerald-400 transition-[width] duration-300"
+                  style={{ width: `${queueJoinProgress.percent}%` }}
+                />
+              </div>
+            </div>
+          )}
+          {isIncompatible && (
+            <div className="border-b border-amber-400/20 bg-amber-950/20 px-3 py-1.5 text-[10px] text-amber-200">
+              CÃ³ video khÃ¡c thÃ´ng sá»‘ profile chung; cÃ¡c range Ä‘Ã³ sáº½ Ä‘Æ°á»£c encode láº¡i Ä‘á»ƒ khá»›p video Ä‘Ã£ chá»n.
+            </div>
+          )}
+          <div className="min-h-0 flex-1 overflow-auto">
+            {!queue.length ? (
+              <div className="flex h-full min-h-16 items-center justify-center px-3 text-[11px] text-slate-500">
+                Chá»n frame In/Out trÃªn timeline rá»“i báº¥m Add to Queue.
+              </div>
+            ) : (
+              <div className="divide-y divide-slate-800/80">
+                {queue.map((range, index) => {
+                  const segments = getJoinSplitRangeSegments(range);
+                  const source = sourceById.get(segments[0].sourceId);
+                  const bounds = getJoinSplitRangeTimelineBounds(segments, timelineClips.map((clip) => ({
+                    clipId: clip.clipId,
+                    sourceId: clip.sourceId,
+                    start: clip.start,
+                    end: clip.end,
+                    frameRate: clip.source.frameRate,
+                    frameCount: clip.source.frameCount,
+                    startFrame: clip.startFrame,
+                    endFrame: clip.endFrame,
+                  })));
+                  const status = queueStatusById.get(range.id);
+                  const exportState = queueExportState[range.id];
+                  if (!source || segments.some((segment) => !sourceById.has(segment.sourceId))) return null;
+                  const requiresEncoding = status?.requiresEncoding;
+                  const encodingFallback = exportState?.strategy === "fallback";
+                  const hasKeyframeBoundaryIssue = status?.encodingReasons.some((reason) =>
+                    reason.includes("keyframe") || reason.includes("cut start") || reason.includes("cut end"),
+                  );
+                  const directEncodeRequired = status?.encodingReasons.includes("keyframe preference is disabled");
+                  const encodingStatusLabel = encodingFallback
+                    ? "Encode fallback"
+                    : exportState?.strategy === "encode"
+                      ? "Encode"
+                      : directEncodeRequired
+                        ? "Encode trá»±c tiáº¿p"
+                      : !requiresEncoding
+                        ? "Stream-copy"
+                        : status && status.segmentCount > 1
+                          ? `Encode ${status.encodingSegmentCount}/${status.segmentCount} Ä‘oáº¡n`
+                          : hasKeyframeBoundaryIssue
+                            ? "Lá»‡ch keyframe"
+                            : status?.encodingReasons.some((reason) => reason.includes("stream parameters differ"))
+                              ? "KhÃ¡c profile"
+                              : "Cáº§n encode";
+                  const encodingReasonLabel = status?.encodingReasons.map((reason) => {
+                    if (reason === "keyframe preference is disabled") return "Táº¯t Æ¯u tiÃªn keyframe: encode trá»±c tiáº¿p, khÃ´ng thá»­ stream-copy";
+                    if (reason.includes("stream parameters differ")) return "ThÃ´ng sá»‘ stream khÃ¡c profile tham chiáº¿u";
+                    if (reason.includes("keyframe index")) return "KhÃ´ng Ä‘á»c Ä‘Æ°á»£c danh sÃ¡ch keyframe";
+                    if (reason.includes("cut start")) return "Äiá»ƒm báº¯t Ä‘áº§u khÃ´ng trÃ¹ng keyframe";
+                    if (reason.includes("cut end")) return "Äiá»ƒm káº¿t thÃºc khÃ´ng trÃ¹ng keyframe";
+                    return reason;
+                  }).join("; ");
+                  return (
+                    <div
+                      key={range.id}
+                      data-queue-item
+                      onClick={() => {
+                        setSelectedQueueId(range.id);
+                        if (bounds) seekGlobal(bounds.start);
+                      }}
+                      aria-current={selectedQueueId === range.id ? "true" : undefined}
+                      className={`cursor-pointer px-3 py-1.5 hover:bg-slate-800/50 ${selectedQueueId === range.id ? "bg-fuchsia-950/30" : ""}`}
+                    >
+                      <div className="flex min-h-8 items-center gap-2">
+                        <span className="min-w-0 flex-1 truncate font-mono text-[11px]">
+                          Q{index + 1} Â· {formatTime(bounds?.start ?? 0)} - {formatTime(bounds?.end ?? 0)} Â· {formatTime(bounds ? bounds.end - bounds.start : 0)}
+                        </span>
+                        <span
+                          title={(encodingFallback ? exportState?.message : encodingReasonLabel) || undefined}
+                          className={`shrink-0 rounded px-1.5 py-0.5 text-[9px] font-semibold ${requiresEncoding === undefined ? "bg-slate-800 text-slate-400" : requiresEncoding || encodingFallback ? "bg-amber-400/10 text-amber-200" : "bg-emerald-400/10 text-emerald-200"}`}
+                        >
+                          {requiresEncoding === undefined ? "Äang kiá»ƒm traâ€¦" : encodingStatusLabel}
+                        </span>
+                        {exportState?.output && (
+                          <a
+                            href={`${API}/exports/${encodeURIComponent(exportState.output.id)}/download`}
+                            download={exportState.output.fileName}
+                            onClick={(event) => event.stopPropagation()}
+                            className="inline-flex shrink-0 items-center gap-1 rounded border border-emerald-500/25 px-2 py-1 text-[10px] text-emerald-100 hover:bg-emerald-950/40"
+                            title="Táº£i queue item"
+                          >
+                            <Download className="h-3 w-3" /> Táº£i
+                          </a>
+                        )}
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            deleteQueueRange(range.id);
+                          }}
+                          className="rounded p-1 text-slate-500 hover:bg-rose-950/50 hover:text-rose-300"
+                          title="XÃ³a range khá»i queue"
+                          aria-label="XÃ³a range"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                      {(exportState?.status === "pending" || exportState?.status === "exporting" || exportState?.status === "done") && (
+                        <div className="ml-7 mt-1.5">
+                          <div className="mb-1 flex items-center justify-between gap-2 text-[9px] text-slate-400">
+                            <span className="truncate">{exportState.message || (exportState.status === "done" ? "HoÃ n táº¥t" : exportState.status === "pending" ? "Äang chá»" : "Äang xuáº¥tâ€¦")}</span>
+                            <span className="shrink-0 font-mono">{exportState.status === "done" ? "100%" : `${exportState.progress ?? 0}%`}</span>
+                          </div>
+                          <div
+                            className={`h-1.5 overflow-hidden rounded-full ${exportState.status === "done" ? "bg-emerald-900/70" : "bg-slate-800"}`}
+                            role="progressbar"
+                            aria-label={`Tiáº¿n Ä‘á»™ xuáº¥t queue item ${index + 1}`}
+                            aria-valuemin={0}
+                            aria-valuemax={100}
+                            aria-valuenow={exportState.status === "done" ? 100 : exportState.progress ?? 0}
+                            aria-valuetext={exportState.status === "done" ? "HoÃ n táº¥t" : `${exportState.progress ?? 0}% Â· ${exportState.message || "Äang xuáº¥t"}`}
+                          >
+                            <div
+                              className={`h-full rounded-full transition-[width] duration-300 ${exportState.status === "done" ? "bg-emerald-400" : "bg-amber-300"}`}
+                              style={{ width: `${exportState.status === "done" ? 100 : exportState.progress ?? 0}%` }}
+                            />
+                          </div>
+                        </div>
+                      )}
+                      {exportState?.status === "error" && (
+                        <p className="ml-7 mt-1 text-[10px] text-rose-300">{exportState.error}</p>
+                      )}
+                      {exportState?.status === "cancelled" && (
+                        <p className="ml-7 mt-1 text-[10px] text-slate-400">{exportState.message || "ÄÃ£ dá»«ng."}</p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+          {(error || notice) && (
+            <div className={`shrink-0 border-t px-3 py-1.5 text-[10px] ${error ? "border-rose-500/30 bg-rose-950/25 text-rose-200" : "border-slate-800 text-slate-400"}`} role={error ? "alert" : "status"}>
+              {error || notice}
+            </div>
+          )}
+        </div>, queuePanelHost)}
+      </section>
+    </div>
+  );
+}

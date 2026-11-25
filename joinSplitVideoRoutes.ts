@@ -78,6 +78,7 @@ export function createJoinSplitVideoRouter(manager: JoinSplitVideoManager): Rout
         req.body?.progressId,
         req.body?.preferKeyframeCuts !== false,
         req.body?.queueIndex,
+        req.body?.forceCopy,
       );
       return res.json({ files });
     } catch (error) {
@@ -103,6 +104,7 @@ export function createJoinSplitVideoRouter(manager: JoinSplitVideoManager): Rout
       const file = await manager.joinSources(
         req.body?.sourceIds,
         req.body?.referenceSourceId,
+        req.body?.forceCopy,
       );
       return res.json({ file });
     } catch (error) {
@@ -117,6 +119,7 @@ export function createJoinSplitVideoRouter(manager: JoinSplitVideoManager): Rout
         req.body?.exportIds,
         req.body?.referenceSourceId,
         req.body?.progressId,
+        req.body?.forceCopy,
       );
       return res.json({ file });
     } catch (error) {
