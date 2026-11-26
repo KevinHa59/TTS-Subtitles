@@ -3,6 +3,17 @@
 // Must be set before loading pipertts so the native addon uses the CLI path.
 process.env.PIPER_ESPEAK_BRIDGE = "0";
 
+// Load environment variables from .env file (if exists)
+try {
+  const { config } = await import("dotenv");
+  config();
+  console.log("[Server] Loaded environment variables from .env");
+} catch {
+  console.log(
+    "[Server] dotenv not available, using system environment variables",
+  );
+}
+
 const { PiperNativeTTS } = await import("pipertts");
 
 import express, { Request, Response } from "express";
@@ -78,6 +89,17 @@ import {
   stopSubtitleTranslationEngine,
   translateSubtitleCues,
 } from "./subtitleTranslationManager";
+import {
+  getGeminiTranslationStatus,
+  initializeGeminiTranslation,
+  translateWithGemini,
+  translateWithGeminiStream,
+} from "./geminiTranslationManager";
+import {
+  getFreeLLMTranslationStatus,
+  initializeFreeLLMTranslation,
+  translateWithFreeLLM,
+} from "./geminiTranslationManager";
 import { VideoDubbingManager } from "./videoDubbingManager";
 import { VideoDubbingProjects } from "./videoDubbingProjects";
 import { createVideoDubbingRouter } from "./videoDubbingRoutes";
@@ -124,18 +146,28 @@ import {
   startFileTransferSession,
   stopFileTransferSession,
 } from "./fileTransferManager";
+import freeLLMAPIchatRoutes from "./src/routes/freellmapi-chat";
+import freeLLMAPItranlationRoutes from "./src/routes/freellmapi-translation";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
+
 const PORT = Number(process.env.PORT) || 3000;
 const isProd = process.env.NODE_ENV === "production";
 
-function isLocalSubtitleTranslationRequest(req: Request, res: Response, next: () => void) {
+function isLocalSubtitleTranslationRequest(
+  req: Request,
+  res: Response,
+  next: () => void,
+) {
   const address = req.socket.remoteAddress?.replace(/^::ffff:/, "");
   if (address !== "127.0.0.1" && address !== "::1") {
-    return res.status(403).json({ success: false, error: "Tính năng dịch cục bộ chỉ cho phép truy cập từ máy này." });
+    return res.status(403).json({
+      success: false,
+      error: "Tính năng dịch cục bộ chỉ cho phép truy cập từ máy này.",
+    });
   }
   next();
 }
@@ -190,7 +222,13 @@ function resolveFfmpegPath(): string {
     path.resolve(__dirname, "ffmpeg.exe"),
     path.resolve(__dirname, "bin", "ffmpeg.exe"),
     path.resolve(__dirname, "ffmpeg", "bin", "ffmpeg.exe"),
-    path.join(process.env.LOCALAPPDATA || "", "Microsoft", "WinGet", "Links", "ffmpeg.exe"),
+    path.join(
+      process.env.LOCALAPPDATA || "",
+      "Microsoft",
+      "WinGet",
+      "Links",
+      "ffmpeg.exe",
+    ),
   ];
   for (const c of winCandidates) {
     if (fs.existsSync(c)) return c;
@@ -206,7 +244,13 @@ function resolveFfprobePath(): string {
     path.resolve(__dirname, "ffprobe.exe"),
     path.resolve(__dirname, "bin", "ffprobe.exe"),
     path.resolve(__dirname, "ffmpeg", "bin", "ffprobe.exe"),
-    path.join(process.env.LOCALAPPDATA || "", "Microsoft", "WinGet", "Links", "ffprobe.exe"),
+    path.join(
+      process.env.LOCALAPPDATA || "",
+      "Microsoft",
+      "WinGet",
+      "Links",
+      "ffprobe.exe",
+    ),
   ];
   for (const c of winCandidates) {
     if (fs.existsSync(c)) return c;
@@ -323,7 +367,8 @@ function buildAtempoFilter(speed: number): string {
 
 app.use(express.json({ limit: "150mb" }));
 app.use(express.urlencoded({ extended: true, limit: "150mb" }));
-
+app.use("/api/free-llm-chat", freeLLMAPIchatRoutes);
+app.use("/api/free-llm-translation", freeLLMAPItranlationRoutes);
 const MODELS_DIR = path.resolve(__dirname, "models");
 if (!fs.existsSync(MODELS_DIR)) {
   fs.mkdirSync(MODELS_DIR, { recursive: true });
@@ -351,7 +396,10 @@ const joinSplitVideoManager = new JoinSplitVideoManager({
   ffprobePath: resolveFfprobePath(),
   storageDirectory: path.resolve(__dirname, "join_split_video_storage"),
 });
-app.use("/api/join-split-video", createJoinSplitVideoRouter(joinSplitVideoManager));
+app.use(
+  "/api/join-split-video",
+  createJoinSplitVideoRouter(joinSplitVideoManager),
+);
 
 const videoDubbingManager = new VideoDubbingManager({
   storageDirectory: VIDEO_DUBBING_DIR,
@@ -365,8 +413,9 @@ const videoDubbingMediaCoordinator = new VideoDubbingMediaCoordinator(
     ffprobePath: resolveFfprobePath(),
   },
 );
-const videoDubbingSeparationCoordinator =
-  new VideoDubbingSeparationCoordinator(videoDubbingManager, {
+const videoDubbingSeparationCoordinator = new VideoDubbingSeparationCoordinator(
+  videoDubbingManager,
+  {
     pythonPath:
       process.env.VIDEO_DUBBING_SEPARATION_PYTHON ||
       process.env.BGM_PYTHON ||
@@ -375,7 +424,8 @@ const videoDubbingSeparationCoordinator =
     ffmpegPath: resolveFfmpegPath(),
     ffprobePath: resolveFfprobePath(),
     isMediaBusy: (jobId) => videoDubbingMediaCoordinator.isBusy(jobId),
-  });
+  },
+);
 const videoDubbingMasterCoordinator = new VideoDubbingMasterCoordinator(
   videoDubbingManager,
   {
@@ -463,96 +513,135 @@ app.use(
     videoDubbingMasterEditCoordinator,
   ),
 );
-app.post("/api/video-dubbing/jobs/:jobId/character-card-ocr", (req: Request, res: Response) => {
-  const { jobId } = req.params;
-  if (!videoDubbingManager.isValidJobId(jobId)) {
-    return res.status(400).json({ error: "ID video không hợp lệ." });
-  }
-  const job = videoDubbingManager.getJob(jobId);
-  let videoPath: string | null;
-  try {
-    videoPath = videoDubbingManager.getSourceVideoPath(jobId);
-  } catch (error) {
-    console.error("[VideoDubbing] Không thể xác minh video cho OCR card:", error);
-    return res.status(500).json({ error: "Không thể truy cập video nguồn cho OCR." });
-  }
-  if (!job || !videoPath || !job.metadata) {
-    return res.status(404).json({ error: "Video nguồn chưa sẵn sàng." });
-  }
-  const installStatus = getSubtitleOcrInstallStatus();
-  if (!installStatus.runtimeReady || !installStatus.modelsReady) {
-    return res.status(409).json({ error: "Cần cài bộ nhận diện OCR trước khi tạo card tự động." });
-  }
-
-  const timeStart = Number(req.body?.timeStart);
-  const requestedDuration = Number(req.body?.durationSeconds);
-  const region = req.body?.region;
-  const coordinates = [region?.left, region?.top, region?.width, region?.height].map(Number);
-  if (
-    !Number.isFinite(timeStart) ||
-    !Number.isFinite(requestedDuration) ||
-    requestedDuration < 0.1 ||
-    requestedDuration > 60 ||
-    timeStart < 0 ||
-    timeStart >= job.metadata.durationSeconds ||
-    !coordinates.every(Number.isFinite) ||
-    coordinates[0] < 0 ||
-    coordinates[1] < 0 ||
-    coordinates[2] <= 0 ||
-    coordinates[3] <= 0 ||
-    coordinates[0] + coordinates[2] > 1 ||
-    coordinates[1] + coordinates[3] > 1
-  ) {
-    return res.status(400).json({ error: "Khoảng quét hoặc vùng OCR không hợp lệ." });
-  }
-
-  const cropX = Math.floor(coordinates[0] * job.metadata.width);
-  const cropY = Math.floor(coordinates[1] * job.metadata.height);
-  const cropWidth = Math.max(1, Math.ceil(coordinates[2] * job.metadata.width));
-  const cropHeight = Math.max(1, Math.ceil(coordinates[3] * job.metadata.height));
-  const options: OcrJobOptions = {
-    timeStart,
-    timeEnd: Math.min(job.metadata.durationSeconds, timeStart + requestedDuration),
-    confidence: 0,
-    similarity: 75,
-    maxMergeGap: 0.4,
-    brightnessThreshold: null,
-    ssimThreshold: 92,
-    maxImageWidth: 720,
-    framesToSkip: 5,
-    minimumDuration: 0.1,
-    useFullFrame: false,
-    useDualZone: false,
-    zone1: "lower",
-    zone2: "center",
-    cropX,
-    cropY,
-    cropWidth: Math.min(cropWidth, job.metadata.width - cropX),
-    cropHeight: Math.min(cropHeight, job.metadata.height - cropY),
-    alignment1: "middle-center",
-    alignment2: "middle-center",
-    angleClassification: false,
-    normalizeTraditional: false,
-    cpuThreads: 8,
-    useGpu: true,
-    ocrBatchSize: 4,
-  };
-  try {
-    const workerStatus = getSubtitleOcrWorkerStatus();
-    if (workerStatus.status === "starting") {
-      return res.status(409).json({ error: "Đang nạp model OCR thường trực; hãy đợi trạng thái sẵn sàng rồi quét." });
+app.post(
+  "/api/video-dubbing/jobs/:jobId/character-card-ocr",
+  (req: Request, res: Response) => {
+    const { jobId } = req.params;
+    if (!videoDubbingManager.isValidJobId(jobId)) {
+      return res.status(400).json({ error: "ID video không hợp lệ." });
     }
-    const createJob = workerStatus.status === "ready" || workerStatus.status === "busy"
-      ? createPersistentSubtitleOcrJob
-      : createSubtitleOcrJob;
-    return res.status(202).json({ success: true, job: createJob(randomUUID(), videoPath, options) });
-  } catch (error) {
-    console.error("[VideoDubbing] Không thể bắt đầu OCR card nhân vật:", error);
-    return res.status(503).json({
-      error: error instanceof Error ? error.message : "Không thể bắt đầu OCR card nhân vật.",
-    });
-  }
-});
+    const job = videoDubbingManager.getJob(jobId);
+    let videoPath: string | null;
+    try {
+      videoPath = videoDubbingManager.getSourceVideoPath(jobId);
+    } catch (error) {
+      console.error(
+        "[VideoDubbing] Không thể xác minh video cho OCR card:",
+        error,
+      );
+      return res
+        .status(500)
+        .json({ error: "Không thể truy cập video nguồn cho OCR." });
+    }
+    if (!job || !videoPath || !job.metadata) {
+      return res.status(404).json({ error: "Video nguồn chưa sẵn sàng." });
+    }
+    const installStatus = getSubtitleOcrInstallStatus();
+    if (!installStatus.runtimeReady || !installStatus.modelsReady) {
+      return res.status(409).json({
+        error: "Cần cài bộ nhận diện OCR trước khi tạo card tự động.",
+      });
+    }
+
+    const timeStart = Number(req.body?.timeStart);
+    const requestedDuration = Number(req.body?.durationSeconds);
+    const region = req.body?.region;
+    const coordinates = [
+      region?.left,
+      region?.top,
+      region?.width,
+      region?.height,
+    ].map(Number);
+    if (
+      !Number.isFinite(timeStart) ||
+      !Number.isFinite(requestedDuration) ||
+      requestedDuration < 0.1 ||
+      requestedDuration > 60 ||
+      timeStart < 0 ||
+      timeStart >= job.metadata.durationSeconds ||
+      !coordinates.every(Number.isFinite) ||
+      coordinates[0] < 0 ||
+      coordinates[1] < 0 ||
+      coordinates[2] <= 0 ||
+      coordinates[3] <= 0 ||
+      coordinates[0] + coordinates[2] > 1 ||
+      coordinates[1] + coordinates[3] > 1
+    ) {
+      return res
+        .status(400)
+        .json({ error: "Khoảng quét hoặc vùng OCR không hợp lệ." });
+    }
+
+    const cropX = Math.floor(coordinates[0] * job.metadata.width);
+    const cropY = Math.floor(coordinates[1] * job.metadata.height);
+    const cropWidth = Math.max(
+      1,
+      Math.ceil(coordinates[2] * job.metadata.width),
+    );
+    const cropHeight = Math.max(
+      1,
+      Math.ceil(coordinates[3] * job.metadata.height),
+    );
+    const options: OcrJobOptions = {
+      timeStart,
+      timeEnd: Math.min(
+        job.metadata.durationSeconds,
+        timeStart + requestedDuration,
+      ),
+      confidence: 0,
+      similarity: 75,
+      maxMergeGap: 0.4,
+      brightnessThreshold: null,
+      ssimThreshold: 92,
+      maxImageWidth: 720,
+      framesToSkip: 5,
+      minimumDuration: 0.1,
+      useFullFrame: false,
+      useDualZone: false,
+      zone1: "lower",
+      zone2: "center",
+      cropX,
+      cropY,
+      cropWidth: Math.min(cropWidth, job.metadata.width - cropX),
+      cropHeight: Math.min(cropHeight, job.metadata.height - cropY),
+      alignment1: "middle-center",
+      alignment2: "middle-center",
+      angleClassification: false,
+      normalizeTraditional: false,
+      cpuThreads: 8,
+      useGpu: true,
+      ocrBatchSize: 4,
+    };
+    try {
+      const workerStatus = getSubtitleOcrWorkerStatus();
+      if (workerStatus.status === "starting") {
+        return res.status(409).json({
+          error:
+            "Đang nạp model OCR thường trực; hãy đợi trạng thái sẵn sàng rồi quét.",
+        });
+      }
+      const createJob =
+        workerStatus.status === "ready" || workerStatus.status === "busy"
+          ? createPersistentSubtitleOcrJob
+          : createSubtitleOcrJob;
+      return res.status(202).json({
+        success: true,
+        job: createJob(randomUUID(), videoPath, options),
+      });
+    } catch (error) {
+      console.error(
+        "[VideoDubbing] Không thể bắt đầu OCR card nhân vật:",
+        error,
+      );
+      return res.status(503).json({
+        error:
+          error instanceof Error
+            ? error.message
+            : "Không thể bắt đầu OCR card nhân vật.",
+      });
+    }
+  },
+);
 
 // VieNeu-TTS v3 Turbo Model Directory (48 kHz Neural TTS)
 const VIENEU_MODELS_DIR = path.resolve(MODELS_DIR, "vieneu");
@@ -560,7 +649,10 @@ if (!fs.existsSync(VIENEU_MODELS_DIR)) {
   fs.mkdirSync(VIENEU_MODELS_DIR, { recursive: true });
 }
 
-function checkVieNeuModelAvailable(): { available: boolean; fileName?: string } {
+function checkVieNeuModelAvailable(): {
+  available: boolean;
+  fileName?: string;
+} {
   if (!fs.existsSync(VIENEU_MODELS_DIR)) return { available: false };
   try {
     const files = fs.readdirSync(VIENEU_MODELS_DIR);
@@ -739,7 +831,16 @@ async function getOrLoadModel(modelId: string) {
           const ffmpegBin = resolveFfmpegPath();
           const proc = await runChildProcess(
             ffmpegBin,
-            ["-y", "-i", normalizedWav, "-codec:a", "libmp3lame", "-b:a", "192k", tempMp3],
+            [
+              "-y",
+              "-i",
+              normalizedWav,
+              "-codec:a",
+              "libmp3lame",
+              "-b:a",
+              "192k",
+              tempMp3,
+            ],
             {},
           );
           if (proc.exitCode === 0 && fs.existsSync(tempMp3)) {
@@ -875,7 +976,10 @@ function normalizeVietnameseText(
   }
 
   // 3. Áp dụng quy tắc từ điển thay thế tùy chỉnh nếu có
-  if (options?.customReplacements && Array.isArray(options.customReplacements)) {
+  if (
+    options?.customReplacements &&
+    Array.isArray(options.customReplacements)
+  ) {
     for (const rule of options.customReplacements) {
       if (rule.from && rule.from.trim()) {
         try {
@@ -903,7 +1007,7 @@ function normalizeVietnameseText(
 
     // 4.3. Tiền tệ tiếng Việt: 5000đ, 5.000 VNĐ, 50.000 đồng -> 50000 đồng
     text = text.replace(
-      /(\d+)\s*(?:đ|vnđ|vnd|đồng)(?=$|[^\p{L}\p{N}])/gui,
+      /(\d+)\s*(?:đ|vnđ|vnd|đồng)(?=$|[^\p{L}\p{N}])/giu,
       "$1 đồng",
     );
 
@@ -913,8 +1017,8 @@ function normalizeVietnameseText(
     text = text.replace(/(\d+)\s*%/g, "$1 phần trăm");
 
     // 4.6. Viết tắt nghìn/triệu thông dụng: 50k -> 50 nghìn, 2tr -> 2 triệu
-    text = text.replace(/\b(\d+)\s*k(?=$|[^\p{L}\p{N}])/gui, "$1 nghìn");
-    text = text.replace(/\b(\d+)\s*tr(?=$|[^\p{L}\p{N}])/gui, "$1 triệu");
+    text = text.replace(/\b(\d+)\s*k(?=$|[^\p{L}\p{N}])/giu, "$1 nghìn");
+    text = text.replace(/\b(\d+)\s*tr(?=$|[^\p{L}\p{N}])/giu, "$1 triệu");
 
     // 4.7. Số thập phân: 3.5 -> 3 phẩy 5, 0.75 -> 0 phẩy 75
     text = text.replace(/\b(\d+)\.(\d{1,2})\b/g, "$1 phẩy $2");
@@ -957,10 +1061,7 @@ function applyVietnameseRPronunciation(
     return text;
   }
 
-  return text.replace(
-    /(^|[^\p{L}\p{N}\[])r(?=[\p{L}])/giu,
-    "$1\uE000",
-  );
+  return text.replace(/(^|[^\p{L}\p{N}\[])r(?=[\p{L}])/giu, "$1\uE000");
 }
 
 function createWavHeader(
@@ -1051,7 +1152,9 @@ function trimAudioFile(
   const rawDur = getAudioDuration(inputPath);
   if (!rawDur || rawDur <= 0.05) {
     if (inputPath !== outputPath) {
-      try { fs.copyFileSync(inputPath, outputPath); } catch {}
+      try {
+        fs.copyFileSync(inputPath, outputPath);
+      } catch {}
     }
     return { success: true, trimmedDuration: rawDur || 0 };
   }
@@ -1061,7 +1164,9 @@ function trimAudioFile(
 
   if (startSec <= 0 && endTrimSec <= 0) {
     if (inputPath !== outputPath) {
-      try { fs.copyFileSync(inputPath, outputPath); } catch {}
+      try {
+        fs.copyFileSync(inputPath, outputPath);
+      } catch {}
     }
     return { success: true, trimmedDuration: rawDur };
   }
@@ -1089,7 +1194,11 @@ function trimAudioFile(
       filterStr,
       outputPath,
     ]);
-    if (res.status === 0 && fs.existsSync(outputPath) && fs.statSync(outputPath).size > 44) {
+    if (
+      res.status === 0 &&
+      fs.existsSync(outputPath) &&
+      fs.statSync(outputPath).size > 44
+    ) {
       const trimmedDur = getAudioDuration(outputPath);
       return { success: true, trimmedDuration: trimmedDur || durationSec };
     }
@@ -1099,7 +1208,9 @@ function trimAudioFile(
 
   // Fallback
   if (inputPath !== outputPath) {
-    try { fs.copyFileSync(inputPath, outputPath); } catch {}
+    try {
+      fs.copyFileSync(inputPath, outputPath);
+    } catch {}
   }
   return { success: false, trimmedDuration: rawDur };
 }
@@ -1197,9 +1308,7 @@ const sseClients = new Map<string, Set<Response>>();
 const timelineJobDirectories = new Map<string, string>();
 
 function getTimelineJobDirectory(jobId: string): string {
-  return (
-    timelineJobDirectories.get(jobId) || path.join(JOBS_DIR, jobId)
-  );
+  return timelineJobDirectories.get(jobId) || path.join(JOBS_DIR, jobId);
 }
 
 // -------------------------------------------------------------
@@ -1413,7 +1522,10 @@ function loadAllStoriesFromDisk() {
               story.masterAudio = {
                 url: `/api/stories/${story.id}/master-audio?format=mp3`,
                 downloadUrl: `/api/stories/${story.id}/master-audio?format=mp3&download=1`,
-                duration: story.masterAudio?.duration || getAudioDuration(masterMp3) || 0,
+                duration:
+                  story.masterAudio?.duration ||
+                  getAudioDuration(masterMp3) ||
+                  0,
                 format: "mp3",
                 sizeBytes: stat.size,
               };
@@ -1422,7 +1534,10 @@ function loadAllStoriesFromDisk() {
               story.masterAudio = {
                 url: `/api/stories/${story.id}/master-audio?format=wav`,
                 downloadUrl: `/api/stories/${story.id}/master-audio?format=wav&download=1`,
-                duration: story.masterAudio?.duration || getAudioDuration(masterWav) || 0,
+                duration:
+                  story.masterAudio?.duration ||
+                  getAudioDuration(masterWav) ||
+                  0,
                 format: "wav",
                 sizeBytes: stat.size,
               };
@@ -1441,7 +1556,9 @@ function loadAllStoriesFromDisk() {
       storyJobs.set(DEFAULT_SAMPLE_STORY.id, DEFAULT_SAMPLE_STORY);
       saveStoryToDisk(DEFAULT_SAMPLE_STORY);
     }
-    console.log(`[Story] Đã nạp ${storyJobs.size} truyện từ thư mục lưu trữ stories_storage.`);
+    console.log(
+      `[Story] Đã nạp ${storyJobs.size} truyện từ thư mục lưu trữ stories_storage.`,
+    );
   } catch (err) {
     console.error("[Story] Lỗi nạp danh sách truyện:", err);
   }
@@ -1458,8 +1575,7 @@ async function synthesizeSingleStoryParagraph(
     fs.mkdirSync(paraDir, { recursive: true });
   }
 
-  const char =
-    story.characters.find((c) => c.id === para.characterId) ||
+  const char = story.characters.find((c) => c.id === para.characterId) ||
     story.characters[0] || {
       id: "default",
       name: "Người kể chuyện",
@@ -1477,7 +1593,9 @@ async function synthesizeSingleStoryParagraph(
   );
 
   const effectiveSpeed =
-    para.speed !== undefined && !isNaN(Number(para.speed)) && Number(para.speed) > 0
+    para.speed !== undefined &&
+    !isNaN(Number(para.speed)) &&
+    Number(para.speed) > 0
       ? Number(para.speed)
       : Number(char.speed) || 1.0;
   const speed = Math.max(0.5, Math.min(2.0, effectiveSpeed));
@@ -1518,12 +1636,15 @@ async function mergeStoryParagraphsToMaster(story: StoryJob): Promise<boolean> {
       para.pauseBefore !== undefined &&
       para.pauseBefore !== null &&
       (typeof para.pauseBefore === "number" ||
-        (typeof para.pauseBefore === "string" && (para.pauseBefore as string).trim() !== "")) &&
+        (typeof para.pauseBefore === "string" &&
+          (para.pauseBefore as string).trim() !== "")) &&
       !isNaN(Number(para.pauseBefore));
 
     const pauseSec = hasCustomPause
       ? Math.max(0, Math.min(120, Number(para.pauseBefore)))
-      : (i === 0 ? 0 : defaultGapSec);
+      : i === 0
+        ? 0
+        : defaultGapSec;
 
     if (pauseSec > 0) {
       const pauseSamples = Math.floor(pauseSec * sampleRate);
@@ -1644,8 +1765,7 @@ async function runStoryProcessor(story: StoryJob) {
         characterId: para.characterId,
       });
 
-      const char =
-        story.characters.find((c) => c.id === para.characterId) ||
+      const char = story.characters.find((c) => c.id === para.characterId) ||
         story.characters[0] || {
           id: "default",
           name: "Người kể chuyện",
@@ -1703,7 +1823,6 @@ async function runStoryProcessor(story: StoryJob) {
     broadcastStoryEvent(story.id, "story_failed", { error: story.error });
   }
 }
-
 
 function broadcastJobEvent(jobId: string, eventName: string, data: any) {
   const clients = sseClients.get(jobId);
@@ -2087,10 +2206,7 @@ async function runJobProcessor(job: TimelineJob) {
             });
 
             // 1. Lưu audio gốc TTS
-            const rawWavPath = path.join(
-              jobDir,
-              `item_${item.index}_raw.wav`,
-            );
+            const rawWavPath = path.join(jobDir, `item_${item.index}_raw.wav`);
             fs.writeFileSync(rawWavPath, synthRes.audio);
 
             // 2. Cắt khoảng trắng (Trim đầu & đuôi theo cấu hình)
@@ -2098,7 +2214,10 @@ async function runJobProcessor(job: TimelineJob) {
               jobDir,
               `item_${item.index}_orig.wav`,
             );
-            const trimStartMs = Math.max(0, Number(job.options.trimStartMs) || 0);
+            const trimStartMs = Math.max(
+              0,
+              Number(job.options.trimStartMs) || 0,
+            );
             const trimEndMs = Math.max(0, Number(job.options.trimEndMs) || 0);
             const trimResult = trimAudioFile(
               rawWavPath,
@@ -2108,7 +2227,8 @@ async function runJobProcessor(job: TimelineJob) {
             );
 
             // 3. Đo thời lượng thực tế sau trim và co giãn tốc độ (Adjust Speed)
-            const origDur = trimResult.trimmedDuration || getAudioDuration(origWavPath);
+            const origDur =
+              trimResult.trimmedDuration || getAudioDuration(origWavPath);
             item.originalDuration = Number(origDur.toFixed(3));
             const targetDur = item.targetDuration;
 
@@ -2322,7 +2442,10 @@ function createTimelineJob(
       minSpeed,
       speedPriority: options.speedPriority || "balanced",
       padSilence: options.padSilence !== false,
-      trimStartMs: Math.max(0, Math.min(2000, Number(options.trimStartMs) || 0)),
+      trimStartMs: Math.max(
+        0,
+        Math.min(2000, Number(options.trimStartMs) || 0),
+      ),
       trimEndMs: Math.max(0, Math.min(2000, Number(options.trimEndMs) || 0)),
       videoDuration: options.videoDuration
         ? Number(options.videoDuration)
@@ -2536,7 +2659,8 @@ app.post(
       );
 
       // 3. Đo thời lượng thực tế sau trim và co giãn tốc độ
-      const origDur = trimResult.trimmedDuration || getAudioDuration(origWavPath);
+      const origDur =
+        trimResult.trimmedDuration || getAudioDuration(origWavPath);
       item.originalDuration = Number(origDur.toFixed(3));
       const targetDur = item.targetDuration;
 
@@ -3084,13 +3208,14 @@ app.post("/api/stories", (req: Request, res: Response) => {
       paragraphs: paragraphs.map((p: any, idx: number) => ({
         id: p.id || `p_${idx + 1}`,
         index: idx + 1,
-        characterId: p.characterId || (characters[0]?.id || "char_narrator"),
+        characterId: p.characterId || characters[0]?.id || "char_narrator",
         text: p.text || "",
         pauseBefore:
           p.pauseBefore !== undefined &&
           p.pauseBefore !== null &&
           (typeof p.pauseBefore === "number" ||
-            (typeof p.pauseBefore === "string" && (p.pauseBefore as string).trim() !== "")) &&
+            (typeof p.pauseBefore === "string" &&
+              (p.pauseBefore as string).trim() !== "")) &&
           !isNaN(Number(p.pauseBefore))
             ? Number(p.pauseBefore)
             : undefined,
@@ -3137,7 +3262,8 @@ app.put("/api/stories/:storyId", (req: Request, res: Response) => {
         p.pauseBefore !== undefined &&
         p.pauseBefore !== null &&
         (typeof p.pauseBefore === "number" ||
-          (typeof p.pauseBefore === "string" && (p.pauseBefore as string).trim() !== "")) &&
+          (typeof p.pauseBefore === "string" &&
+            (p.pauseBefore as string).trim() !== "")) &&
         !isNaN(Number(p.pauseBefore))
           ? Number(p.pauseBefore)
           : undefined,
@@ -3184,73 +3310,86 @@ app.post("/api/stories/:storyId/generate", (req: Request, res: Response) => {
 });
 
 // Fast re-merge existing paragraphs without full re-TTS (1-2s instant merge)
-app.post("/api/stories/:storyId/remerge", async (req: Request, res: Response) => {
-  const story = storyJobs.get(req.params.storyId);
-  if (!story) return res.status(404).json({ error: "Không tìm thấy truyện." });
+app.post(
+  "/api/stories/:storyId/remerge",
+  async (req: Request, res: Response) => {
+    const story = storyJobs.get(req.params.storyId);
+    if (!story)
+      return res.status(404).json({ error: "Không tìm thấy truyện." });
 
-  if (story.status === "running") {
-    return res.status(400).json({ error: "Tiến trình tạo audio truyện đang chạy." });
-  }
+    if (story.status === "running") {
+      return res
+        .status(400)
+        .json({ error: "Tiến trình tạo audio truyện đang chạy." });
+    }
 
-  // Update paragraphs and gapMs if provided in body
-  const { paragraphs, gapMs } = req.body || {};
-  if (paragraphs !== undefined && Array.isArray(paragraphs)) {
-    story.paragraphs = paragraphs.map((p: any, idx: number) => ({
-      ...p,
-      index: idx + 1,
-      pauseBefore:
-        p.pauseBefore !== undefined &&
-        p.pauseBefore !== null &&
-        (typeof p.pauseBefore === "number" ||
-          (typeof p.pauseBefore === "string" && (p.pauseBefore as string).trim() !== "")) &&
-        !isNaN(Number(p.pauseBefore))
-          ? Number(p.pauseBefore)
-          : undefined,
-      speed:
-        p.speed !== undefined && !isNaN(Number(p.speed)) && Number(p.speed) > 0
-          ? Number(p.speed)
-          : undefined,
-    }));
-  }
-  if (gapMs !== undefined && !isNaN(Number(gapMs))) {
-    story.gapMs = Number(gapMs);
-  }
+    // Update paragraphs and gapMs if provided in body
+    const { paragraphs, gapMs } = req.body || {};
+    if (paragraphs !== undefined && Array.isArray(paragraphs)) {
+      story.paragraphs = paragraphs.map((p: any, idx: number) => ({
+        ...p,
+        index: idx + 1,
+        pauseBefore:
+          p.pauseBefore !== undefined &&
+          p.pauseBefore !== null &&
+          (typeof p.pauseBefore === "number" ||
+            (typeof p.pauseBefore === "string" &&
+              (p.pauseBefore as string).trim() !== "")) &&
+          !isNaN(Number(p.pauseBefore))
+            ? Number(p.pauseBefore)
+            : undefined,
+        speed:
+          p.speed !== undefined &&
+          !isNaN(Number(p.speed)) &&
+          Number(p.speed) > 0
+            ? Number(p.speed)
+            : undefined,
+      }));
+    }
+    if (gapMs !== undefined && !isNaN(Number(gapMs))) {
+      story.gapMs = Number(gapMs);
+    }
 
-  addStoryLog(
-    story,
-    "INFO",
-    `[⚡ Ghép lại Master] Bắt đầu ghép lại nhanh ${story.paragraphs.length} đoạn với khoảng nghỉ/tốc độ mới...`,
-  );
-
-  try {
-    await mergeStoryParagraphsToMaster(story);
     addStoryLog(
       story,
-      "SUCCESS",
-      `[⚡ Ghép lại Master] Đã ghép lại thành công trong 1s! Thời lượng: ${story.masterAudio?.duration || 0}s.`,
+      "INFO",
+      `[⚡ Ghép lại Master] Bắt đầu ghép lại nhanh ${story.paragraphs.length} đoạn với khoảng nghỉ/tốc độ mới...`,
     );
-    res.json({
-      success: true,
-      message: "Đã ghép lại master audio thành công!",
-      masterAudio: story.masterAudio,
-      story,
-    });
-  } catch (err: any) {
-    console.error(`[Story] Lỗi ghép lại master truyện ${story.id}:`, err);
-    res.status(500).json({ error: err.message || "Lỗi khi ghép lại master audio." });
-  }
-});
+
+    try {
+      await mergeStoryParagraphsToMaster(story);
+      addStoryLog(
+        story,
+        "SUCCESS",
+        `[⚡ Ghép lại Master] Đã ghép lại thành công trong 1s! Thời lượng: ${story.masterAudio?.duration || 0}s.`,
+      );
+      res.json({
+        success: true,
+        message: "Đã ghép lại master audio thành công!",
+        masterAudio: story.masterAudio,
+        story,
+      });
+    } catch (err: any) {
+      console.error(`[Story] Lỗi ghép lại master truyện ${story.id}:`, err);
+      res
+        .status(500)
+        .json({ error: err.message || "Lỗi khi ghép lại master audio." });
+    }
+  },
+);
 
 // Regenerate single paragraph audio (with new speed or updated text)
 app.post(
   "/api/stories/:storyId/paragraphs/:index/regenerate",
   async (req: Request, res: Response) => {
     const story = storyJobs.get(req.params.storyId);
-    if (!story) return res.status(404).json({ error: "Không tìm thấy truyện." });
+    if (!story)
+      return res.status(404).json({ error: "Không tìm thấy truyện." });
 
     const paraIdx = parseInt(req.params.index, 10);
     const para = story.paragraphs.find((p) => p.index === paraIdx);
-    if (!para) return res.status(404).json({ error: "Không tìm thấy đoạn văn." });
+    if (!para)
+      return res.status(404).json({ error: "Không tìm thấy đoạn văn." });
 
     const { speed, text, characterId, pauseBefore } = req.body || {};
     if (speed !== undefined && !isNaN(Number(speed)) && Number(speed) > 0) {
@@ -3263,7 +3402,9 @@ app.post(
       para.characterId = characterId;
     }
     if (pauseBefore !== undefined) {
-      para.pauseBefore = !isNaN(Number(pauseBefore)) ? Number(pauseBefore) : undefined;
+      para.pauseBefore = !isNaN(Number(pauseBefore))
+        ? Number(pauseBefore)
+        : undefined;
     }
 
     para.status = "generating";
@@ -3297,7 +3438,9 @@ app.post(
       para.status = "failed";
       para.error = err.message;
       saveStoryToDisk(story);
-      res.status(500).json({ error: err.message || "Lỗi khi tạo lại đoạn văn." });
+      res
+        .status(500)
+        .json({ error: err.message || "Lỗi khi tạo lại đoạn văn." });
     }
   },
 );
@@ -3411,69 +3554,80 @@ app.post(
 );
 
 // Export or download SRT subtitles for story based on paragraph durations and gap
-app.get("/api/stories/:storyId/subtitles.srt", (req: Request, res: Response) => {
-  const story = storyJobs.get(req.params.storyId);
-  if (!story) return res.status(404).json({ error: "Không tìm thấy truyện." });
+app.get(
+  "/api/stories/:storyId/subtitles.srt",
+  (req: Request, res: Response) => {
+    const story = storyJobs.get(req.params.storyId);
+    if (!story)
+      return res.status(404).json({ error: "Không tìm thấy truyện." });
 
-  const withCharacter = req.query.withCharacter === "1";
-  const defaultGapSec = (story.gapMs || 300) / 1000;
-  let currentTime = 0;
+    const withCharacter = req.query.withCharacter === "1";
+    const defaultGapSec = (story.gapMs || 300) / 1000;
+    let currentTime = 0;
 
-  const pad = (n: number, z = 2) => String(n).padStart(z, "0");
-  const toSrtTime = (sec: number) => {
-    if (isNaN(sec) || sec < 0) sec = 0;
-    const h = Math.floor(sec / 3600);
-    const m = Math.floor((sec % 3600) / 60);
-    const s = Math.floor(sec % 60);
-    const ms = Math.floor((sec % 1) * 1000);
-    return `${pad(h)}:${pad(m)}:${pad(s)},${pad(ms, 3)}`;
-  };
+    const pad = (n: number, z = 2) => String(n).padStart(z, "0");
+    const toSrtTime = (sec: number) => {
+      if (isNaN(sec) || sec < 0) sec = 0;
+      const h = Math.floor(sec / 3600);
+      const m = Math.floor((sec % 3600) / 60);
+      const s = Math.floor(sec % 60);
+      const ms = Math.floor((sec % 1) * 1000);
+      return `${pad(h)}:${pad(m)}:${pad(s)},${pad(ms, 3)}`;
+    };
 
-  const srtBlocks: string[] = [];
+    const srtBlocks: string[] = [];
 
-  story.paragraphs.forEach((p, idx) => {
-    const hasCustomPause =
-      p.pauseBefore !== undefined &&
-      p.pauseBefore !== null &&
-      (typeof p.pauseBefore === "number" ||
-        (typeof p.pauseBefore === "string" && (p.pauseBefore as string).trim() !== "")) &&
-      !isNaN(Number(p.pauseBefore));
+    story.paragraphs.forEach((p, idx) => {
+      const hasCustomPause =
+        p.pauseBefore !== undefined &&
+        p.pauseBefore !== null &&
+        (typeof p.pauseBefore === "number" ||
+          (typeof p.pauseBefore === "string" &&
+            (p.pauseBefore as string).trim() !== "")) &&
+        !isNaN(Number(p.pauseBefore));
 
-    const pauseSec = hasCustomPause
-      ? Math.max(0, Number(p.pauseBefore))
-      : (idx === 0 ? 0 : defaultGapSec);
+      const pauseSec = hasCustomPause
+        ? Math.max(0, Number(p.pauseBefore))
+        : idx === 0
+          ? 0
+          : defaultGapSec;
 
-    currentTime += pauseSec;
+      currentTime += pauseSec;
 
-    const duration = p.duration || Math.max(1.0, Number((p.text.length * 0.08).toFixed(2)));
-    const startTime = currentTime;
-    const endTime = startTime + duration;
-    currentTime = endTime;
+      const duration =
+        p.duration || Math.max(1.0, Number((p.text.length * 0.08).toFixed(2)));
+      const startTime = currentTime;
+      const endTime = startTime + duration;
+      currentTime = endTime;
 
-    const startStr = toSrtTime(startTime);
-    const endStr = toSrtTime(endTime);
+      const startStr = toSrtTime(startTime);
+      const endStr = toSrtTime(endTime);
 
-    let text = p.text;
-    if (withCharacter) {
-      const char = story.characters.find((c) => c.id === p.characterId);
-      if (char) {
-        text = `[${char.name}]: ${p.text}`;
+      let text = p.text;
+      if (withCharacter) {
+        const char = story.characters.find((c) => c.id === p.characterId);
+        if (char) {
+          text = `[${char.name}]: ${p.text}`;
+        }
       }
+
+      srtBlocks.push(`${idx + 1}\n${startStr} --> ${endStr}\n${text}\n`);
+    });
+
+    const srtContent = srtBlocks.join("\n");
+    const isDownload = req.query.download === "1";
+    const filename = `story-${story.id}.srt`;
+
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    if (isDownload) {
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${filename}"`,
+      );
     }
-
-    srtBlocks.push(`${idx + 1}\n${startStr} --> ${endStr}\n${text}\n`);
-  });
-
-  const srtContent = srtBlocks.join("\n");
-  const isDownload = req.query.download === "1";
-  const filename = `story-${story.id}.srt`;
-
-  res.setHeader("Content-Type", "text/plain; charset=utf-8");
-  if (isDownload) {
-    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-  }
-  res.send(srtContent);
-});
+    res.send(srtContent);
+  },
+);
 
 // -------------------------------------------------------------
 // STORY VIDEO EXPORT (MP4 9:16 VERTICAL MOBILE PLAYER)
@@ -3482,7 +3636,8 @@ app.post(
   "/api/stories/:storyId/export-video",
   async (req: Request, res: Response) => {
     const story = storyJobs.get(req.params.storyId);
-    if (!story) return res.status(404).json({ error: "Không tìm thấy truyện." });
+    if (!story)
+      return res.status(404).json({ error: "Không tìm thấy truyện." });
 
     if (!checkFfmpegAvailable()) {
       return res.status(500).json({
@@ -3522,7 +3677,9 @@ app.post(
       });
     } catch (err: any) {
       console.error("[StoryVideoExport] Lỗi khởi tạo:", err);
-      res.status(500).json({ error: err.message || "Lỗi khi bắt đầu xuất video." });
+      res
+        .status(500)
+        .json({ error: err.message || "Lỗi khi bắt đầu xuất video." });
     }
   },
 );
@@ -3533,7 +3690,9 @@ app.get(
   (req: Request, res: Response) => {
     const job = videoExportJobs.get(req.params.jobId);
     if (!job) {
-      return res.status(404).json({ error: "Không tìm thấy tiến trình xuất video." });
+      return res
+        .status(404)
+        .json({ error: "Không tìm thấy tiến trình xuất video." });
     }
     res.json({ success: true, job });
   },
@@ -3545,7 +3704,9 @@ app.get(
   (req: Request, res: Response) => {
     const job = videoExportJobs.get(req.params.jobId);
     if (!job || !job.outputPath || !fs.existsSync(job.outputPath)) {
-      return res.status(404).send("Tệp video không tồn tại hoặc chưa kết xuất xong.");
+      return res
+        .status(404)
+        .send("Tệp video không tồn tại hoặc chưa kết xuất xong.");
     }
 
     const defaultFilename = `story-${req.params.storyId}-${job.resolution}.mp4`;
@@ -3553,9 +3714,6 @@ app.get(
     res.download(job.outputPath, filename);
   },
 );
-
-
-
 
 // Download Google Colab 1-Click Voice Cloning Notebook (.ipynb)
 app.get("/api/colab/notebook", (_req: Request, res: Response) => {
@@ -3595,13 +3753,16 @@ app.post("/api/models/upload", async (req: Request, res: Response) => {
 
     if (!voiceId || !onnxBase64 || !jsonContent) {
       return res.status(400).json({
-        error: "Thiếu dữ liệu: Vui lòng cung cấp voiceId, file .onnx (base64) và file .onnx.json.",
+        error:
+          "Thiếu dữ liệu: Vui lòng cung cấp voiceId, file .onnx (base64) và file .onnx.json.",
       });
     }
 
     const onnxBuffer = Buffer.from(onnxBase64, "base64");
     if (onnxBuffer.length < 100) {
-      return res.status(400).json({ error: "File .onnx không hợp lệ hoặc quá nhỏ." });
+      return res
+        .status(400)
+        .json({ error: "File .onnx không hợp lệ hoặc quá nhỏ." });
     }
 
     let jsonStr = "";
@@ -3615,7 +3776,9 @@ app.post("/api/models/upload", async (req: Request, res: Response) => {
     try {
       JSON.parse(jsonStr);
     } catch {
-      return res.status(400).json({ error: "Nội dung file .onnx.json không đúng định dạng JSON." });
+      return res
+        .status(400)
+        .json({ error: "Nội dung file .onnx.json không đúng định dạng JSON." });
     }
 
     const registered = registerCustomVoice({
@@ -3627,7 +3790,9 @@ app.post("/api/models/upload", async (req: Request, res: Response) => {
       jsonContent: jsonStr,
     });
 
-    console.log(`[CustomVoiceManager] Đã nạp thành công giọng mới: ${registered.name} (${registered.modelId})`);
+    console.log(
+      `[CustomVoiceManager] Đã nạp thành công giọng mới: ${registered.name} (${registered.modelId})`,
+    );
 
     res.json({
       success: true,
@@ -3645,7 +3810,9 @@ app.delete("/api/models/custom/:id", (req: Request, res: Response) => {
   try {
     const success = deleteCustomVoice(req.params.id);
     if (!success) {
-      return res.status(404).json({ error: "Không tìm thấy giọng tùy chỉnh cần xóa." });
+      return res
+        .status(404)
+        .json({ error: "Không tìm thấy giọng tùy chỉnh cần xóa." });
     }
     // Also clear from modelCache
     modelCache.delete(`local:${req.params.id}`);
@@ -3678,7 +3845,8 @@ app.get("/api/system/tools-status", (_req: Request, res: Response) => {
 // Start Whisper.cpp compilation/initialization
 app.post("/api/system/init-whisper", async (req: Request, res: Response) => {
   try {
-    const forceRebuild = req.body?.forceRebuild === true || req.body?.forceRecompile === true;
+    const forceRebuild =
+      req.body?.forceRebuild === true || req.body?.forceRecompile === true;
     await startCompileWhisperCpp(forceRebuild);
     res.json({ success: true, message: "Đã bắt đầu khởi tạo Whisper.cpp." });
   } catch (err: any) {
@@ -3686,35 +3854,54 @@ app.post("/api/system/init-whisper", async (req: Request, res: Response) => {
   }
 });
 
-app.post("/api/system/install-whisper-gpu-prerequisites", isLocalSubtitleTranslationRequest, (req: Request, res: Response) => {
-  if (process.platform !== "win32") {
-    return res.status(400).json({ success: false, error: "Trình cài đặt GPU này chỉ hỗ trợ Windows." });
-  }
-  const installerPath = path.resolve(__dirname, "Install-Whisper-GPU.bat");
-  if (!fs.existsSync(installerPath)) {
-    return res.status(404).json({ success: false, error: `Không tìm thấy trình cài đặt: ${installerPath}` });
-  }
-  const escapedInstallerPath = installerPath.replace(/'/g, "''");
-  const installer = spawn(
-    "powershell.exe",
-    ["-NoProfile", "-NonInteractive", "-Command", `Start-Process -FilePath '${escapedInstallerPath}' -Verb RunAs`],
-    { detached: true, stdio: "ignore", windowsHide: true },
-  );
-  installer.once("error", (error) => {
-    if (!res.headersSent) {
-      res.status(500).json({ success: false, error: `Không thể mở trình cài đặt nâng quyền: ${error.message}` });
-    }
-  });
-  installer.once("spawn", () => {
-    installer.unref();
-    if (!res.headersSent) {
-      res.status(202).json({
-        success: true,
-        message: "Đã mở trình cài đặt. Xác nhận hộp thoại UAC để bắt đầu cài các thành phần GPU.",
+app.post(
+  "/api/system/install-whisper-gpu-prerequisites",
+  isLocalSubtitleTranslationRequest,
+  (req: Request, res: Response) => {
+    if (process.platform !== "win32") {
+      return res.status(400).json({
+        success: false,
+        error: "Trình cài đặt GPU này chỉ hỗ trợ Windows.",
       });
     }
-  });
-});
+    const installerPath = path.resolve(__dirname, "Install-Whisper-GPU.bat");
+    if (!fs.existsSync(installerPath)) {
+      return res.status(404).json({
+        success: false,
+        error: `Không tìm thấy trình cài đặt: ${installerPath}`,
+      });
+    }
+    const escapedInstallerPath = installerPath.replace(/'/g, "''");
+    const installer = spawn(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `Start-Process -FilePath '${escapedInstallerPath}' -Verb RunAs`,
+      ],
+      { detached: true, stdio: "ignore", windowsHide: true },
+    );
+    installer.once("error", (error) => {
+      if (!res.headersSent) {
+        res.status(500).json({
+          success: false,
+          error: `Không thể mở trình cài đặt nâng quyền: ${error.message}`,
+        });
+      }
+    });
+    installer.once("spawn", () => {
+      installer.unref();
+      if (!res.headersSent) {
+        res.status(202).json({
+          success: true,
+          message:
+            "Đã mở trình cài đặt. Xác nhận hộp thoại UAC để bắt đầu cài các thành phần GPU.",
+        });
+      }
+    });
+  },
+);
 
 // Reset system active job
 app.post("/api/system/reset-job", (_req: Request, res: Response) => {
@@ -3727,31 +3914,42 @@ app.post("/api/system/reset-job", (_req: Request, res: Response) => {
 });
 
 // Start downloading a specific Whisper GGML model
-app.post("/api/system/download-whisper-model", async (req: Request, res: Response) => {
-  try {
-    const { modelId } = req.body || {};
-    if (!modelId) {
-      return res.status(400).json({ error: "Thiếu modelId cần tải." });
+app.post(
+  "/api/system/download-whisper-model",
+  async (req: Request, res: Response) => {
+    try {
+      const { modelId } = req.body || {};
+      if (!modelId) {
+        return res.status(400).json({ error: "Thiếu modelId cần tải." });
+      }
+      await startDownloadWhisperModel(modelId);
+      res.json({ success: true, message: `Bắt đầu tải mô hình ${modelId}.` });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
     }
-    await startDownloadWhisperModel(modelId);
-    res.json({ success: true, message: `Bắt đầu tải mô hình ${modelId}.` });
-  } catch (err: any) {
-    res.status(400).json({ error: err.message });
-  }
-});
+  },
+);
 
 // Delete Whisper GGML model from disk
-app.delete("/api/system/whisper-model/:modelId", (req: Request, res: Response) => {
-  try {
-    const ok = deleteWhisperModel(req.params.modelId);
-    if (!ok) {
-      return res.status(404).json({ error: "Không tìm thấy file mô hình để xóa." });
+app.delete(
+  "/api/system/whisper-model/:modelId",
+  (req: Request, res: Response) => {
+    try {
+      const ok = deleteWhisperModel(req.params.modelId);
+      if (!ok) {
+        return res
+          .status(404)
+          .json({ error: "Không tìm thấy file mô hình để xóa." });
+      }
+      res.json({
+        success: true,
+        message: "Đã xóa mô hình khỏi hệ thống thành công.",
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
     }
-    res.json({ success: true, message: "Đã xóa mô hình khỏi hệ thống thành công." });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
+  },
+);
 
 // ==========================================
 // OFFLINE DATASET PREPARATION (WHISPER.CPP)
@@ -3774,7 +3972,7 @@ function startDatasetPreparation(
   maxDuration: number,
   uploadTempDir?: string,
   targetDatasetId?: string,
-  concurrency: number = 2
+  concurrency: number = 2,
 ): DatasetPreparationJob {
   const now = Date.now();
   for (const [id, job] of datasetPreparationJobs) {
@@ -3802,15 +4000,18 @@ function startDatasetPreparation(
     (progress: DatasetPreparationProgress) => {
       job.progressPercent = progress.progressPercent;
       job.message = progress.message;
-      if (typeof progress.totalChunks === "number") job.totalChunks = progress.totalChunks;
-      if (typeof progress.completedChunks === "number") job.completedChunks = progress.completedChunks;
-      if (typeof progress.concurrency === "number") job.concurrency = progress.concurrency;
+      if (typeof progress.totalChunks === "number")
+        job.totalChunks = progress.totalChunks;
+      if (typeof progress.completedChunks === "number")
+        job.completedChunks = progress.completedChunks;
+      if (typeof progress.concurrency === "number")
+        job.concurrency = progress.concurrency;
       if (progress.chunks) job.chunks = progress.chunks;
       job.updatedAt = Date.now();
     },
     resolveFfmpegPath(),
     targetDatasetId,
-    concurrency
+    concurrency,
   )
     .then((datasetInfo) => {
       job.status = "completed";
@@ -3827,11 +4028,14 @@ function startDatasetPreparation(
       }
       job.updatedAt = Date.now();
       console.log(
-        `[OfflineDataset] Đã tạo thành công ${datasetInfo.totalClips} câu (${datasetInfo.totalDurationSec}s) cho "${datasetInfo.voiceName}"!`
+        `[OfflineDataset] Đã tạo thành công ${datasetInfo.totalClips} câu (${datasetInfo.totalDurationSec}s) cho "${datasetInfo.voiceName}"!`,
       );
     })
     .catch((err: unknown) => {
-      const message = err instanceof Error ? err.message : "Lỗi không xác định khi xử lý âm thanh.";
+      const message =
+        err instanceof Error
+          ? err.message
+          : "Lỗi không xác định khi xử lý âm thanh.";
       job.status = "failed";
       job.message = message;
       job.error = message;
@@ -3841,7 +4045,11 @@ function startDatasetPreparation(
     .finally(() => {
       if (uploadTempDir) {
         fs.rm(uploadTempDir, { recursive: true, force: true }, (err) => {
-          if (err) console.error("[OfflineDataset] Không thể xóa file upload tạm:", err);
+          if (err)
+            console.error(
+              "[OfflineDataset] Không thể xóa file upload tạm:",
+              err,
+            );
         });
       }
     });
@@ -3870,7 +4078,9 @@ app.post("/api/dataset/prepare-joined-audio", (req: Request, res: Response) => {
     !Number.isFinite(maxDuration) ||
     !Number.isFinite(concurrency)
   ) {
-    return res.status(400).json({ success: false, error: "Cài đặt xử lý Whisper không hợp lệ." });
+    return res
+      .status(400)
+      .json({ success: false, error: "Cài đặt xử lý Whisper không hợp lệ." });
   }
 
   try {
@@ -3919,11 +4129,18 @@ app.get("/api/dataset/list", (_req: Request, res: Response) => {
 // Stream an audio upload to disk so large files don't need to fit in a JSON request.
 app.post("/api/dataset/prepare-upload", async (req: Request, res: Response) => {
   const contentLength = Number(req.headers["content-length"]);
-  if (Number.isFinite(contentLength) && contentLength > MAX_DATASET_UPLOAD_BYTES) {
-    return res.status(413).json({ error: "File âm thanh vượt quá giới hạn tải lên 4 GB." });
+  if (
+    Number.isFinite(contentLength) &&
+    contentLength > MAX_DATASET_UPLOAD_BYTES
+  ) {
+    return res
+      .status(413)
+      .json({ error: "File âm thanh vượt quá giới hạn tải lên 4 GB." });
   }
 
-  const uploadTempDir = fs.mkdtempSync(path.join(os.tmpdir(), "tts-dataset-upload-"));
+  const uploadTempDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), "tts-dataset-upload-"),
+  );
   const uploadPath = path.join(uploadTempDir, "source-audio");
   let bytesReceived = 0;
   const sizeLimiter = new Transform({
@@ -3938,17 +4155,31 @@ app.post("/api/dataset/prepare-upload", async (req: Request, res: Response) => {
   });
 
   try {
-    await pipeline(req, sizeLimiter, fs.createWriteStream(uploadPath, { flags: "wx" }));
+    await pipeline(
+      req,
+      sizeLimiter,
+      fs.createWriteStream(uploadPath, { flags: "wx" }),
+    );
     if (bytesReceived < 1000) {
       fs.rmSync(uploadTempDir, { recursive: true, force: true });
-      return res.status(400).json({ error: "File âm thanh không hợp lệ hoặc quá nhỏ." });
+      return res
+        .status(400)
+        .json({ error: "File âm thanh không hợp lệ hoặc quá nhỏ." });
     }
 
     const queryString = (key: string, fallback: string) =>
-      typeof req.query[key] === "string" ? req.query[key] as string : fallback;
-    const originalFilename = path.basename(queryString("originalFilename", "audio.wav"));
-    const targetDatasetId = queryString("extendDatasetId", "") || queryString("targetDatasetId", "");
-    const concurrency = Math.max(1, Math.min(8, Number(queryString("concurrency", "2")) || 2));
+      typeof req.query[key] === "string"
+        ? (req.query[key] as string)
+        : fallback;
+    const originalFilename = path.basename(
+      queryString("originalFilename", "audio.wav"),
+    );
+    const targetDatasetId =
+      queryString("extendDatasetId", "") || queryString("targetDatasetId", "");
+    const concurrency = Math.max(
+      1,
+      Math.min(8, Number(queryString("concurrency", "2")) || 2),
+    );
     const job = startDatasetPreparation(
       uploadPath,
       originalFilename,
@@ -3958,21 +4189,30 @@ app.post("/api/dataset/prepare-upload", async (req: Request, res: Response) => {
       Number(queryString("maxDuration", "12")) || 12,
       uploadTempDir,
       targetDatasetId || undefined,
-      concurrency
+      concurrency,
     );
 
     res.status(202).json({ success: true, jobId: job.id });
   } catch (err) {
     fs.rm(uploadTempDir, { recursive: true, force: true }, (cleanupError) => {
-      if (cleanupError) console.error("[OfflineDataset] Không thể xóa upload tạm:", cleanupError);
+      if (cleanupError)
+        console.error(
+          "[OfflineDataset] Không thể xóa upload tạm:",
+          cleanupError,
+        );
     });
-    const errorMessage = err instanceof Error ? err.message : "Lỗi tải file âm thanh.";
+    const errorMessage =
+      err instanceof Error ? err.message : "Lỗi tải file âm thanh.";
     if (res.destroyed || res.headersSent) return;
     if (errorMessage === "UPLOAD_TOO_LARGE") {
-      return res.status(413).json({ error: "File âm thanh vượt quá giới hạn tải lên 4 GB." });
+      return res
+        .status(413)
+        .json({ error: "File âm thanh vượt quá giới hạn tải lên 4 GB." });
     }
     console.error("[OfflineDataset] Lỗi nhận file âm thanh:", err);
-    return res.status(500).json({ error: "Không thể nhận file âm thanh trên máy chủ." });
+    return res
+      .status(500)
+      .json({ error: "Không thể nhận file âm thanh trên máy chủ." });
   }
 });
 
@@ -3980,7 +4220,9 @@ app.post("/api/dataset/prepare-upload", async (req: Request, res: Response) => {
 app.post("/api/dataset/prepare-session", (_req: Request, res: Response) => {
   try {
     const sessionId = `batch_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `tts-batch-${sessionId}-`));
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), `tts-batch-${sessionId}-`),
+    );
     datasetUploadSessions.set(sessionId, {
       tempDir,
       files: [],
@@ -3988,87 +4230,112 @@ app.post("/api/dataset/prepare-session", (_req: Request, res: Response) => {
     });
     res.json({ success: true, sessionId });
   } catch (err: any) {
-    res.status(500).json({ error: err.message || "Không thể tạo phiên tải tệp." });
+    res
+      .status(500)
+      .json({ error: err.message || "Không thể tạo phiên tải tệp." });
   }
 });
 
 // Upload a single file into an active batch session
-app.post("/api/dataset/prepare-session/:sessionId/upload", async (req: Request, res: Response) => {
-  const session = datasetUploadSessions.get(req.params.sessionId);
-  if (!session) {
-    return res.status(404).json({ error: "Phiên tải lên không tồn tại hoặc đã hết hạn." });
-  }
-
-  const rawFilename = typeof req.query.filename === "string" ? req.query.filename : `audio_${session.files.length + 1}.wav`;
-  const originalFilename = path.basename(rawFilename);
-  const safeFilename = `file_${session.files.length}_${originalFilename.replace(/[^a-zA-Z0-9_.-]/g, "_")}`;
-  const destPath = path.join(session.tempDir, safeFilename);
-
-  let bytesReceived = 0;
-  const sizeLimiter = new Transform({
-    transform(chunk: Buffer, _encoding, callback) {
-      bytesReceived += chunk.length;
-      if (bytesReceived > MAX_DATASET_UPLOAD_BYTES) {
-        callback(new Error("UPLOAD_TOO_LARGE"));
-        return;
-      }
-      callback(null, chunk);
-    },
-  });
-
-  try {
-    await pipeline(req, sizeLimiter, fs.createWriteStream(destPath, { flags: "wx" }));
-    if (bytesReceived < 500) {
-      fs.rmSync(destPath, { force: true });
-      return res.status(400).json({ error: "Tệp âm thanh quá nhỏ hoặc rỗng." });
+app.post(
+  "/api/dataset/prepare-session/:sessionId/upload",
+  async (req: Request, res: Response) => {
+    const session = datasetUploadSessions.get(req.params.sessionId);
+    if (!session) {
+      return res
+        .status(404)
+        .json({ error: "Phiên tải lên không tồn tại hoặc đã hết hạn." });
     }
-    session.files.push({ path: destPath, originalFilename });
-    res.json({ success: true, fileCount: session.files.length });
-  } catch (err: any) {
-    fs.rmSync(destPath, { force: true });
-    res.status(500).json({ error: err.message || "Lỗi lưu tệp âm thanh vào phiên." });
-  }
-});
+
+    const rawFilename =
+      typeof req.query.filename === "string"
+        ? req.query.filename
+        : `audio_${session.files.length + 1}.wav`;
+    const originalFilename = path.basename(rawFilename);
+    const safeFilename = `file_${session.files.length}_${originalFilename.replace(/[^a-zA-Z0-9_.-]/g, "_")}`;
+    const destPath = path.join(session.tempDir, safeFilename);
+
+    let bytesReceived = 0;
+    const sizeLimiter = new Transform({
+      transform(chunk: Buffer, _encoding, callback) {
+        bytesReceived += chunk.length;
+        if (bytesReceived > MAX_DATASET_UPLOAD_BYTES) {
+          callback(new Error("UPLOAD_TOO_LARGE"));
+          return;
+        }
+        callback(null, chunk);
+      },
+    });
+
+    try {
+      await pipeline(
+        req,
+        sizeLimiter,
+        fs.createWriteStream(destPath, { flags: "wx" }),
+      );
+      if (bytesReceived < 500) {
+        fs.rmSync(destPath, { force: true });
+        return res
+          .status(400)
+          .json({ error: "Tệp âm thanh quá nhỏ hoặc rỗng." });
+      }
+      session.files.push({ path: destPath, originalFilename });
+      res.json({ success: true, fileCount: session.files.length });
+    } catch (err: any) {
+      fs.rmSync(destPath, { force: true });
+      res
+        .status(500)
+        .json({ error: err.message || "Lỗi lưu tệp âm thanh vào phiên." });
+    }
+  },
+);
 
 // Start processing the batch session
-app.post("/api/dataset/prepare-session/:sessionId/start", (req: Request, res: Response) => {
-  const session = datasetUploadSessions.get(req.params.sessionId);
-  if (!session) {
-    return res.status(404).json({ error: "Phiên tải lên không tồn tại hoặc đã hết hạn." });
-  }
-  if (session.files.length === 0) {
-    return res.status(400).json({ error: "Phiên tải lên không có tệp âm thanh nào." });
-  }
+app.post(
+  "/api/dataset/prepare-session/:sessionId/start",
+  (req: Request, res: Response) => {
+    const session = datasetUploadSessions.get(req.params.sessionId);
+    if (!session) {
+      return res
+        .status(404)
+        .json({ error: "Phiên tải lên không tồn tại hoặc đã hết hạn." });
+    }
+    if (session.files.length === 0) {
+      return res
+        .status(400)
+        .json({ error: "Phiên tải lên không có tệp âm thanh nào." });
+    }
 
-  datasetUploadSessions.delete(req.params.sessionId);
+    datasetUploadSessions.delete(req.params.sessionId);
 
-  const {
-    voiceName = "giong_moi",
-    whisperModel = "small",
-    minDuration = 3.0,
-    maxDuration = 12.0,
-    concurrency = 2,
-    extendDatasetId,
-    targetDatasetId,
-  } = req.body || {};
+    const {
+      voiceName = "giong_moi",
+      whisperModel = "small",
+      minDuration = 3.0,
+      maxDuration = 12.0,
+      concurrency = 2,
+      extendDatasetId,
+      targetDatasetId,
+    } = req.body || {};
 
-  const audioPaths = session.files.map((f) => f.path);
-  const originalFilenames = session.files.map((f) => f.originalFilename);
+    const audioPaths = session.files.map((f) => f.path);
+    const originalFilenames = session.files.map((f) => f.originalFilename);
 
-  const job = startDatasetPreparation(
-    audioPaths,
-    originalFilenames,
-    String(voiceName),
-    String(whisperModel),
-    Number(minDuration) || 3.0,
-    Number(maxDuration) || 12.0,
-    session.tempDir,
-    extendDatasetId || targetDatasetId || undefined,
-    Math.max(1, Math.min(8, Number(concurrency) || 2))
-  );
+    const job = startDatasetPreparation(
+      audioPaths,
+      originalFilenames,
+      String(voiceName),
+      String(whisperModel),
+      Number(minDuration) || 3.0,
+      Number(maxDuration) || 12.0,
+      session.tempDir,
+      extendDatasetId || targetDatasetId || undefined,
+      Math.max(1, Math.min(8, Number(concurrency) || 2)),
+    );
 
-  res.status(202).json({ success: true, jobId: job.id });
-});
+    res.status(202).json({ success: true, jobId: job.id });
+  },
+);
 
 // Prepare offline dataset from uploaded audio (base64 fallback)
 app.post("/api/dataset/prepare", async (req: Request, res: Response) => {
@@ -4086,16 +4353,20 @@ app.post("/api/dataset/prepare", async (req: Request, res: Response) => {
     } = req.body || {};
 
     if (!audioBase64) {
-      return res.status(400).json({ error: "Vui lòng chọn hoặc tải lên file âm thanh." });
+      return res
+        .status(400)
+        .json({ error: "Vui lòng chọn hoặc tải lên file âm thanh." });
     }
 
     const audioBuffer = Buffer.from(audioBase64, "base64");
     if (audioBuffer.length < 1000) {
-      return res.status(400).json({ error: "File âm thanh không hợp lệ hoặc quá nhỏ." });
+      return res
+        .status(400)
+        .json({ error: "File âm thanh không hợp lệ hoặc quá nhỏ." });
     }
 
     console.log(
-      `[OfflineDataset] Bắt đầu cắt và nhận diện bằng Whisper.cpp (${whisperModel}) cho giọng "${voiceName}" (tiến trình đồng thời: ${concurrency})...`
+      `[OfflineDataset] Bắt đầu cắt và nhận diện bằng Whisper.cpp (${whisperModel}) cho giọng "${voiceName}" (tiến trình đồng thời: ${concurrency})...`,
     );
 
     const job = startDatasetPreparation(
@@ -4107,13 +4378,15 @@ app.post("/api/dataset/prepare", async (req: Request, res: Response) => {
       Number(maxDuration) || 12.0,
       undefined,
       extendDatasetId || targetDatasetId || undefined,
-      Math.max(1, Math.min(8, Number(concurrency) || 2))
+      Math.max(1, Math.min(8, Number(concurrency) || 2)),
     );
 
     res.status(202).json({ success: true, jobId: job.id });
   } catch (err: any) {
     console.error("[OfflineDataset] Lỗi tạo dataset:", err);
-    res.status(500).json({ error: err.message || "Lỗi khi xử lý âm thanh bằng Whisper.cpp." });
+    res.status(500).json({
+      error: err.message || "Lỗi khi xử lý âm thanh bằng Whisper.cpp.",
+    });
   }
 });
 
@@ -4121,7 +4394,9 @@ app.post("/api/dataset/prepare", async (req: Request, res: Response) => {
 app.get("/api/dataset/prepare/:jobId", (req: Request, res: Response) => {
   const job = datasetPreparationJobs.get(req.params.jobId);
   if (!job) {
-    return res.status(404).json({ error: "Không tìm thấy tác vụ xử lý dataset." });
+    return res
+      .status(404)
+      .json({ error: "Không tìm thấy tác vụ xử lý dataset." });
   }
 
   const { updatedAt: _updatedAt, ...publicJob } = job;
@@ -4142,22 +4417,34 @@ app.get("/api/dataset/:datasetId", (req: Request, res: Response) => {
 });
 
 // Stream clip audio for web preview
-app.get("/api/dataset/:datasetId/audio/:filename", (req: Request, res: Response) => {
-  try {
-    const cleanDatasetId = req.params.datasetId.replace(/[^a-zA-Z0-9_-]/g, "");
-    const cleanFilename = req.params.filename.replace(/[^a-zA-Z0-9_.-]/g, "");
-    const clipPath = path.resolve(__dirname, "datasets_storage", cleanDatasetId, "wav", cleanFilename);
+app.get(
+  "/api/dataset/:datasetId/audio/:filename",
+  (req: Request, res: Response) => {
+    try {
+      const cleanDatasetId = req.params.datasetId.replace(
+        /[^a-zA-Z0-9_-]/g,
+        "",
+      );
+      const cleanFilename = req.params.filename.replace(/[^a-zA-Z0-9_.-]/g, "");
+      const clipPath = path.resolve(
+        __dirname,
+        "datasets_storage",
+        cleanDatasetId,
+        "wav",
+        cleanFilename,
+      );
 
-    if (!fs.existsSync(clipPath)) {
-      return res.status(404).send("File audio clip không tồn tại.");
+      if (!fs.existsSync(clipPath)) {
+        return res.status(404).send("File audio clip không tồn tại.");
+      }
+
+      res.setHeader("Content-Type", "audio/wav");
+      fs.createReadStream(clipPath).pipe(res);
+    } catch (err: any) {
+      res.status(500).send("Lỗi đọc file clip audio.");
     }
-
-    res.setHeader("Content-Type", "audio/wav");
-    fs.createReadStream(clipPath).pipe(res);
-  } catch (err: any) {
-    res.status(500).send("Lỗi đọc file clip audio.");
-  }
-});
+  },
+);
 
 // Update clip text or delete clip
 app.post("/api/dataset/:datasetId/clip", (req: Request, res: Response) => {
@@ -4167,7 +4454,12 @@ app.post("/api/dataset/:datasetId/clip", (req: Request, res: Response) => {
       return res.status(400).json({ error: "Thiếu clipId." });
     }
 
-    const updated = updateDatasetClip(req.params.datasetId, clipId, text, !!shouldDelete);
+    const updated = updateDatasetClip(
+      req.params.datasetId,
+      clipId,
+      text,
+      !!shouldDelete,
+    );
     res.json({ success: true, dataset: updated });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -4180,8 +4472,14 @@ app.put("/api/dataset/:datasetId/metadata", (req: Request, res: Response) => {
     const updated = updateDatasetMetadata(req.params.datasetId, metadata);
     res.json({ success: true, dataset: updated });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : "Lỗi không xác định khi lưu metadata.";
-    const status = message.startsWith("Dataset ") && message.endsWith(" không tồn tại.") ? 404 : 400;
+    const message =
+      err instanceof Error
+        ? err.message
+        : "Lỗi không xác định khi lưu metadata.";
+    const status =
+      message.startsWith("Dataset ") && message.endsWith(" không tồn tại.")
+        ? 404
+        : 400;
     res.status(status).json({ error: message });
   }
 });
@@ -4203,7 +4501,10 @@ app.get("/api/dataset/:datasetId/export-zip", (req: Request, res: Response) => {
       }
     });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : "Lỗi không xác định khi tạo file zip.";
+    const message =
+      err instanceof Error
+        ? err.message
+        : "Lỗi không xác định khi tạo file zip.";
     console.error("[OfflineDataset] Lỗi tạo file ZIP:", err);
     res.status(500).send(`Lỗi tạo file zip: ${message}`);
   }
@@ -4226,7 +4527,9 @@ app.delete("/api/dataset/:datasetId", (req: Request, res: Response) => {
 app.post("/api/dataset/merge-session", (_req: Request, res: Response) => {
   try {
     const sessionId = `merge_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "piper_merge_upload_"));
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "piper_merge_upload_"),
+    );
     datasetMergeSessions.set(sessionId, {
       tempDir,
       files: [],
@@ -4234,71 +4537,101 @@ app.post("/api/dataset/merge-session", (_req: Request, res: Response) => {
     });
     res.json({ success: true, sessionId });
   } catch (err: any) {
-    res.status(500).json({ error: err.message || "Không thể khởi tạo phiên ghép dataset." });
+    res
+      .status(500)
+      .json({ error: err.message || "Không thể khởi tạo phiên ghép dataset." });
   }
 });
 
-app.post("/api/dataset/merge-session/:sessionId/upload", async (req: Request, res: Response) => {
-  const session = datasetMergeSessions.get(req.params.sessionId);
-  if (!session) {
-    return res.status(404).json({ error: "Phiên ghép dataset không tồn tại hoặc đã hết hạn." });
-  }
-
-  const rawFilename = typeof req.query.filename === "string" ? req.query.filename : `dataset_${session.files.length + 1}.zip`;
-  const originalFilename = path.basename(rawFilename);
-  const safeFilename = `zip_${session.files.length}_${originalFilename.replace(/[^a-zA-Z0-9_.-]/g, "_")}`;
-  const destPath = path.join(session.tempDir, safeFilename);
-
-  try {
-    await pipeline(req, fs.createWriteStream(destPath, { flags: "wx" }));
-    const stat = fs.statSync(destPath);
-    if (stat.size < 100) {
-      fs.rmSync(destPath, { force: true });
-      return res.status(400).json({ error: "File ZIP rỗng hoặc không hợp lệ." });
+app.post(
+  "/api/dataset/merge-session/:sessionId/upload",
+  async (req: Request, res: Response) => {
+    const session = datasetMergeSessions.get(req.params.sessionId);
+    if (!session) {
+      return res
+        .status(404)
+        .json({ error: "Phiên ghép dataset không tồn tại hoặc đã hết hạn." });
     }
-    session.files.push({ path: destPath, originalFilename });
-    res.json({ success: true, fileCount: session.files.length, filename: originalFilename });
-  } catch (err: any) {
-    fs.rmSync(destPath, { force: true });
-    res.status(500).json({ error: err.message || "Lỗi khi lưu file ZIP vào phiên ghép." });
-  }
-});
 
-app.post("/api/dataset/merge-session/:sessionId/merge", (req: Request, res: Response) => {
-  const session = datasetMergeSessions.get(req.params.sessionId);
-  if (!session) {
-    return res.status(404).json({ error: "Phiên ghép dataset không tồn tại hoặc đã hết hạn." });
-  }
-  if (session.files.length === 0) {
-    return res.status(400).json({ error: "Phiên ghép không có file ZIP nào." });
-  }
+    const rawFilename =
+      typeof req.query.filename === "string"
+        ? req.query.filename
+        : `dataset_${session.files.length + 1}.zip`;
+    const originalFilename = path.basename(rawFilename);
+    const safeFilename = `zip_${session.files.length}_${originalFilename.replace(/[^a-zA-Z0-9_.-]/g, "_")}`;
+    const destPath = path.join(session.tempDir, safeFilename);
 
-  const voiceName = typeof req.body.voiceName === "string" ? req.body.voiceName.trim() : "";
-  const datasetId = typeof req.body.datasetId === "string" ? req.body.datasetId.trim() : "";
-
-  try {
-    const zipPaths = session.files.map((f) => f.path);
-    const result = mergeDatasetZips(datasetId, voiceName, zipPaths);
-    res.json({ success: true, ...result });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message || "Lỗi khi ghép dataset." });
-  } finally {
     try {
-      fs.rmSync(session.tempDir, { recursive: true, force: true });
-    } catch {}
-    datasetMergeSessions.delete(req.params.sessionId);
-  }
-});
+      await pipeline(req, fs.createWriteStream(destPath, { flags: "wx" }));
+      const stat = fs.statSync(destPath);
+      if (stat.size < 100) {
+        fs.rmSync(destPath, { force: true });
+        return res
+          .status(400)
+          .json({ error: "File ZIP rỗng hoặc không hợp lệ." });
+      }
+      session.files.push({ path: destPath, originalFilename });
+      res.json({
+        success: true,
+        fileCount: session.files.length,
+        filename: originalFilename,
+      });
+    } catch (err: any) {
+      fs.rmSync(destPath, { force: true });
+      res
+        .status(500)
+        .json({ error: err.message || "Lỗi khi lưu file ZIP vào phiên ghép." });
+    }
+  },
+);
+
+app.post(
+  "/api/dataset/merge-session/:sessionId/merge",
+  (req: Request, res: Response) => {
+    const session = datasetMergeSessions.get(req.params.sessionId);
+    if (!session) {
+      return res
+        .status(404)
+        .json({ error: "Phiên ghép dataset không tồn tại hoặc đã hết hạn." });
+    }
+    if (session.files.length === 0) {
+      return res
+        .status(400)
+        .json({ error: "Phiên ghép không có file ZIP nào." });
+    }
+
+    const voiceName =
+      typeof req.body.voiceName === "string" ? req.body.voiceName.trim() : "";
+    const datasetId =
+      typeof req.body.datasetId === "string" ? req.body.datasetId.trim() : "";
+
+    try {
+      const zipPaths = session.files.map((f) => f.path);
+      const result = mergeDatasetZips(datasetId, voiceName, zipPaths);
+      res.json({ success: true, ...result });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Lỗi khi ghép dataset." });
+    } finally {
+      try {
+        fs.rmSync(session.tempDir, { recursive: true, force: true });
+      } catch {}
+      datasetMergeSessions.delete(req.params.sessionId);
+    }
+  },
+);
 
 app.get("/api/voices", (req: Request, res: Response) => {
   const vnCheck = checkVieNeuModelAvailable();
-  const catalogModelIds = new Set(AVAILABLE_MODELS.map((voice) => voice.modelId));
+  const catalogModelIds = new Set(
+    AVAILABLE_MODELS.map((voice) => voice.modelId),
+  );
   const customList = scanCustomModelsOnDisk().filter(
     (voice) => !catalogModelIds.has(voice.modelId),
   );
 
   const customOptions = customList.map((cv) => {
-    const isLoaded = modelCache.has(cv.modelId) || modelCache.has(`local:${cv.id}`);
+    const isLoaded =
+      modelCache.has(cv.modelId) || modelCache.has(`local:${cv.id}`);
     const localPath = path.join(MODELS_DIR, cv.onnxFile);
     return {
       id: cv.modelId,
@@ -4307,7 +4640,8 @@ app.get("/api/voices", (req: Request, res: Response) => {
       tag: `${cv.gender === "female" ? "Nữ" : "Nam"} · Tùy chỉnh (Google Colab)`,
       gender: cv.gender,
       description: cv.description || "Giọng AI đã huấn luyện từ Colab",
-      sampleText: cv.sampleText || "Xin chào! Đây là giọng đọc tùy chỉnh của tôi.",
+      sampleText:
+        cv.sampleText || "Xin chào! Đây là giọng đọc tùy chỉnh của tôi.",
       recommended: false,
       engine: "piper" as const,
       isCustom: true,
@@ -4515,7 +4849,9 @@ app.post("/api/bgm/generate", (req: Request, res: Response) => {
 app.get("/api/bgm/generate/:jobId", (req: Request, res: Response) => {
   const job = getBgmGenerationJob(req.params.jobId);
   if (!job) {
-    return res.status(404).json({ error: "Không tìm thấy tiến trình tạo nhạc." });
+    return res
+      .status(404)
+      .json({ error: "Không tìm thấy tiến trình tạo nhạc." });
   }
   res.json({ success: true, job });
 });
@@ -4523,12 +4859,90 @@ app.get("/api/bgm/generate/:jobId", (req: Request, res: Response) => {
 app.delete("/api/bgm/:id", (req: Request, res: Response) => {
   try {
     const ok = deleteBgmTrack(req.params.id);
-    if (!ok) return res.status(404).json({ error: "Không tìm thấy đoạn nhạc." });
+    if (!ok)
+      return res.status(404).json({ error: "Không tìm thấy đoạn nhạc." });
     res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
+
+// ===== FREELLM API TRANSLATION ROUTES =====
+
+// Initialize FreeLLM on startup
+initializeFreeLLMTranslation();
+
+// Get FreeLLM configuration status
+app.get(
+  "/api/subtitle-translation/freellm/status",
+  isLocalSubtitleTranslationRequest,
+  (_req: Request, res: Response) => {
+    res.json({ success: true, status: getFreeLLMTranslationStatus() });
+  },
+);
+
+// Translate using FreeLLMAPI (non-streaming, returns JSON directly)
+app.post(
+  "/api/subtitle-translation/translate/freellm",
+  isLocalSubtitleTranslationRequest,
+  async (req: Request, res: Response) => {
+    const cancellation = new AbortController();
+    res.on("close", () => {
+      if (!res.writableEnded) cancellation.abort();
+    });
+
+    try {
+      const {
+        cues,
+        sourceLanguage,
+        targetLanguage,
+        genre,
+        tone,
+        rules,
+        systemPrompt,
+      } = req.body as {
+        cues: Array<{ id: string; text: string }>;
+        sourceLanguage: string;
+        targetLanguage: string;
+        genre?: string;
+        tone?: string;
+        rules?: string;
+        systemPrompt?: string;
+      };
+
+      if (!Array.isArray(cues) || cues.length === 0) {
+        return res.status(400).json({
+          success: false,
+          error: "Cần có ít nhất một câu phụ đề để dịch.",
+        });
+      }
+      if (!sourceLanguage || !targetLanguage) {
+        return res.status(400).json({
+          success: false,
+          error: "Thiếu ngôn ngữ nguồn hoặc ngôn ngữ đích.",
+        });
+      }
+
+      const translations = await translateWithFreeLLM(cues, {
+        sourceLanguage,
+        targetLanguage,
+        genre,
+        tone,
+        rules,
+        customPrompt: systemPrompt,
+        signal: cancellation.signal,
+      });
+
+      res.json({ success: true, translations });
+    } catch (error) {
+      if (cancellation.signal.aborted) return;
+      res.status(500).json({
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  },
+);
 
 app.get("/api/bgm/audio/:filename", (req: Request, res: Response) => {
   const safeFilename = path.basename(req.params.filename);
@@ -4564,7 +4978,12 @@ app.post("/api/subtitle-ocr/worker/start", (_req: Request, res: Response) => {
   try {
     res.status(202).json({ success: true, worker: startSubtitleOcrWorker() });
   } catch (error) {
-    res.status(503).json({ error: error instanceof Error ? error.message : "Không thể bật OCR thường trực." });
+    res.status(503).json({
+      error:
+        error instanceof Error
+          ? error.message
+          : "Không thể bật OCR thường trực.",
+    });
   }
 });
 
@@ -4581,185 +5000,517 @@ app.post("/api/subtitle-ocr/install", async (_req: Request, res: Response) => {
 });
 
 app.post("/api/subtitle-ocr/install/cancel", (_req: Request, res: Response) => {
-  res.json({ success: cancelSubtitleOcrInstall(), status: getSubtitleOcrInstallStatus() });
-});
-
-app.get("/api/file-transfer/status", isLocalSubtitleTranslationRequest, (_req: Request, res: Response) => {
-  try {
-    res.json({ success: true, status: getFileTransferStatus() });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error instanceof Error ? error.message : String(error) });
-  }
-});
-
-app.post("/api/file-transfer/session", isLocalSubtitleTranslationRequest, async (req: Request, res: Response) => {
-  try {
-    res.json({ success: true, status: await startFileTransferSession(req.body?.requiresApproval === true) });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error instanceof Error ? error.message : String(error) });
-  }
-});
-
-app.put("/api/file-transfer/directory", isLocalSubtitleTranslationRequest, (req: Request, res: Response) => {
-  try {
-    res.json({ success: true, status: setReceivedFilesDirectory(req.body?.directory) });
-  } catch (error) {
-    res.status(400).json({ success: false, error: error instanceof Error ? error.message : String(error) });
-  }
-});
-
-app.put("/api/file-transfer/requests/:id", isLocalSubtitleTranslationRequest, (req: Request, res: Response) => {
-  if (typeof req.body?.approved !== "boolean") {
-    return res.status(400).json({ success: false, error: "Thiếu trạng thái chấp thuận hợp lệ." });
-  }
-  try {
-    res.json({ success: true, status: respondToFileTransferRequest(req.params.id, req.body.approved) });
-  } catch (error) {
-    res.status(409).json({ success: false, error: error instanceof Error ? error.message : String(error) });
-  }
-});
-
-app.delete("/api/file-transfer/session", isLocalSubtitleTranslationRequest, async (_req: Request, res: Response) => {
-  try {
-    res.json({ success: true, status: await stopFileTransferSession() });
-  } catch (error) {
-    res.status(409).json({ success: false, error: error instanceof Error ? error.message : String(error) });
-  }
-});
-
-app.get("/api/gpu-settings", isLocalSubtitleTranslationRequest, (_req: Request, res: Response) => {
-  try {
-    res.json({ success: true, settings: getGpuExecutionSettings() });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error instanceof Error ? error.message : String(error) });
-  }
-});
-
-app.put("/api/gpu-settings", isLocalSubtitleTranslationRequest, (req: Request, res: Response) => {
-  try {
-    res.json({ success: true, settings: saveGpuExecutionSettings(req.body) });
-  } catch (error) {
-    res.status(400).json({ success: false, error: error instanceof Error ? error.message : String(error) });
-  }
-});
-
-app.get("/api/subtitle-translation/state", isLocalSubtitleTranslationRequest, (_req: Request, res: Response) => {
-  res.json({ success: true, state: getSubtitleTranslationState() });
-});
-
-app.put("/api/subtitle-translation/config", isLocalSubtitleTranslationRequest, (req: Request, res: Response) => {
-  try {
-    res.json({ success: true, config: saveSubtitleTranslationConfig(req.body) });
-  } catch (error) {
-    res.status(400).json({ success: false, error: error instanceof Error ? error.message : String(error) });
-  }
-});
-
-app.post("/api/subtitle-translation/download", isLocalSubtitleTranslationRequest, (req: Request, res: Response) => {
-  try {
-    res.json(startSubtitleTranslationDownload(req.body?.target));
-  } catch (error) {
-    res.status(400).json({ success: false, error: error instanceof Error ? error.message : String(error) });
-  }
-});
-
-app.post("/api/subtitle-translation/download/cancel", isLocalSubtitleTranslationRequest, (_req: Request, res: Response) => {
-  res.json({ success: true, state: cancelSubtitleTranslationDownload() });
-});
-
-app.delete("/api/subtitle-translation/models/:id", isLocalSubtitleTranslationRequest, (req: Request, res: Response) => {
-  try {
-    res.json({ success: true, state: deleteSubtitleTranslationModel(req.params.id) });
-  } catch (error) {
-    res.status(400).json({ success: false, error: error instanceof Error ? error.message : String(error) });
-  }
-});
-
-app.post("/api/subtitle-translation/engine/start", isLocalSubtitleTranslationRequest, async (_req: Request, res: Response) => {
-  try {
-    res.json({ success: true, state: await startSubtitleTranslationEngine() });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error instanceof Error ? error.message : String(error), state: getSubtitleTranslationState() });
-  }
-});
-
-app.post("/api/subtitle-translation/engine/stop", isLocalSubtitleTranslationRequest, async (_req: Request, res: Response) => {
-  try {
-    res.json({ success: true, state: await stopSubtitleTranslationEngine() });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error instanceof Error ? error.message : String(error) });
-  }
-});
-
-app.get("/api/subtitle-translation/prompt", isLocalSubtitleTranslationRequest, (_req: Request, res: Response) => {
-  res.json({ success: true, prompt: getSubtitleTranslationPrompt() });
-});
-
-app.post("/api/subtitle-translation/translate", isLocalSubtitleTranslationRequest, async (req: Request, res: Response) => {
-  const cancellation = new AbortController();
-  res.on("close", () => {
-    if (!res.writableEnded) cancellation.abort();
+  res.json({
+    success: cancelSubtitleOcrInstall(),
+    status: getSubtitleOcrInstallStatus(),
   });
-  res.status(200).set({
-    "Content-Type": "text/event-stream; charset=utf-8",
-    "Cache-Control": "no-cache, no-transform",
-    Connection: "keep-alive",
-    "X-Accel-Buffering": "no",
-  });
-  res.flushHeaders();
-  const sendEvent = (event: object) => {
-    if (!cancellation.signal.aborted && !res.destroyed) res.write(`data: ${JSON.stringify(event)}\n\n`);
-  };
-  try {
-    const translations = await translateSubtitleCues(
-      req.body?.cues,
-      req.body?.systemPrompt,
-      cancellation.signal,
-      (translation) => sendEvent({ type: "translation", ...translation }),
-      req.body?.translationStyle,
-    );
-    sendEvent({ type: "complete", count: translations.length });
-    res.end();
-  } catch (error) {
-    if (cancellation.signal.aborted) return;
-    sendEvent({ type: "error", error: error instanceof Error ? error.message : String(error) });
-    res.end();
-  }
 });
+
+app.get(
+  "/api/file-transfer/status",
+  isLocalSubtitleTranslationRequest,
+  (_req: Request, res: Response) => {
+    try {
+      res.json({ success: true, status: getFileTransferStatus() });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  },
+);
+
+app.post(
+  "/api/file-transfer/session",
+  isLocalSubtitleTranslationRequest,
+  async (req: Request, res: Response) => {
+    try {
+      res.json({
+        success: true,
+        status: await startFileTransferSession(
+          req.body?.requiresApproval === true,
+        ),
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  },
+);
+
+app.put(
+  "/api/file-transfer/directory",
+  isLocalSubtitleTranslationRequest,
+  (req: Request, res: Response) => {
+    try {
+      res.json({
+        success: true,
+        status: setReceivedFilesDirectory(req.body?.directory),
+      });
+    } catch (error) {
+      res.status(400).json({
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  },
+);
+
+app.put(
+  "/api/file-transfer/requests/:id",
+  isLocalSubtitleTranslationRequest,
+  (req: Request, res: Response) => {
+    if (typeof req.body?.approved !== "boolean") {
+      return res
+        .status(400)
+        .json({ success: false, error: "Thiếu trạng thái chấp thuận hợp lệ." });
+    }
+    try {
+      res.json({
+        success: true,
+        status: respondToFileTransferRequest(req.params.id, req.body.approved),
+      });
+    } catch (error) {
+      res.status(409).json({
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  },
+);
+
+app.delete(
+  "/api/file-transfer/session",
+  isLocalSubtitleTranslationRequest,
+  async (_req: Request, res: Response) => {
+    try {
+      res.json({ success: true, status: await stopFileTransferSession() });
+    } catch (error) {
+      res.status(409).json({
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  },
+);
+
+app.get(
+  "/api/gpu-settings",
+  isLocalSubtitleTranslationRequest,
+  (_req: Request, res: Response) => {
+    try {
+      res.json({ success: true, settings: getGpuExecutionSettings() });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  },
+);
+
+app.put(
+  "/api/gpu-settings",
+  isLocalSubtitleTranslationRequest,
+  (req: Request, res: Response) => {
+    try {
+      res.json({ success: true, settings: saveGpuExecutionSettings(req.body) });
+    } catch (error) {
+      res.status(400).json({
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  },
+);
+
+app.get(
+  "/api/subtitle-translation/state",
+  isLocalSubtitleTranslationRequest,
+  (_req: Request, res: Response) => {
+    res.json({ success: true, state: getSubtitleTranslationState() });
+  },
+);
+
+app.put(
+  "/api/subtitle-translation/config",
+  isLocalSubtitleTranslationRequest,
+  (req: Request, res: Response) => {
+    try {
+      res.json({
+        success: true,
+        config: saveSubtitleTranslationConfig(req.body),
+      });
+    } catch (error) {
+      res.status(400).json({
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  },
+);
+
+app.post(
+  "/api/subtitle-translation/download",
+  isLocalSubtitleTranslationRequest,
+  (req: Request, res: Response) => {
+    try {
+      res.json(startSubtitleTranslationDownload(req.body?.target));
+    } catch (error) {
+      res.status(400).json({
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  },
+);
+
+app.post(
+  "/api/subtitle-translation/download/cancel",
+  isLocalSubtitleTranslationRequest,
+  (_req: Request, res: Response) => {
+    res.json({ success: true, state: cancelSubtitleTranslationDownload() });
+  },
+);
+
+app.delete(
+  "/api/subtitle-translation/models/:id",
+  isLocalSubtitleTranslationRequest,
+  (req: Request, res: Response) => {
+    try {
+      res.json({
+        success: true,
+        state: deleteSubtitleTranslationModel(req.params.id),
+      });
+    } catch (error) {
+      res.status(400).json({
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  },
+);
+
+app.post(
+  "/api/subtitle-translation/engine/start",
+  isLocalSubtitleTranslationRequest,
+  async (_req: Request, res: Response) => {
+    try {
+      res.json({
+        success: true,
+        state: await startSubtitleTranslationEngine(),
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+        state: getSubtitleTranslationState(),
+      });
+    }
+  },
+);
+
+app.post(
+  "/api/subtitle-translation/engine/stop",
+  isLocalSubtitleTranslationRequest,
+  async (_req: Request, res: Response) => {
+    try {
+      res.json({ success: true, state: await stopSubtitleTranslationEngine() });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  },
+);
+
+app.get(
+  "/api/subtitle-translation/prompt",
+  isLocalSubtitleTranslationRequest,
+  (_req: Request, res: Response) => {
+    res.json({ success: true, prompt: getSubtitleTranslationPrompt() });
+  },
+);
+
+app.post(
+  "/api/subtitle-translation/translate",
+  isLocalSubtitleTranslationRequest,
+  async (req: Request, res: Response) => {
+    const cancellation = new AbortController();
+    res.on("close", () => {
+      if (!res.writableEnded) cancellation.abort();
+    });
+    res.status(200).set({
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    });
+    res.flushHeaders();
+    const sendEvent = (event: object) => {
+      if (!cancellation.signal.aborted && !res.destroyed)
+        res.write(`data: ${JSON.stringify(event)}\n\n`);
+    };
+    try {
+      const translations = await translateSubtitleCues(
+        req.body?.cues,
+        req.body?.systemPrompt,
+        cancellation.signal,
+        (translation) => sendEvent({ type: "translation", ...translation }),
+        req.body?.translationStyle,
+      );
+      sendEvent({ type: "complete", count: translations.length });
+      res.end();
+    } catch (error) {
+      if (cancellation.signal.aborted) return;
+      sendEvent({
+        type: "error",
+        error: error instanceof Error ? error.message : String(error),
+      });
+      res.end();
+    }
+  },
+);
+
+// ===== GEMINI TRANSLATION API ROUTES =====
+
+// Initialize Gemini on startup
+initializeGeminiTranslation();
+
+// Get Gemini configuration status
+app.get(
+  "/api/subtitle-translation/gemini/status",
+  isLocalSubtitleTranslationRequest,
+  (_req: Request, res: Response) => {
+    res.json({ success: true, status: getGeminiTranslationStatus() });
+  },
+);
+
+// Translate using Gemini API (non-streaming, returns JSON directly)
+app.post(
+  "/api/subtitle-translation/translate/gemini",
+  isLocalSubtitleTranslationRequest,
+  async (req: Request, res: Response) => {
+    const cancellation = new AbortController();
+    res.on("close", () => {
+      if (!res.writableEnded) cancellation.abort();
+    });
+
+    try {
+      const {
+        cues,
+        sourceLanguage,
+        targetLanguage,
+        genre,
+        tone,
+        rules,
+        systemPrompt, // custom prompt override
+      } = req.body as {
+        cues: Array<{ id: string; text: string }>;
+        sourceLanguage: string;
+        targetLanguage: string;
+        genre?: string;
+        tone?: string;
+        rules?: string;
+        systemPrompt?: string;
+      };
+
+      if (!Array.isArray(cues) || cues.length === 0) {
+        return res.status(400).json({
+          success: false,
+          error: "Cần có ít nhất một câu phụ đề để dịch.",
+        });
+      }
+      if (!sourceLanguage || !targetLanguage) {
+        return res.status(400).json({
+          success: false,
+          error: "Thiếu ngôn ngữ nguồn hoặc ngôn ngữ đích.",
+        });
+      }
+
+      const translations = await translateWithGemini(cues, {
+        sourceLanguage,
+        targetLanguage,
+        genre,
+        tone,
+        rules,
+        customPrompt: systemPrompt,
+        signal: cancellation.signal,
+      });
+
+      res.json({ success: true, translations });
+    } catch (error) {
+      if (cancellation.signal.aborted) return;
+      res.status(500).json({
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  },
+);
+
+// Translate using Gemini API with SSE streaming (compatible with existing frontend)
+app.post(
+  "/api/subtitle-translation/translate/gemini/stream",
+  isLocalSubtitleTranslationRequest,
+  async (req: Request, res: Response) => {
+    const cancellation = new AbortController();
+    res.on("close", () => {
+      if (!res.writableEnded) cancellation.abort();
+    });
+    res.status(200).set({
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    });
+    res.flushHeaders();
+    const sendEvent = (event: object) => {
+      if (!cancellation.signal.aborted && !res.destroyed)
+        res.write(`data: ${JSON.stringify(event)}\n\n`);
+    };
+
+    try {
+      const {
+        cues,
+        sourceLanguage,
+        targetLanguage,
+        genre,
+        tone,
+        rules,
+        systemPrompt,
+      } = req.body as {
+        cues: Array<{ id: string; text: string }>;
+        sourceLanguage: string;
+        targetLanguage: string;
+        genre?: string;
+        tone?: string;
+        rules?: string;
+        systemPrompt?: string;
+      };
+
+      if (!Array.isArray(cues) || cues.length === 0) {
+        sendEvent({
+          type: "error",
+          error: "Cần có ít nhất một câu phụ đề để dịch.",
+        });
+        res.end();
+        return;
+      }
+      if (!sourceLanguage || !targetLanguage) {
+        sendEvent({
+          type: "error",
+          error: "Thiếu ngôn ngữ nguồn hoặc ngôn ngữ đích.",
+        });
+        res.end();
+        return;
+      }
+
+      // Use the streaming function
+      for await (const event of translateWithGeminiStream(cues, {
+        sourceLanguage,
+        targetLanguage,
+        genre,
+        tone,
+        rules,
+        customPrompt: systemPrompt,
+        signal: cancellation.signal,
+      })) {
+        if (cancellation.signal.aborted) break;
+        sendEvent(event);
+      }
+      res.end();
+    } catch (error) {
+      if (cancellation.signal.aborted) return;
+      sendEvent({
+        type: "error",
+        error: error instanceof Error ? error.message : String(error),
+      });
+      res.end();
+    }
+  },
+);
 
 app.post("/api/subtitle-ocr/jobs", async (req: Request, res: Response) => {
   const declaredBytes = Number(req.headers["content-length"]);
   const maxBytes = getSubtitleOcrMaxUploadBytes();
   if (Number.isFinite(declaredBytes) && declaredBytes > maxBytes) {
-    return res.status(413).json({ error: "Video vượt quá giới hạn tải lên 4 GB." });
+    return res
+      .status(413)
+      .json({ error: "Video vượt quá giới hạn tải lên 4 GB." });
   }
-  const queryText = (key: string, fallback = "") => typeof req.query[key] === "string" ? String(req.query[key]).trim() : fallback;
+  const queryText = (key: string, fallback = "") =>
+    typeof req.query[key] === "string"
+      ? String(req.query[key]).trim()
+      : fallback;
   const parseTime = (input: string): number | null => {
     if (!input) return null;
     const parts = input.split(":").map(Number);
-    if (parts.some((part) => !Number.isFinite(part) || part < 0) || parts.length > 3) return Number.NaN;
-    return parts.length === 3 ? parts[0] * 3600 + parts[1] * 60 + parts[2] : parts[0] * 60 + (parts[1] || 0);
+    if (
+      parts.some((part) => !Number.isFinite(part) || part < 0) ||
+      parts.length > 3
+    )
+      return Number.NaN;
+    return parts.length === 3
+      ? parts[0] * 3600 + parts[1] * 60 + parts[2]
+      : parts[0] * 60 + (parts[1] || 0);
   };
   const timeStart = parseTime(queryText("timeStart", "0:00")) ?? 0;
   const parsedEnd = parseTime(queryText("timeEnd"));
   const timeEnd = parsedEnd;
-  if (!Number.isFinite(timeStart) || (timeEnd !== null && (!Number.isFinite(timeEnd) || timeEnd <= timeStart))) {
-    return res.status(400).json({ error: "Thời gian bắt đầu/kết thúc không hợp lệ." });
+  if (
+    !Number.isFinite(timeStart) ||
+    (timeEnd !== null && (!Number.isFinite(timeEnd) || timeEnd <= timeStart))
+  ) {
+    return res
+      .status(400)
+      .json({ error: "Thời gian bắt đầu/kết thúc không hợp lệ." });
   }
   const confidenceValue = Number(queryText("confidence", "75"));
-  const confidence = Math.max(0, Math.min(100, Number.isFinite(confidenceValue) ? confidenceValue : 75));
-  const zone = (key: string, fallback: string) => ["lower", "center", "upper"].includes(queryText(key)) ? queryText(key) as "lower" | "center" | "upper" : fallback as "lower" | "center" | "upper";
+  const confidence = Math.max(
+    0,
+    Math.min(100, Number.isFinite(confidenceValue) ? confidenceValue : 75),
+  );
+  const zone = (key: string, fallback: string) =>
+    ["lower", "center", "upper"].includes(queryText(key))
+      ? (queryText(key) as "lower" | "center" | "upper")
+      : (fallback as "lower" | "center" | "upper");
   const alignment = (key: string) => {
-    const valid = ["bottom-left", "bottom-center", "bottom-right", "middle-left", "middle-center", "middle-right", "top-left", "top-center", "top-right"];
+    const valid = [
+      "bottom-left",
+      "bottom-center",
+      "bottom-right",
+      "middle-left",
+      "middle-center",
+      "middle-right",
+      "top-left",
+      "top-center",
+      "top-right",
+    ];
     const value = queryText(key, "bottom-center");
     return valid.includes(value) ? value : "bottom-center";
   };
-  const numberOption = (key: string, fallback: number, min: number, max: number) => {
+  const numberOption = (
+    key: string,
+    fallback: number,
+    min: number,
+    max: number,
+  ) => {
     const value = Number(queryText(key));
-    return Math.max(min, Math.min(max, Number.isFinite(value) ? value : fallback));
+    return Math.max(
+      min,
+      Math.min(max, Number.isFinite(value) ? value : fallback),
+    );
   };
-  const optionalThreshold = queryText("brightnessThreshold") ? numberOption("brightnessThreshold", 0, 0, 255) : null;
-  const optionalCoordinate = (key: string) => queryText(key) ? numberOption(key, 0, 0, 100000) : null;
+  const optionalThreshold = queryText("brightnessThreshold")
+    ? numberOption("brightnessThreshold", 0, 0, 255)
+    : null;
+  const optionalCoordinate = (key: string) =>
+    queryText(key) ? numberOption(key, 0, 0, 100000) : null;
   const options = {
     timeStart,
     timeEnd,
@@ -4788,8 +5539,15 @@ app.post("/api/subtitle-ocr/jobs", async (req: Request, res: Response) => {
   };
   const jobId = randomUUID();
   const uploadDir = fs.mkdtempSync(path.join(os.tmpdir(), "subtitle-ocr-job-"));
-  const requestedName = typeof req.query.filename === "string" ? path.basename(req.query.filename) : "video.mp4";
-  const extension = path.extname(requestedName).replace(/[^.a-zA-Z0-9]/g, "").slice(0, 12) || ".video";
+  const requestedName =
+    typeof req.query.filename === "string"
+      ? path.basename(req.query.filename)
+      : "video.mp4";
+  const extension =
+    path
+      .extname(requestedName)
+      .replace(/[^.a-zA-Z0-9]/g, "")
+      .slice(0, 12) || ".video";
   const videoPath = path.join(uploadDir, `source${extension}`);
   let receivedBytes = 0;
   const sizeLimiter = new Transform({
@@ -4800,110 +5558,168 @@ app.post("/api/subtitle-ocr/jobs", async (req: Request, res: Response) => {
     },
   });
   try {
-    await pipeline(req, sizeLimiter, fs.createWriteStream(videoPath, { flags: "wx" }));
-    if (receivedBytes < 1024) throw new Error("Video tải lên không hợp lệ hoặc quá nhỏ.");
+    await pipeline(
+      req,
+      sizeLimiter,
+      fs.createWriteStream(videoPath, { flags: "wx" }),
+    );
+    if (receivedBytes < 1024)
+      throw new Error("Video tải lên không hợp lệ hoặc quá nhỏ.");
     const job = createSubtitleOcrJob(jobId, videoPath, options);
     res.status(202).json({ success: true, job });
   } catch (err: any) {
-    try { fs.rmSync(uploadDir, { recursive: true, force: true }); } catch { /* best effort */ }
+    try {
+      fs.rmSync(uploadDir, { recursive: true, force: true });
+    } catch {
+      /* best effort */
+    }
     const tooLarge = err.message === "UPLOAD_TOO_LARGE";
-    res.status(tooLarge ? 413 : 400).json({ error: tooLarge ? "Video vượt quá giới hạn tải lên 4 GB." : err.message });
-  }
-});
-
-app.post("/api/video-dubbing/jobs/:jobId/character-card-reference-scan", (req: Request, res: Response) => {
-  const { jobId } = req.params;
-  if (!videoDubbingManager.isValidJobId(jobId)) {
-    return res.status(400).json({ error: "ID video không hợp lệ." });
-  }
-  const job = videoDubbingManager.getJob(jobId);
-  let videoPath: string | null;
-  try {
-    videoPath = videoDubbingManager.getSourceVideoPath(jobId);
-  } catch (error) {
-    console.error("[VideoDubbing] Không thể xác minh video cho quét ảnh mẫu:", error);
-    return res.status(500).json({ error: "Không thể truy cập video nguồn để quét ảnh mẫu." });
-  }
-  if (!job || !videoPath || !job.metadata) {
-    return res.status(404).json({ error: "Video nguồn chưa sẵn sàng." });
-  }
-
-  const region = req.body?.region;
-  const coordinates = [region?.left, region?.top, region?.width, region?.height].map(Number);
-  const framesToSkip = Number(req.body?.framesToSkip);
-  const similarityThreshold = Number(req.body?.similarityThreshold);
-  const referenceImage = req.body?.referenceImage;
-  if (
-    typeof referenceImage !== "string" ||
-    referenceImage.length > 12 * 1024 * 1024 ||
-    !/^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(referenceImage) ||
-    !Number.isSafeInteger(framesToSkip) ||
-    framesToSkip < 0 ||
-    framesToSkip > 10000 ||
-    !Number.isFinite(similarityThreshold) ||
-    similarityThreshold < 0.3 ||
-    similarityThreshold > 0.99 ||
-    !coordinates.every(Number.isFinite) ||
-    coordinates[0] < 0 ||
-    coordinates[1] < 0 ||
-    coordinates[2] <= 0 ||
-    coordinates[3] <= 0 ||
-    coordinates[0] + coordinates[2] > 1 ||
-    coordinates[1] + coordinates[3] > 1
-  ) {
-    return res.status(400).json({ error: "Ảnh mẫu, vùng quét hoặc thông số so khớp không hợp lệ." });
-  }
-
-  const options: CharacterCardReferenceScanOptions = {
-    referenceImage,
-    region: {
-      left: coordinates[0],
-      top: coordinates[1],
-      width: coordinates[2],
-      height: coordinates[3],
-    },
-    framesToSkip,
-    similarityThreshold,
-  };
-  try {
-    return res.status(202).json({
-      success: true,
-      job: createCharacterCardReferenceScanJob(randomUUID(), videoPath, options),
-    });
-  } catch (error) {
-    console.error("[VideoDubbing] Không thể bắt đầu quét ảnh mẫu card:", error);
-    return res.status(503).json({
-      error: error instanceof Error ? error.message : "Không thể bắt đầu quét ảnh mẫu.",
+    res.status(tooLarge ? 413 : 400).json({
+      error: tooLarge ? "Video vượt quá giới hạn tải lên 4 GB." : err.message,
     });
   }
 });
 
-app.get("/api/video-dubbing/character-card-reference-scans/:scanId", (req: Request, res: Response) => {
-  const scan = getCharacterCardReferenceScanJob(req.params.scanId);
-  if (!scan) return res.status(404).json({ error: "Không tìm thấy lần quét ảnh mẫu." });
-  res.json({ success: true, job: scan });
-});
+app.post(
+  "/api/video-dubbing/jobs/:jobId/character-card-reference-scan",
+  (req: Request, res: Response) => {
+    const { jobId } = req.params;
+    if (!videoDubbingManager.isValidJobId(jobId)) {
+      return res.status(400).json({ error: "ID video không hợp lệ." });
+    }
+    const job = videoDubbingManager.getJob(jobId);
+    let videoPath: string | null;
+    try {
+      videoPath = videoDubbingManager.getSourceVideoPath(jobId);
+    } catch (error) {
+      console.error(
+        "[VideoDubbing] Không thể xác minh video cho quét ảnh mẫu:",
+        error,
+      );
+      return res
+        .status(500)
+        .json({ error: "Không thể truy cập video nguồn để quét ảnh mẫu." });
+    }
+    if (!job || !videoPath || !job.metadata) {
+      return res.status(404).json({ error: "Video nguồn chưa sẵn sàng." });
+    }
 
-app.post("/api/video-dubbing/character-card-reference-scans/:scanId/cancel", (req: Request, res: Response) => {
-  const scan = getCharacterCardReferenceScanJob(req.params.scanId);
-  if (!scan) return res.status(404).json({ error: "Không tìm thấy lần quét ảnh mẫu." });
-  res.json({
-    success: cancelCharacterCardReferenceScanJob(req.params.scanId),
-    job: getCharacterCardReferenceScanJob(req.params.scanId),
-  });
-});
+    const region = req.body?.region;
+    const coordinates = [
+      region?.left,
+      region?.top,
+      region?.width,
+      region?.height,
+    ].map(Number);
+    const framesToSkip = Number(req.body?.framesToSkip);
+    const similarityThreshold = Number(req.body?.similarityThreshold);
+    const referenceImage = req.body?.referenceImage;
+    if (
+      typeof referenceImage !== "string" ||
+      referenceImage.length > 12 * 1024 * 1024 ||
+      !/^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(
+        referenceImage,
+      ) ||
+      !Number.isSafeInteger(framesToSkip) ||
+      framesToSkip < 0 ||
+      framesToSkip > 10000 ||
+      !Number.isFinite(similarityThreshold) ||
+      similarityThreshold < 0.3 ||
+      similarityThreshold > 0.99 ||
+      !coordinates.every(Number.isFinite) ||
+      coordinates[0] < 0 ||
+      coordinates[1] < 0 ||
+      coordinates[2] <= 0 ||
+      coordinates[3] <= 0 ||
+      coordinates[0] + coordinates[2] > 1 ||
+      coordinates[1] + coordinates[3] > 1
+    ) {
+      return res.status(400).json({
+        error: "Ảnh mẫu, vùng quét hoặc thông số so khớp không hợp lệ.",
+      });
+    }
+
+    const options: CharacterCardReferenceScanOptions = {
+      referenceImage,
+      region: {
+        left: coordinates[0],
+        top: coordinates[1],
+        width: coordinates[2],
+        height: coordinates[3],
+      },
+      framesToSkip,
+      similarityThreshold,
+    };
+    try {
+      return res.status(202).json({
+        success: true,
+        job: createCharacterCardReferenceScanJob(
+          randomUUID(),
+          videoPath,
+          options,
+        ),
+      });
+    } catch (error) {
+      console.error(
+        "[VideoDubbing] Không thể bắt đầu quét ảnh mẫu card:",
+        error,
+      );
+      return res.status(503).json({
+        error:
+          error instanceof Error
+            ? error.message
+            : "Không thể bắt đầu quét ảnh mẫu.",
+      });
+    }
+  },
+);
+
+app.get(
+  "/api/video-dubbing/character-card-reference-scans/:scanId",
+  (req: Request, res: Response) => {
+    const scan = getCharacterCardReferenceScanJob(req.params.scanId);
+    if (!scan)
+      return res
+        .status(404)
+        .json({ error: "Không tìm thấy lần quét ảnh mẫu." });
+    res.json({ success: true, job: scan });
+  },
+);
+
+app.post(
+  "/api/video-dubbing/character-card-reference-scans/:scanId/cancel",
+  (req: Request, res: Response) => {
+    const scan = getCharacterCardReferenceScanJob(req.params.scanId);
+    if (!scan)
+      return res
+        .status(404)
+        .json({ error: "Không tìm thấy lần quét ảnh mẫu." });
+    res.json({
+      success: cancelCharacterCardReferenceScanJob(req.params.scanId),
+      job: getCharacterCardReferenceScanJob(req.params.scanId),
+    });
+  },
+);
 
 app.get("/api/subtitle-ocr/jobs/:jobId", (req: Request, res: Response) => {
   const job = getSubtitleOcrJob(req.params.jobId);
-  if (!job) return res.status(404).json({ error: "Không tìm thấy tác vụ OCR." });
+  if (!job)
+    return res.status(404).json({ error: "Không tìm thấy tác vụ OCR." });
   res.json({ success: true, job });
 });
 
-app.post("/api/subtitle-ocr/jobs/:jobId/cancel", (req: Request, res: Response) => {
-  const job = getSubtitleOcrJob(req.params.jobId);
-  if (!job) return res.status(404).json({ error: "Không tìm thấy tác vụ OCR." });
-  res.json({ success: cancelSubtitleOcrJob(req.params.jobId), job: getSubtitleOcrJob(req.params.jobId) });
-});
+app.post(
+  "/api/subtitle-ocr/jobs/:jobId/cancel",
+  (req: Request, res: Response) => {
+    const job = getSubtitleOcrJob(req.params.jobId);
+    if (!job)
+      return res.status(404).json({ error: "Không tìm thấy tác vụ OCR." });
+    res.json({
+      success: cancelSubtitleOcrJob(req.params.jobId),
+      job: getSubtitleOcrJob(req.params.jobId),
+    });
+  },
+);
 
 app.get("/api/bgm/models/status", (_req: Request, res: Response) => {
   try {
