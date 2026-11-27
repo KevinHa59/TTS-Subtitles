@@ -80,6 +80,18 @@ router.post("/", async (req, res) => {
           messages: [
             {
               role: "system",
+              content: `
+                Bạn là công cụ dịch subtitle.
+
+                OUTPUT FORMAT:
+                {id}|{translated_text}
+
+                Không được thay đổi format.
+                Không được bỏ id.
+                `,
+            },
+            {
+              role: "system",
               content: prompt,
             },
             {

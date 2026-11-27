@@ -8,12 +8,12 @@
   --panel-gap: 0px;
 
   /* Default Theme: Desktop Dark (Slate) */
-  --bg-app: #020617;        /* slate-950 */
-  --bg-header: #0f172a;     /* slate-900 */
-  --bg-panel: #0f172a;      /* slate-900 */
+  --bg-app: #020617; /* slate-950 */
+  --bg-header: #0f172a; /* slate-900 */
+  --bg-panel: #0f172a; /* slate-900 */
   --bg-panel-subtle: #0b1329;
   --bg-input: #020617;
-  --border-panel: #1e293b;  /* slate-800 */
+  --border-panel: #1e293b; /* slate-800 */
   --border-subtle: #334155;
   --text-primary: #f8fafc;
   --text-secondary: #94a3b8;
@@ -23,12 +23,12 @@
 
 [data-theme="desktop-zinc"],
 .theme-zinc {
-  --bg-app: #09090b;        /* zinc-950 */
-  --bg-header: #18181b;     /* zinc-900 */
-  --bg-panel: #18181b;      /* zinc-900 */
+  --bg-app: #09090b; /* zinc-950 */
+  --bg-header: #18181b; /* zinc-900 */
+  --bg-panel: #18181b; /* zinc-900 */
   --bg-panel-subtle: #121215;
   --bg-input: #09090b;
-  --border-panel: #27272a;  /* zinc-800 */
+  --border-panel: #27272a; /* zinc-800 */
   --border-subtle: #3f3f46;
   --text-primary: #f4f4f5;
   --text-secondary: #a1a1aa;
@@ -53,14 +53,14 @@
 
 [data-theme="desktop-light"],
 .theme-light {
-  --bg-app: #f1f5f9;        /* slate-100 */
-  --bg-header: #e2e8f0;     /* slate-200 */
+  --bg-app: #f1f5f9; /* slate-100 */
+  --bg-header: #e2e8f0; /* slate-200 */
   --bg-panel: #ffffff;
   --bg-panel-subtle: #f8fafc;
   --bg-input: #ffffff;
-  --border-panel: #cbd5e1;  /* slate-300 */
+  --border-panel: #cbd5e1; /* slate-300 */
   --border-subtle: #94a3b8;
-  --text-primary: #0f172a;  /* slate-900 */
+  --text-primary: #0f172a; /* slate-900 */
   --text-secondary: #475569;
   --text-muted: #64748b;
   --accent-amber: #d97706;
