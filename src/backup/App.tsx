@@ -101,6 +101,7 @@ import SrtFromTextPage from "./components/SrtFromTextPage";
 import JoinSplitVideoPage from "./components/JoinSplitVideoPage";
 import SubtitleTranslationSetupModal from "./components/SubtitleTranslationSetupModal";
 import FileTransferPage from "./components/FileTransferPage";
+import ThemePlayground from "./components/ThemePlayground";
 import { copyAudioToClipboard } from "./utils/clipboardAudio";
 import { useTheme } from "./context/ThemeContext";
 
@@ -140,7 +141,9 @@ type AppTab =
   | "srt-from-text"
   | "join-split-video"
   | "voice-effects"
-  | "file-transfer";
+  | "file-transfer"
+  | "theme-playground"
+  | "voice-blend";
 
 const DEFAULT_PRESETS: ProjectPreset[] = [
   {
@@ -197,6 +200,7 @@ export default function App() {
       if (path === "/story") return "story";
       if (path === "/bgm") return "bgm";
       if (path === "/single") return "single";
+      if (path === "/voice-blend") return "voice-blend";
     }
     return "subtitles";
   };
@@ -236,7 +240,9 @@ export default function App() {
                             ? "/bgm"
                             : tab === "single"
                               ? "/single"
-                              : "/";
+                              : tab === "theme-playground"
+                                ? "/theme-playground"
+                                : "/";
       if (window.location.pathname !== path) {
         window.history.pushState({}, "", path);
       }
@@ -256,6 +262,7 @@ export default function App() {
       else if (path === "/story") setActiveTab("story");
       else if (path === "/bgm") setActiveTab("bgm");
       else if (path === "/single") setActiveTab("single");
+      else if (path === "/theme-playground") setActiveTab("theme-playground");
       else setActiveTab("subtitles");
     };
     window.addEventListener("popstate", handlePopState);
@@ -2389,6 +2396,7 @@ export default function App() {
                 </span>
               </span>
             </button>
+
             <div className="my-2 border-t border-slate-800" />
             <div className="px-3 pb-1 text-[10px] font-bold uppercase tracking-wider text-slate-500">
               Tiện ích
@@ -4717,6 +4725,11 @@ export default function App() {
             <JoinSplitVideoPage />
           </div>
         )}
+        {activeTab === "theme-playground" && (
+          <div className="flex-1 min-h-0 w-full overflow-hidden flex flex-col">
+            theme playground
+          </div>
+        )}
         {activeTab === "voice-effects" && (
           <div className="flex-1 min-h-0 w-full overflow-hidden flex flex-col">
             <React.Suspense
@@ -4730,6 +4743,7 @@ export default function App() {
             </React.Suspense>
           </div>
         )}
+
         <div
           className={
             activeTab === "video-dubbing"

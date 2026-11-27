@@ -34,6 +34,8 @@ export default function App() {
       if (path === "/story") return "story";
       if (path === "/bgm") return "bgm";
       if (path === "/single") return "single";
+      if (path === "/theme-playground") return "theme-playground";
+      if (path === "/voice-blend") return "voice-blend";
     }
     return "subtitles";
   };
@@ -69,7 +71,11 @@ export default function App() {
                             ? "/bgm"
                             : tab === "single"
                               ? "/single"
-                              : "/";
+                              : tab === "theme-playground"
+                                ? "/theme-playground"
+                                : tab === "voice-blend"
+                                  ? "/voice-blend"
+                                  : "/";
       if (window.location.pathname !== path) {
         window.history.pushState({}, "", path);
       }
@@ -88,6 +94,8 @@ export default function App() {
       else if (path === "/story") setActiveTab("story");
       else if (path === "/bgm") setActiveTab("bgm");
       else if (path === "/single") setActiveTab("single");
+      else if (path === "/theme-playground") setActiveTab("theme-playground");
+      else if (path === "/voice-blend") setActiveTab("voice-blend");
       else setActiveTab("subtitles");
     };
     window.addEventListener("popstate", handlePopState);

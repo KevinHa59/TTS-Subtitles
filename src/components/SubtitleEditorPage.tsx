@@ -2205,6 +2205,7 @@ export default function SubtitleEditorPage({
               updateCue={updateCue}
               addSubtitleCue={addSubtitleCue}
               translationInProgress={translationInProgress}
+              onRawClick={setRawDialogOpen}
             />
           </div>
 

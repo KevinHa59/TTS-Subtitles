@@ -26,7 +26,7 @@ export const LOCAL_MODEL_FILES: Record<string, string | string[]> = {
   "local:banmai": "banmai.onnx",
   "local:thanh-nien-tu-tin-vietnamese-vi-medium":
     "thanh-nien-tu-tin-vietnamese-vi-medium.onnx",
-  "local:vietthao3886": "vietthao3886.onnx",
+  "local:vietthao3886": "viet-thao-vietnamese-vi-medium.onnx.json",
   "local:huyenngoc-vietnamese-vi-medium-ljkjhi": [
     "huyenngoc-vietnamese-vi-medium-ljkjhi.onnx",
     "voices_huyenngoc.onnx",

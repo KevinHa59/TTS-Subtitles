@@ -148,6 +148,7 @@ import {
 } from "./fileTransferManager";
 import freeLLMAPIchatRoutes from "./src/routes/freellmapi-chat";
 import freeLLMAPItranlationRoutes from "./src/routes/freellmapi-translation";
+import voiceBlend from "./src/routes/voice-blend";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -369,6 +370,7 @@ app.use(express.json({ limit: "150mb" }));
 app.use(express.urlencoded({ extended: true, limit: "150mb" }));
 app.use("/api/free-llm-chat", freeLLMAPIchatRoutes);
 app.use("/api/free-llm-translation", freeLLMAPItranlationRoutes);
+app.use("/api/voice-blend", voiceBlend);
 const MODELS_DIR = path.resolve(__dirname, "models");
 if (!fs.existsSync(MODELS_DIR)) {
   fs.mkdirSync(MODELS_DIR, { recursive: true });

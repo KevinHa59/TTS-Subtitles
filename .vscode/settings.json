@@ -1,3 +1,6 @@
 {
-  "python.terminal.useEnvFile": true
+  "python.terminal.useEnvFile": true,
+  "editor.suggest.showWords": false,
+  "javascript.suggest.autoImports": true,
+  "typescript.suggest.autoImports": true
 }

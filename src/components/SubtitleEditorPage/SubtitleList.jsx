@@ -1,5 +1,5 @@
 import { Captions, Plus, Subtitles } from "lucide-react";
-
+import { Button, Paper, Typography } from "@mui/material";
 export default function SubtitleList({
   selectedItem,
   subtitleListRef,
@@ -9,15 +9,43 @@ export default function SubtitleList({
   updateCue,
   addSubtitleCue,
   translationInProgress,
+  onRawClick,
 }) {
   return (
-    <div className="w-[48%] lg:w-[50%] min-w-[340px] max-w-[760px] h-full flex flex-col overflow-hidden bg-slate-950">
+    <Paper
+      elevation={0}
+      sx={{
+        width: {
+          xs: "100%",
+          lg: "50%",
+        },
+        minWidth: 340,
+        maxWidth: 760,
+        height: "100%",
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden",
+        // bgcolor: "#020617", // slate-950
+      }}
+    >
+      {/* <div className="w-[48%] lg:w-[50%] min-w-[340px] max-w-[760px] h-full flex flex-col overflow-hidden bg-slate-950"> */}
       {/* Header */}
       <div className="h-8 px-2.5 shrink-0 flex items-center justify-between border-b border-slate-800 bg-slate-900/80">
         <div className="flex items-center gap-1.5 min-w-0">
-          <span className="text-[10px] font-bold text-white uppercase tracking-wide truncate">
+          <Typography
+            sx={{
+              textTransform: "uppercase",
+              fontWeight: 600,
+              fontSize: 12,
+              color: "text.secondary",
+            }}
+          >
+            {" "}
             Danh sách phụ đề
-          </span>
+          </Typography>
+          {/* <span className="text-[10px] font-bold text-white uppercase tracking-wide truncate">
+           
+          </span> */}
           {selectedItem && (
             <span className="border border-slate-700 px-1 text-[9px] font-mono text-cyan-300">
               {selectedItem.cues.length}
@@ -25,18 +53,27 @@ export default function SubtitleList({
           )}
         </div>
         <div className="flex items-center gap-1 shrink-0">
-          <button
-            type="button"
-            onClick={() => setRawDialogOpen(true)}
+          <Button
+            onClick={() => onRawClick(true)}
             disabled={!selectedItem}
-            title="Mở bảng chỉnh sửa SRT Raw"
-            className="border border-slate-700 bg-slate-800/80 px-2 py-0.5 text-[9px] font-semibold text-slate-300 hover:bg-slate-700 hover:text-white disabled:opacity-40 cursor-pointer flex items-center gap-1"
+            variant="outlined"
+            size="small"
+            startIcon={<Subtitles className="h-2.5 w-2.5 text-violet-300" />}
           >
-            <Subtitles className="h-2.5 w-2.5 text-violet-300" />
             Raw
-          </button>
-
-          <button
+          </Button>
+          <Button
+            onClick={addSubtitleCue}
+            disabled={!selectedItem?.video}
+            variant="outlined"
+            color="secondary"
+            size="small"
+            startIcon={<Plus className="h-2.5 w-2.5 text-violet-300" />}
+          >
+            {/* <Subtitles className="h-2.5 w-2.5 text-violet-300" /> */}
+            Thêm
+          </Button>
+          {/* <button
             type="button"
             onClick={addSubtitleCue}
             disabled={!selectedItem?.video}
@@ -45,7 +82,7 @@ export default function SubtitleList({
           >
             <Plus className="h-2.5 w-2.5" />
             Thêm
-          </button>
+          </button> */}
         </div>
       </div>
 
@@ -196,6 +233,7 @@ export default function SubtitleList({
           </div>
         </div>
       )}
-    </div>
+      {/* </div> */}
+    </Paper>
   );
 }

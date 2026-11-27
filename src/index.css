@@ -249,9 +249,9 @@ dialog,
 }
 
 /* Enforce border-radius: 0 on all rounded utility classes */
-[class*="rounded"] {
+/* [class*="rounded"] {
   border-radius: 0 !important;
-}
+} */
 
 /* Modal dialogs, dropdowns, and overlays */
 .modal,
@@ -264,12 +264,12 @@ dialog,
 }
 
 /* Buttons and inputs inside desktop app panels */
-button,
+/* button,
 input,
 select,
 textarea {
   border-radius: 0 !important;
-}
+} */
 
 /* Remove floating card drop shadows for clean flat docked desktop aesthetic */
 [class*="shadow-2xl"],

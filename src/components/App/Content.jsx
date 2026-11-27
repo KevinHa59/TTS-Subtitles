@@ -8,9 +8,11 @@ import SubtitleEditorPage from "../SubtitleEditorPage";
 import SrtFromTextPage from "../SrtFromTextPage";
 import JoinSplitVideoPage from "../JoinSplitVideoPage";
 import FileTransferPage from "../FileTransferPage";
+import ThemePlayground from "../ThemePlayground";
 import { VoiceEffectsPage } from "./constants";
 import SingleTtsTab from "./SingleTtsTab";
 import SubtitlesTab from "./SubtitlesTab";
+import VoiceBlend from "../VoiceBlend";
 
 export default function Content({
   activeJob,
@@ -310,6 +312,16 @@ export default function Content({
       {activeTab === "file-transfer" && (
         <div className="flex-1 min-h-0 w-full overflow-y-auto">
           <FileTransferPage />
+        </div>
+      )}
+      {activeTab === "theme-playground" && (
+        <div className="flex-1 min-h-0 w-full overflow-hidden flex flex-col">
+          <ThemePlayground />
+        </div>
+      )}
+      {activeTab === "voice-blend" && (
+        <div className="flex-1 min-h-0 w-full overflow-hidden flex flex-col">
+          <VoiceBlend />
         </div>
       )}
       {activeTab === "join-split-video" && (
