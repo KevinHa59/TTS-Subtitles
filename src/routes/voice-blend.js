@@ -122,4 +122,30 @@ router.post("/tts", async (req, res) => {
   return forward(res, "/tts", jsonInit("POST", req.body));
 });
 
+// multipart: file (audio nguồn từ hệ thống TTS) + profile_id hoặc blend + keep_norm -> audio/wav
+router.post("/convert", uploadSingle, async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ detail: "Thiếu file audio nguồn." });
+  }
+  const profileId = String(req.body?.profile_id ?? "").trim();
+  const blend = String(req.body?.blend ?? "").trim();
+  if (!profileId && !blend) {
+    return res.status(400).json({ detail: "Thiếu profile_id hoặc blend." });
+  }
+
+  const form = new FormData();
+  form.append(
+    "file",
+    new Blob([req.file.buffer], { type: req.file.mimetype || "audio/wav" }),
+    req.file.originalname || "source.wav",
+  );
+  if (profileId) form.append("profile_id", profileId);
+  if (blend) form.append("blend", blend);
+  if (req.body?.keep_norm !== undefined) {
+    form.append("keep_norm", String(req.body.keep_norm));
+  }
+
+  return forward(res, "/convert", { method: "POST", body: form });
+});
+
 export default router;

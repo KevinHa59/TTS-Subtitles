@@ -12,7 +12,21 @@ const API =
   (import.meta.env.VITE_VOICE_API as string | undefined) ?? "/api/voice-blend";
 const LAST_KEY = "ov_last_profile";
 
-type Voice = { id: string; name: string };
+type SystemVoice = {
+  id: string;
+  modelId: string;
+  speakerId?: number;
+  name: string;
+  gender?: string;
+  tag?: string;
+};
+
+type VoiceBlendProps = {
+  selectedVoice?: SystemVoice;
+  voices?: SystemVoice[];
+  onOpenVoiceModal?: () => void;
+};
+
 type BlendSource = { id: string; weight: number };
 type Profile = {
   id: string;
@@ -76,12 +90,14 @@ const row: CSSProperties = {
   marginBottom: 8,
 };
 
-export default function VoiceTest() {
+export default function VoiceTest({
+  selectedVoice,
+  voices = [],
+  onOpenVoiceModal,
+}: VoiceBlendProps) {
   const [healthOk, setHealthOk] = useState<boolean | null>(null);
   const [healthText, setHealthText] = useState("đang kiểm tra...");
-  const [voices, setVoices] = useState<Voice[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
-  const [voiceId, setVoiceId] = useState("");
   const [profileId, setProfileId] = useState("");
 
   const [text, setText] = useState(
@@ -89,6 +105,7 @@ export default function VoiceTest() {
   );
   const [speed, setSpeed] = useState(1);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [originalAudioBlob, setOriginalAudioBlob] = useState<Blob | null>(null);
   const [elapsed, setElapsed] = useState<number | null>(null);
 
   // const [file, setFile] = useState<File | null>(null);
@@ -162,9 +179,6 @@ export default function VoiceTest() {
         return;
       }
       try {
-        const v = await api<Voice[]>("/voices");
-        setVoices(v);
-        setVoiceId((prev) => prev || v[0]?.id || "");
         await refreshProfiles();
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
@@ -201,23 +215,97 @@ export default function VoiceTest() {
   //     setNewName("");
   //   });
 
+  async function synthesizeBaseAudio(): Promise<Blob> {
+    if (!selectedVoice?.modelId) {
+      throw new Error("Chưa chọn giọng đọc nguồn.");
+    }
+    const ttsRes = await fetch("/api/tts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        text: text.trim(),
+        model: selectedVoice.modelId,
+        speakerId: selectedVoice.speakerId,
+        speed,
+        format: "wav",
+      }),
+    });
+    const data = await ttsRes.json().catch(() => ({}));
+    if (!ttsRes.ok) {
+      throw new Error(data?.error || `${ttsRes.status} ${ttsRes.statusText}`);
+    }
+    const byteCharacters = atob(data.audioBase64);
+    const byteNumbers = new Array(byteCharacters.length);
+    for (let i = 0; i < byteCharacters.length; i++) {
+      byteNumbers[i] = byteCharacters.charCodeAt(i);
+    }
+    return new Blob([new Uint8Array(byteNumbers)], {
+      type: data.mimeType || "audio/wav",
+    });
+  }
+
+  async function convertAudio(
+    baseBlob: Blob,
+    options: { profileId?: string; blend?: Array<{ profile_id: string; weight: number }>; keepNorm?: boolean },
+  ): Promise<Blob> {
+    const fd = new FormData();
+    fd.append("file", baseBlob, "source.wav");
+    if (options.profileId) {
+      fd.append("profile_id", options.profileId);
+    }
+    if (options.blend) {
+      fd.append("blend", JSON.stringify(options.blend));
+      fd.append("keep_norm", String(Boolean(options.keepNorm)));
+    }
+    const res = await fetch(`${API}/convert`, {
+      method: "POST",
+      body: fd,
+    });
+    if (!res.ok) throw new Error(await errorMessage(res));
+    return await res.blob();
+  }
+
   const generate = () =>
     run("Đang tạo giọng...", async () => {
       if (!profileId) throw new Error("Chưa chọn giọng tham chiếu.");
       if (!text.trim()) throw new Error("Hãy nhập văn bản.");
       const t0 = performance.now();
-      const res = await fetch(`${API}/tts`, {
-        ...jsonInit("POST", {
-          text,
-          profile_id: profileId,
-          voice: voiceId,
-          speed,
-        }),
-      });
-      if (!res.ok) throw new Error(await errorMessage(res));
-      const blob = await res.blob();
-      setAudioUrl(URL.createObjectURL(blob));
+      setOriginalAudioBlob(null);
+      const baseBlob = await synthesizeBaseAudio();
+      const convertedBlob = await convertAudio(baseBlob, { profileId });
+      setAudioUrl(URL.createObjectURL(convertedBlob));
       setElapsed((performance.now() - t0) / 1000);
+    });
+
+  const generateOriginal = () =>
+    run("Đang tạo giọng gốc...", async () => {
+      if (!text.trim()) throw new Error("Hãy nhập văn bản.");
+      const t0 = performance.now();
+      const baseBlob = await synthesizeBaseAudio();
+      setOriginalAudioBlob(baseBlob);
+      setAudioUrl(URL.createObjectURL(baseBlob));
+      setElapsed((performance.now() - t0) / 1000);
+    });
+
+  const saveAsReference = () =>
+    run("Đang lưu giọng tham chiếu...", async () => {
+      if (!originalAudioBlob) {
+        throw new Error("Hãy tạo giọng gốc (Generate Original) trước.");
+      }
+      const defaultName =
+        newName.trim() ||
+        `${selectedVoice?.name || "Original"} (${speed.toFixed(2)}x)`;
+      const entered = window.prompt("Tên giọng tham chiếu:", defaultName);
+      if (entered === null) return;
+      const fd = new FormData();
+      fd.append("file", originalAudioBlob, "original.wav");
+      fd.append("name", entered.trim());
+      const r = await api<{ profile_id: string; name: string }>("/profiles", {
+        method: "POST",
+        body: fd,
+      });
+      await refreshProfiles(r.profile_id);
+      setInfo(`Đã lưu giọng tham chiếu "${r.name}".`);
     });
 
   const blendItems = () => [
@@ -234,18 +322,12 @@ export default function VoiceTest() {
       if (!text.trim())
         throw new Error("Hãy nhập văn bản ở mục 2 để nghe thử.");
       const t0 = performance.now();
-      const res = await fetch(
-        `${API}/tts`,
-        jsonInit("POST", {
-          text,
-          voice: voiceId,
-          speed,
-          blend: blendItems(),
-          keep_norm: keepNorm,
-        }),
-      );
-      if (!res.ok) throw new Error(await errorMessage(res));
-      setPreviewUrl(URL.createObjectURL(await res.blob()));
+      const baseBlob = await synthesizeBaseAudio();
+      const convertedBlob = await convertAudio(baseBlob, {
+        blend: blendItems(),
+        keepNorm,
+      });
+      setPreviewUrl(URL.createObjectURL(convertedBlob));
       setPreviewElapsed((performance.now() - t0) / 1000);
     });
 
@@ -316,16 +398,19 @@ export default function VoiceTest() {
         <TTSVoice
           disabled={disabled}
           voices={voices}
-          voiceId={voiceId}
+          selectedVoice={selectedVoice}
           speed={speed}
           text={text}
           profileId={profileId}
           audioUrl={audioUrl}
           elapsed={elapsed}
-          onVoiceChange={setVoiceId}
+          canSaveReference={Boolean(originalAudioBlob)}
+          onOpenVoiceModal={onOpenVoiceModal}
           onSpeedChange={setSpeed}
           onTextChange={setText}
           onGenerate={generate}
+          onGenerateOriginal={generateOriginal}
+          onSaveAsReference={saveAsReference}
         />
         <BlendVoices
           disabled={disabled}

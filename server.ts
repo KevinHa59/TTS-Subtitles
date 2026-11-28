@@ -371,6 +371,26 @@ app.use(express.urlencoded({ extended: true, limit: "150mb" }));
 app.use("/api/free-llm-chat", freeLLMAPIchatRoutes);
 app.use("/api/free-llm-translation", freeLLMAPItranlationRoutes);
 app.use("/api/voice-blend", voiceBlend);
+
+app.post("/api/theme", async (req: Request, res: Response) => {
+  try {
+    const { code } = req.body ?? {};
+    if (
+      typeof code !== "string" ||
+      !code.includes("createTheme(") ||
+      !code.includes("export default theme") ||
+      code.length > 100_000
+    ) {
+      return res.status(400).json({ error: "Nội dung theme.js không hợp lệ." });
+    }
+    const themePath = path.resolve(__dirname, "src", "theme.js");
+    await fs.promises.writeFile(themePath, code, "utf8");
+    return res.json({ success: true });
+  } catch (error: any) {
+    console.error("[Theme] Save error:", error);
+    return res.status(500).json({ error: error?.message || "Không thể lưu src/theme.js." });
+  }
+});
 const MODELS_DIR = path.resolve(__dirname, "models");
 if (!fs.existsSync(MODELS_DIR)) {
   fs.mkdirSync(MODELS_DIR, { recursive: true });

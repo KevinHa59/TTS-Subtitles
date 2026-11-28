@@ -24,7 +24,7 @@ function containsNonAlphabet(text: string): boolean {
   return /(?!\p{Script=Latin})\p{L}/u.test(text);
 }
 
-function getTextSimilarity(firstText: string, secondText: string): number {
+export function getTextSimilarity(firstText: string, secondText: string): number {
   const first = normalizeForSimilarity(firstText);
   const second = normalizeForSimilarity(secondText);
   const longestLength = Math.max(first.length, second.length);
@@ -114,4 +114,24 @@ export function filterSubtitleAudioItems<
   }
 
   return filtered;
+}
+
+export function mergeSimilarAdjacentCues<
+  T extends { text: string; startTime: number; endTime: number },
+>(cues: readonly T[], threshold = 0.8): T[] {
+  if (cues.length <= 1) return [...cues];
+  const merged: T[] = [{ ...cues[0] }];
+  for (let index = 1; index < cues.length; index += 1) {
+    const prev = merged[merged.length - 1];
+    const curr = cues[index];
+    if (getTextSimilarity(prev.text, curr.text) > threshold) {
+      merged[merged.length - 1] = {
+        ...prev,
+        endTime: Math.max(prev.endTime, curr.endTime),
+      };
+    } else {
+      merged.push({ ...curr });
+    }
+  }
+  return merged;
 }

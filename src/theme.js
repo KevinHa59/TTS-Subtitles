@@ -4,56 +4,56 @@ const theme = createTheme({
   palette: {
     mode: "dark",
     primary: {
-      main: "#8b5cf6",
+      main: "#5fd8f7"
     },
     secondary: {
-      main: "#06b6d4",
+      main: "#bdbdbd"
     },
     error: {
-      main: "#ef4444",
+      main: "#ef4444"
     },
     warning: {
-      main: "#f59e0b",
+      main: "#f59e0b"
     },
     info: {
-      main: "#3b82f6",
+      main: "#e0e8f5"
     },
     success: {
-      main: "#22c55e",
+      main: "#22c55e"
     },
     background: {
-      default: "#020617",
-      paper: "#0f172a",
-    },
+      default: "#0a0a0a",
+      paper: "#212121"
+    }
   },
   shape: {
-    borderRadius: 15,
+    borderRadius: 8
   },
   spacing: 8,
   typography: {
     fontFamily: "'IBM Plex Sans', Helvetica, Arial, sans-serif",
     fontSize: 14,
     button: {
-      textTransform: "none",
-    },
+      textTransform: "none"
+    }
   },
   components: {
     MuiButton: {
       defaultProps: {
-        disableElevation: true,
-      },
+        disableElevation: true
+      }
     },
     MuiPaper: {
       defaultProps: {
-        elevation: 0,
+        elevation: 0
       },
       styleOverrides: {
         root: {
-          border: "1px solid rgba(255,255,255,0.12)",
-        },
-      },
-    },
-  },
+          border: "1px solid rgba(255,255,255,0.12)"
+        }
+      }
+    }
+  }
 });
 
 export default theme;

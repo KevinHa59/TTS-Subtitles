@@ -16,6 +16,8 @@ const getInitials = (name) => {
 };
 
 import AudioDropZone from "../customs/AudioDropZone";
+import AudioTrimModal from "./AudioTrimModal";
+import { Scissors } from "lucide-react";
 import {
   Button,
   TextField,
@@ -34,6 +36,27 @@ import {
 const API = import.meta.env.VITE_VOICE_API ?? "/api/voice-blend";
 
 const LAST_KEY = "ov_last_profile";
+
+async function errorMessage(res) {
+  try {
+    const j = await res.json();
+    if (typeof j.detail === "string") return j.detail;
+    if (Array.isArray(j.detail)) {
+      // Lỗi xác thực của FastAPI: hiện cả tên trường bị thiếu/sai, ví dụ "profile_id: Field required"
+      return j.detail
+        .map((d) => {
+          const where = Array.isArray(d.loc)
+            ? d.loc.filter((x) => x !== "body").join(".")
+            : "";
+          return where ? `${where}: ${d.msg ?? ""}` : (d.msg ?? "");
+        })
+        .join("; ");
+    }
+  } catch {
+    /* không phải JSON */
+  }
+  return `${res.status} ${res.statusText}`;
+}
 
 async function api(path, init) {
   const res = await fetch(`${API}${path}`, init);
@@ -56,6 +79,8 @@ export default function ReferenceVoice({
   refreshProfiles,
 }) {
   const [file, setFile] = useState(null);
+  const [trimFile, setTrimFile] = useState(null);
+  const MAX_REFERENCE_SIZE = 25 * 1024 * 1024; // 25MB, khớp MAX_UPLOAD backend
 
   const upload = () =>
     run("Đang trích âm sắc...", async () => {
@@ -73,16 +98,12 @@ export default function ReferenceVoice({
       setNewName("");
     });
 
-  const handleFileSelect = (file) => {
-    console.log("File đã chọn:", file);
-    setFile(file);
-    // Xử lý upload, preview, v.v.
-    const url = URL.createObjectURL(file);
-    console.log("Preview URL:", url);
+  const handleFileSelect = (selectedFile) => {
+    setFile(selectedFile);
   };
 
   const handleFileClear = () => {
-    console.log("File đã bị xóa");
+    setFile(null);
   };
 
   return (
@@ -92,10 +113,33 @@ export default function ReferenceVoice({
           Tạo giọng tham chiếu
         </Typography>
         <AudioDropZone
+          externalFile={file}
           onFileSelect={handleFileSelect}
           onFileClear={handleFileClear}
+          onFileTooLarge={(oversizedFile) => setTrimFile(oversizedFile)}
           label="Kéo thả file audio vào đây"
-          maxFileSize={30 * 1024 * 1024} // 30MB
+          maxFileSize={MAX_REFERENCE_SIZE}
+        />
+        {file && (
+          <Button
+            size="small"
+            variant="text"
+            startIcon={<Scissors size={14} />}
+            onClick={() => setTrimFile(file)}
+            sx={{ alignSelf: "flex-start" }}
+          >
+            Cắt audio này
+          </Button>
+        )}
+        <AudioTrimModal
+          open={Boolean(trimFile)}
+          file={trimFile}
+          maxFileSize={MAX_REFERENCE_SIZE}
+          onClose={() => setTrimFile(null)}
+          onConfirm={(trimmed) => {
+            setFile(trimmed);
+            setTrimFile(null);
+          }}
         />
         <Stack direction={"row"} sx={{ gap: 1 }}>
           <TextField

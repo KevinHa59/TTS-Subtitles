@@ -22,9 +22,10 @@ import {
   Zap, // for Gemini/AI indicator
   Cpu, // for FreeLLM indicator
   Globe, // for language detection
-  RefreshCw, // for auto-detect
+  RefreshCw,
+  Divide, // for auto-detect
 } from "lucide-react";
-import SubtitleTimeline from "./SubtitleTimeline";
+import SubtitleTimeline from "./SubtitleEditorPage/SubtitleTimeline";
 import {
   applyRawSubtitleText,
   createSubtitleCueAtTime,
@@ -33,6 +34,11 @@ import {
   type EditableSubtitleCue,
 } from "../utils/subtitleEditor";
 import SubtitleList from "./SubtitleEditorPage/SubtitleList";
+import VideoPreview from "./SubtitleEditorPage/VideoPreview";
+import { Divider, Paper, Stack } from "@mui/material";
+import VideoList from "./SubtitleEditorPage/VideoList";
+import SubtitleController from "./SubtitleEditorPage/SubtitleController";
+import { mergeSimilarAdjacentCues } from "../utils/subtitleAudioFilters";
 
 type VideoSubtitleStatus =
   | "missing-subtitle"
@@ -378,6 +384,9 @@ export default function SubtitleEditorPage({
   const [videoAspectRatio, setVideoAspectRatio] = useState(16 / 9);
   const [videoDuration, setVideoDuration] = useState(0);
   const [videoCurrentTime, setVideoCurrentTime] = useState(0);
+  const [timelineFps, setTimelineFps] = useState(60);
+  const timelineFpsRef = useRef(timelineFps);
+  timelineFpsRef.current = timelineFps;
   const [videoPaused, setVideoPaused] = useState(true);
   const [activeCueIndex, setActiveCueIndex] = useState(-1);
   const activeCueIndexRef = useRef(-1);
@@ -553,41 +562,78 @@ export default function SubtitleEditorPage({
       }
     };
 
+    let lastFrameAt = 0;
+    let lastMediaTime = video.currentTime;
+    let lastMediaPerfNow = performance.now();
+
+    const syncClock = (time: number) => {
+      lastMediaTime = time;
+      lastMediaPerfNow = performance.now();
+      setVideoCurrentTime(time);
+      updateActiveCue(time);
+    };
+
     const scheduleVideoFrame = () => {
       if (disposed || video.paused || video.ended) return;
-      if (video.requestVideoFrameCallback) {
-        frameCallbackId = video.requestVideoFrameCallback((_now, metadata) => {
-          updateActiveCue(metadata.mediaTime);
-          scheduleVideoFrame();
-        });
-      } else {
-        animationFrameId = window.requestAnimationFrame(() => {
-          updateActiveCue(video.currentTime);
-          scheduleVideoFrame();
-        });
-      }
+      animationFrameId = window.requestAnimationFrame((now) => {
+        if (disposed || video.paused || video.ended) return;
+        const fps = Math.max(1, Math.min(120, timelineFpsRef.current || 60));
+        const minInterval = 1000 / fps;
+        if (fps >= 60 || now - lastFrameAt >= minInterval) {
+          lastFrameAt = now;
+          const rawTime = video.currentTime;
+          let displayTime = rawTime;
+          if (rawTime !== lastMediaTime) {
+            lastMediaTime = rawTime;
+            lastMediaPerfNow = now;
+          } else {
+            const deltaSec =
+              ((now - lastMediaPerfNow) / 1000) * (video.playbackRate || 1);
+            const maxTime =
+              Number.isFinite(video.duration) && video.duration > 0
+                ? video.duration
+                : Infinity;
+            displayTime = Math.min(
+              maxTime,
+              lastMediaTime + Math.min(Math.max(0, deltaSec), 0.35),
+            );
+          }
+          // Chỉ cập nhật activeCue (chỉ setState khi thực sự sang câu mới);
+          // không gọi setVideoCurrentTime khi đang play để tránh re-render toàn trang.
+          updateActiveCue(displayTime);
+        }
+        scheduleVideoFrame();
+      });
     };
 
     const onVideoTimeEvent = () => {
-      setVideoCurrentTime(video.currentTime);
-      updateActiveCue(video.currentTime);
+      if (!video.paused && !video.ended) {
+        lastMediaTime = video.currentTime;
+        lastMediaPerfNow = performance.now();
+        updateActiveCue(video.currentTime);
+        return;
+      }
+      syncClock(video.currentTime);
     };
     const onPlay = () => {
       setVideoPaused(false);
-      setVideoCurrentTime(video.currentTime);
+      lastMediaTime = video.currentTime;
+      lastMediaPerfNow = performance.now();
       updateActiveCue(video.currentTime);
       scheduleVideoFrame();
     };
-    const onPause = () => setVideoPaused(true);
+    const onPause = () => {
+      setVideoPaused(true);
+      syncClock(video.currentTime);
+    };
 
     video.addEventListener("timeupdate", onVideoTimeEvent);
     video.addEventListener("seeked", onVideoTimeEvent);
     video.addEventListener("loadeddata", onVideoTimeEvent);
     video.addEventListener("play", onPlay);
+    video.addEventListener("playing", onPlay);
     video.addEventListener("pause", onPause);
-    video.addEventListener("pause", onVideoTimeEvent);
-    setVideoCurrentTime(video.currentTime);
-    updateActiveCue(video.currentTime);
+    syncClock(video.currentTime);
     if (!video.paused) scheduleVideoFrame();
 
     return () => {
@@ -596,8 +642,8 @@ export default function SubtitleEditorPage({
       video.removeEventListener("seeked", onVideoTimeEvent);
       video.removeEventListener("loadeddata", onVideoTimeEvent);
       video.removeEventListener("play", onPlay);
+      video.removeEventListener("playing", onPlay);
       video.removeEventListener("pause", onPause);
-      video.removeEventListener("pause", onVideoTimeEvent);
       if (frameCallbackId !== null)
         video.cancelVideoFrameCallback?.(frameCallbackId);
       if (animationFrameId !== null)
@@ -764,6 +810,119 @@ export default function SubtitleEditorPage({
       error: undefined,
     }));
     setBatchMessage("");
+  };
+
+  const adjustActiveCueAfterRemove = (
+    removedIndex: number,
+    nextLength: number,
+  ) => {
+    setActiveCueIndex((current) => {
+      if (nextLength === 0) return 0;
+      if (current === removedIndex) {
+        return Math.max(0, removedIndex - 1);
+      }
+      if (current > removedIndex) {
+        return current - 1;
+      }
+      return Math.min(current, nextLength - 1);
+    });
+  };
+
+  const mergeCueAbove = (itemId: string, cueIndex: number) => {
+    if (cueIndex <= 0) return;
+    const target = items.find((item) => item.id === itemId);
+    if (!target || cueIndex >= target.cues.length) return;
+    const above = target.cues[cueIndex - 1];
+    const current = target.cues[cueIndex];
+    const nextCues = target.cues
+      .filter((_, idx) => idx !== cueIndex)
+      .map((cue, idx) =>
+        idx === cueIndex - 1
+          ? { ...cue, endTime: Math.max(above.endTime, current.endTime) }
+          : cue,
+      );
+    applyRawSubtitles(nextCues);
+    if (selectedItem?.id === itemId) {
+      adjustActiveCueAfterRemove(cueIndex, nextCues.length);
+    }
+  };
+
+  const joinCueAbove = (itemId: string, cueIndex: number) => {
+    if (cueIndex <= 0) return;
+    const target = items.find((item) => item.id === itemId);
+    if (!target || cueIndex >= target.cues.length) return;
+    const above = target.cues[cueIndex - 1];
+    const current = target.cues[cueIndex];
+    const joinedText = [above.text, current.text]
+      .map((t) => t.trim())
+      .filter(Boolean)
+      .join(" ");
+    const joinedTranslated = [above.translatedText, current.translatedText]
+      .map((t) => (t || "").trim())
+      .filter(Boolean)
+      .join(" ");
+    const nextCues = target.cues
+      .filter((_, idx) => idx !== cueIndex)
+      .map((cue, idx) =>
+        idx === cueIndex - 1
+          ? {
+              ...cue,
+              endTime: Math.max(above.endTime, current.endTime),
+              text: joinedText,
+              translatedText: joinedTranslated,
+            }
+          : cue,
+      );
+    applyRawSubtitles(nextCues);
+    if (selectedItem?.id === itemId) {
+      adjustActiveCueAfterRemove(cueIndex, nextCues.length);
+    }
+  };
+
+  const deleteCue = (itemId: string, cueIndex: number) => {
+    const target = items.find((item) => item.id === itemId);
+    if (!target || cueIndex < 0 || cueIndex >= target.cues.length) return;
+    const nextCues = target.cues.filter((_, idx) => idx !== cueIndex);
+    applyRawSubtitles(nextCues);
+    if (selectedItem?.id === itemId) {
+      adjustActiveCueAfterRemove(cueIndex, nextCues.length);
+    }
+  };
+
+  const removeNonLetterCues = (itemId: string) => {
+    const target = items.find((item) => item.id === itemId);
+    if (!target || !target.cues.length) return;
+    const nextCues = target.cues.filter((cue) => /\p{L}/u.test(cue.text || ""));
+    const removedCount = target.cues.length - nextCues.length;
+    if (removedCount === 0) {
+      setBatchMessage("Không có câu nào không chứa chữ.");
+      return;
+    }
+    applyRawSubtitles(nextCues);
+    if (selectedItem?.id === itemId) {
+      setActiveCueIndex((current) =>
+        nextCues.length === 0 ? 0 : Math.min(current, nextCues.length - 1),
+      );
+    }
+    setBatchMessage(`Đã xóa ${removedCount} câu không chứa chữ.`);
+  };
+
+  const quickMergeSimilarCues = (itemId: string) => {
+    const target = items.find((item) => item.id === itemId);
+    if (!target || target.cues.length <= 1) return;
+    const nextCues = mergeSimilarAdjacentCues(target.cues, 0.8);
+    const mergedCount = target.cues.length - nextCues.length;
+    if (mergedCount === 0) {
+      setBatchMessage("Không có câu liền kề nào giống nhau trên 80%.");
+      return;
+    }
+    applyRawSubtitles(nextCues);
+    if (selectedItem?.id === itemId) {
+      setActiveCueIndex((current) =>
+        nextCues.length === 0 ? 0 : Math.min(current, nextCues.length - 1),
+      );
+    }
+    setBatchMessage(`Đã gộp nhanh ${mergedCount} câu lặp liền kề.`);
   };
 
   const openPromptDialog = async () => {
@@ -1346,9 +1505,10 @@ export default function SubtitleEditorPage({
 
   const addSubtitleCue = () => {
     if (!selectedItem) return;
+    const currentVideoTime = videoRef.current?.currentTime ?? videoCurrentTime;
     const created = createSubtitleCueAtTime(
       selectedItem.cues,
-      videoCurrentTime,
+      currentVideoTime,
     );
     if (!created) {
       setBatchMessage(
@@ -1435,7 +1595,7 @@ export default function SubtitleEditorPage({
   ).length;
 
   return (
-    <div className="w-full h-full flex flex-col overflow-hidden bg-slate-950">
+    <div className="w-full h-full flex flex-col overflow-hidden">
       {/* ── TOP TOOLBAR ── */}
       <div className="h-10 px-3 shrink-0 flex items-center justify-between gap-2 border-b border-slate-800 bg-slate-900/90 select-none">
         <div className="flex items-center gap-2">
@@ -1457,7 +1617,7 @@ export default function SubtitleEditorPage({
       {/* ── BOTTOM STATUS STRIP ── */}
       {/* Translation progress banner */}
       {translationProgress && (
-        <div className="px-3 py-2 shrink-0 border-b border-violet-500/25 bg-violet-500/5 flex flex-wrap items-center gap-3">
+        <div className="px-3 py-2 shrink-0 border-b border-violet-500/25 flex flex-wrap items-center gap-3">
           <LoaderCircle className="h-3.5 w-3.5 shrink-0 animate-spin text-violet-300" />
           <span className="truncate text-[11px] font-semibold text-violet-100 min-w-0 flex-1">
             {translationProgress.message} · {translationProgress.currentVideo}
@@ -1684,11 +1844,23 @@ export default function SubtitleEditorPage({
       )}
 
       {/* ── MAIN BODY: LEFT panel (video list + cue list) | RIGHT panel (video + subtitle list) ── */}
-      <div className="flex-1 min-h-0 w-full flex flex-row overflow-hidden">
+      <Stack
+        sx={(theme) => {
+          return {
+            flex: 1,
+            width: "100%",
+            flexDirection: "row",
+            overflow: "hidden",
+            padding: 2,
+            gap: 2,
+          };
+        }}
+      >
         {/* LEFT SIDEBAR: video list only */}
-        <aside className="w-[280px] lg:w-[320px] shrink-0 h-full border-r border-slate-800 bg-slate-900/50 flex flex-col overflow-hidden">
+        <Paper className="w-[280px] lg:w-[320px] shrink-0 h-full border-r border-slate-800  flex flex-col overflow-hidden">
           {/* Header */}
-          <div className="flex items-center justify-between border-b border-slate-800 bg-slate-950/40 px-3 py-2 shrink-0">
+
+          <div className="flex items-center justify-between border-b border-slate-800 px-3 py-2 shrink-0">
             <span className="text-[10px] font-bold uppercase tracking-wider text-slate-300">
               Danh sách Video
             </span>
@@ -1697,7 +1869,7 @@ export default function SubtitleEditorPage({
             </span>
           </div>
 
-          <div
+          <Stack
             onDragEnter={(event) => {
               event.preventDefault();
               setDragging(true);
@@ -1715,7 +1887,8 @@ export default function SubtitleEditorPage({
                 setDragging(false);
             }}
             onDrop={handleDrop}
-            className="flex-1 min-h-0 overflow-y-auto scrollbar-thin"
+            // className="flex-1 min-h-0 overflow-y-auto scrollbar-thin"
+            sx={{ flex: 1, overflow: "hidden" }}
           >
             <button
               type="button"
@@ -1728,471 +1901,101 @@ export default function SubtitleEditorPage({
                 Tự ghép theo tên file
               </span>
             </button>
-            <div className="px-2 py-1 flex items-center justify-between border-b border-slate-800">
-              <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wide">
-                Hàng đợi
-              </span>
-              <span className="font-mono text-[9px] text-slate-500">
-                {readyVideoCount}/{items.filter((item) => item.video).length} có
-                SRT
-              </span>
-            </div>
-            <div className="divide-y divide-slate-800/70">
-              {items.length ? (
-                items.map((item) => (
-                  <div
-                    key={item.id}
-                    title={item.error || undefined}
-                    className={`flex items-center gap-1.5 px-2 ${selectedId === item.id ? "bg-violet-500/10" : "hover:bg-slate-900/60"}`}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSelectedId(item.id);
-                        setActiveCueIndex(-1);
-                      }}
-                      aria-pressed={selectedId === item.id}
-                      className="flex min-w-0 flex-1 items-center gap-1.5 text-left cursor-pointer"
-                    >
-                      <FileVideo2
-                        className={`h-3.5 w-3.5 shrink-0 ${selectedId === item.id ? "text-violet-300" : "text-slate-500"}`}
-                      />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-[10px] font-medium text-slate-200">
-                          {item.video?.name || item.subtitleFile?.name}
-                        </span>
-                        <span
-                          className={`mt-0.5 block text-[9px] font-mono ${statusColor(item.status)}`}
-                        >
-                          {item.status === "translating" ? (
-                            <>
-                              <LoaderCircle className="mr-1 inline h-2.5 w-2.5 animate-spin" />
-                              {statusLabel(item.status)}
-                            </>
-                          ) : item.status === "translated" ? (
-                            <>
-                              <CheckCircle2 className="mr-1 inline h-2.5 w-2.5" />
-                              {statusLabel(item.status)}
-                            </>
-                          ) : item.status === "error" ? (
-                            <>
-                              <AlertCircle className="mr-1 inline h-2.5 w-2.5" />
-                              {item.error}
-                            </>
-                          ) : (
-                            statusLabel(item.status)
-                          )}
-                          {item.cues.length ? ` · ${item.cues.length}` : ""}
-                        </span>
-                      </span>
-                    </button>
-                    <div className="flex flex-col items-end gap-1">
-                      <button
-                        type="button"
-                        onClick={() => removeItem(item.id)}
-                        disabled={translationInProgress}
-                        title="Xóa khỏi danh sách"
-                        aria-label={`Xóa ${item.video?.name || item.subtitleFile?.name}`}
-                        className="p-1 text-slate-500 hover:bg-slate-800 hover:text-rose-300 disabled:opacity-30 cursor-pointer"
-                      >
-                        <X className="h-3 w-3" />
-                      </button>
-                      <div className="flex flex-row items-center">
-                        <div className="flex flex-row items-center gap-1 px-2 py-1 text-[10px] font-semibold text-slate-300">
-                          <Download className="h-2 w-2" />
-                          <span className="truncate text-[10px] font-medium text-slate-200">
-                            SRT
-                          </span>
-                        </div>
+            <VideoList
+              readyVideoCount={readyVideoCount}
+              items={items}
+              selectedItem={selectedItem}
+              selectedId={selectedId}
+              setSelectedId={setSelectedId}
+              setActiveCueIndex={setActiveCueIndex}
+              statusColor={statusColor}
+              statusLabel={statusLabel}
+              removeItem={removeItem}
+              translationInProgress={translationInProgress}
+              downloadSrt={downloadSrt}
+              fileInputRef={fileInputRef}
+            />
+          </Stack>
 
-                        <div className="border border-slate-700/50 rounded-md flex flex-row items-center gap-1">
-                          <button
-                            type="button"
-                            onClick={() =>
-                              selectedItem && downloadSrt(selectedItem, false)
-                            }
-                            className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-semibold text-slate-300 hover:bg-slate-800 cursor-pointer"
-                          >
-                            Gốc
-                          </button>
-                          <button
-                            type="button"
-                            disabled={
-                              !item.cues.every((cue) =>
-                                cue.translatedText.trim(),
-                              )
-                            }
-                            onClick={() => downloadSrt(item, true)}
-                            className="inline-flex items-center gap-1  bg-emerald-500/10 px-2 py-1 text-[10px] font-semibold text-emerald-200 hover:bg-emerald-500/20 disabled:opacity-40 cursor-pointer"
-                          >
-                            Dịch
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                ))
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  className="flex w-full items-center justify-center gap-2 px-4 py-6 text-[10px] text-slate-500 hover:text-violet-200 cursor-pointer"
-                >
-                  <Upload className="h-3.5 w-3.5" />
-                  Thêm video và tệp SRT
-                </button>
-              )}
-            </div>
-          </div>
-
-          <div className="flex flex-col border-t border-slate-800 bg-slate-950/80 overflow-y-auto">
-            <div className="divide-y divide-slate-800">
-              {/* DATA */}
-              <div className="flex flex-1 w-full justify-end gap-2  p-3">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setItems([]);
-                    setSelectedId("");
-                    setBatchMessage("");
-                  }}
-                  disabled={translationInProgress || !items.length}
-                  className="inline-flex items-center gap-1 border border-rose-500/30  px-2 py-1 text-[10px] font-semibold text-sm text-rose-200 hover:bg-rose-500/10"
-                >
-                  <Trash2 className="h-4 w-4" />
-                  Xóa
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void openPromptDialog()}
-                  disabled={translationInProgress}
-                  className="inline-flex items-center gap-1 border border-violet-500/30 bg-violet-500/10 px-2 py-1 text-[10px] font-semibold text-violet-200 hover:bg-violet-500/20 disabled:opacity-40 cursor-pointer"
-                >
-                  <Subtitles className="h-4 w-4" />
-                  Prompt
-                </button>
-                <button
-                  type="button"
-                  onClick={onOpenSetup}
-                  className="inline-flex items-center gap-1 border border-violet-500/30 bg-violet-500/10 px-2 py-1 text-[10px] font-semibold text-violet-200 hover:bg-violet-500/20 disabled:opacity-40 cursor-pointer"
-                >
-                  <Settings className="h-4 w-4" />
-                  Cài đặt dịch
-                </button>
-              </div>
-              {/* Dich thuật */}
-              <div className="flex flex-col gap-1 p-3 items-end">
-                {/* Provider */}
-                <div className="flex flex-row gap-1 items-center w-full justify-between font-semibold">
-                  <label className="text-xs text-slate-400">Provider</label>
-
-                  <select
-                    value={translationProvider}
-                    onChange={(e) =>
-                      setTranslationProvider(
-                        e.target.value as TranslationProvider,
-                      )
-                    }
-                    disabled={
-                      translationInProgress ||
-                      geminiStatusLoading ||
-                      freeLlmStatusLoading
-                    }
-                    className="bg-slate-800 border border-slate-700 px-2 py-1 text-[10px] font-semibold text-slate-200 focus:border-violet-400 focus:outline-none disabled:opacity-40 cursor-pointer appearance-none"
-                  >
-                    <option value="local">🏠 Local (Qwen)</option>
-
-                    <option value="gemini" disabled={!geminiStatus?.configured}>
-                      ⚡ Gemini API
-                    </option>
-
-                    <option
-                      value="freellm"
-                      disabled={!freeLlmStatus?.configured}
-                    >
-                      🖥 FreeLLM
-                    </option>
-                  </select>
-                </div>
-
-                {translationProvider === "gemini" &&
-                  geminiStatus?.configured && (
-                    <span className="text-xs text-emerald-400">
-                      {geminiStatus.availableKeys}/{geminiStatus.totalKeys} keys
-                      khả dụng
-                    </span>
-                  )}
-
-                {translationProvider === "freellm" &&
-                  freeLlmStatus?.configured && (
-                    <span className="text-xs text-emerald-400">
-                      FreeLLM đã sẵn sàng
-                    </span>
-                  )}
-              </div>
-              {/* Languages */}
-              <div className=" flex flex-col gap-2 p-3 items-end">
-                <div className="flex flex-row items-center gap-1 justify-between w-full">
-                  <span className="text-xs text-slate-400 hidden sm:inline font-semibold">
-                    Ngôn ngữ
-                  </span>
-                  {/* Auto-detect button */}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const selected = items.find(
-                        (item) => item.id === selectedId,
-                      );
-                      if (selected?.cues?.length) {
-                        const allText = selected.cues
-                          .map((c) => c.text)
-                          .join(" ");
-                        const detected = detectLanguage(allText);
-                        setSourceLanguage(detected);
-                        saveTranslationConfig(detected, targetLanguage);
-                        setBatchMessage(`Đã phát hiện ngôn ngữ: ${detected}`);
-                      } else {
-                        setBatchMessage("Chưa có phụ đề để phát hiện ngôn ngữ");
-                      }
-                    }}
-                    disabled={
-                      translationInProgress ||
-                      !selectedItem?.cues?.length ||
-                      langConfigLoading
-                    }
-                    className="flex items-center gap-1 border border-cyan-500/30 bg-cyan-500/10 py-1 px-2 text-[10px] font-semibold text-cyan-200 hover:bg-cyan-500/20 disabled:opacity-40 cursor-pointer"
-                    title="Tự động phát hiện ngôn ngữ từ phụ đề hiện tại"
-                  >
-                    <RefreshCw className="h-3 w-3" />
-                    <span className="hidden sm:inline">Phát hiện</span>
-                    <Globe className="h-3 w-3 ml-1" />
-                  </button>
-                </div>
-
-                {/* Source Language */}
-                <div className="flex flex-row">
-                  <select
-                    value={sourceLanguage}
-                    onChange={(e) => {
-                      const lang = e.target.value;
-                      if (lang === "auto") {
-                        const selected = items.find(
-                          (item) => item.id === selectedId,
-                        );
-                        if (selected?.cues?.length) {
-                          const allText = selected.cues
-                            .map((c) => c.text)
-                            .join(" ");
-                          const detected = detectLanguage(allText);
-                          setSourceLanguage(detected);
-                          saveTranslationConfig(detected, targetLanguage);
-                        }
-                      } else {
-                        setSourceLanguage(lang);
-                        saveTranslationConfig(lang, targetLanguage);
-                      }
-                    }}
-                    disabled={translationInProgress || langConfigLoading}
-                    className="bg-slate-800 border border-slate-700 px-2 py-1 text-[10px] font-semibold text-slate-200 focus:border-cyan-400 focus:outline-none disabled:opacity-40 cursor-pointer appearance-none w-[100px]"
-                    title="Ngôn ngữ nguồn (chọn 'Tự động phát hiện' để AI tự nhận diện)"
-                  >
-                    {SUPPORTED_LANGUAGES.map((l) => (
-                      <option key={l.code} value={l.code}>
-                        {l.name}
-                      </option>
-                    ))}
-                  </select>
-
-                  <span className="text-cyan-400 mx-1 hidden sm:inline">→</span>
-
-                  {/* Target Language */}
-                  <select
-                    value={targetLanguage}
-                    onChange={(e) => {
-                      setTargetLanguage(e.target.value);
-                      saveTranslationConfig(sourceLanguage, e.target.value);
-                    }}
-                    disabled={translationInProgress || langConfigLoading}
-                    className="bg-slate-800 border border-slate-700 px-2 py-1 text-[10px] font-semibold text-slate-200 focus:border-emerald-400 focus:outline-none disabled:opacity-40 cursor-pointer appearance-none w-[100px]"
-                    title="Ngôn ngữ đích"
-                  >
-                    {SUPPORTED_LANGUAGES.filter((l) => l.code !== "auto").map(
-                      (l) => (
-                        <option key={l.code} value={l.code}>
-                          {l.name}
-                        </option>
-                      ),
-                    )}
-                  </select>
-                </div>
-              </div>
-
-              {/* ACTIONS */}
-              <div className="flex flex-row items-stretch w-full">
-                <button
-                  type="button"
-                  disabled={
-                    !selectedItem?.video ||
-                    !selectedItem.cues.length ||
-                    translationInProgress
-                  }
-                  onClick={() => void translateSelected()}
-                  className="flex-1 inline-flex items-center justify-center gap-1 border border-violet-500/30 bg-violet-500/10 px-2 py-1 text-[15px] font-semibold text-violet-200 hover:bg-violet-500/20 disabled:opacity-40 cursor-pointer"
-                >
-                  {translationMode === "single" ? (
-                    <LoaderCircle className="h-3 w-3 animate-spin" />
-                  ) : (
-                    <Languages className="h-3 w-3" />
-                  )}
-                  <span className="hidden lg:inline">
-                    {translationMode === "single" ? "Đang dịch…" : "Dịch"}
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  disabled={
-                    !items.some(
-                      (item) =>
-                        item.video &&
-                        item.cues.length &&
-                        item.status !== "translated",
-                    ) || translationInProgress
-                  }
-                  onClick={() => void translateAll()}
-                  className="flex-1 inline-flex items-center justify-center gap-1 border border-cyan-500/30 bg-cyan-500/10 px-2 py-1 text-[15px] font-semibold text-cyan-200 hover:bg-cyan-500/20 disabled:opacity-40 cursor-pointer"
-                >
-                  {translationMode === "all" ? (
-                    <LoaderCircle className="h-3 w-3 animate-spin" />
-                  ) : (
-                    <Languages className="h-3 w-3" />
-                  )}
-                  <span className="hidden lg:inline">
-                    {translationMode === "all"
-                      ? "Đang dịch tất cả…"
-                      : `Dịch tất cả (${items.filter((item) => item.video && item.cues.length && item.status !== "translated").length})`}
-                  </span>
-                </button>
-              </div>
-            </div>
-          </div>
-        </aside>
+          <SubtitleController
+            items={items}
+            setItems={setItems}
+            selectedId={selectedId}
+            setSelectedId={setSelectedId}
+            batchMessage={batchMessage}
+            setBatchMessage={setBatchMessage}
+            translationProvider={translationProvider}
+            setTranslationProvider={setTranslationProvider}
+            translationInProgress={translationInProgress}
+            geminiStatusLoading={geminiStatusLoading}
+            freeLlmStatusLoading={freeLlmStatusLoading}
+            geminiStatus={geminiStatus}
+            freeLlmStatus={freeLlmStatus}
+            langConfigLoading={langConfigLoading}
+            sourceLanguage={sourceLanguage}
+            setSourceLanguage={setSourceLanguage}
+            targetLanguage={targetLanguage}
+            setTargetLanguage={setTargetLanguage}
+            translationMode={translationMode}
+            selectedItem={selectedItem}
+            SUPPORTED_LANGUAGES={SUPPORTED_LANGUAGES}
+            openPromptDialog={openPromptDialog}
+            onOpenSetup={onOpenSetup}
+            saveTranslationConfig={saveTranslationConfig}
+            detectLanguage={detectLanguage}
+            translateSelected={translateSelected}
+            translateAll={translateAll}
+          />
+        </Paper>
 
         {/* RIGHT PANEL: video + subtitle preview side-by-side, timeline docked at bottom */}
-        <div className="flex-1 min-w-0 h-full flex flex-col overflow-hidden">
+        <Stack
+          sx={(theme) => {
+            return {
+              flex: 1,
+              height: "100%",
+              flexDirection: "column",
+              overflow: "hidden",
+              gap: 2,
+            };
+          }}
+        >
           {/* MAIN VIEW: video (left) + subtitle list (right) */}
-          <div className="flex-1 min-h-0 flex flex-row overflow-hidden">
+          <Stack
+            sx={{
+              flex: 1,
+              flexDirection: "row",
+              overflow: "hidden",
+              // padding: 2,
+              gap: 2,
+            }}
+          >
+            {/* <div className="flex-1 min-h-0 flex flex-row overflow-hidden"> */}
             {/* VIDEO PREVIEW */}
-            <div className="flex-1 min-w-0 h-full flex flex-col overflow-hidden border-r border-slate-800 bg-black">
-              {/* Video viewport */}
-              <div
-                ref={previewFrameRef}
-                className={`flex-1 min-h-0 relative flex items-center justify-center overflow-hidden ${previewFullscreen ? "fixed inset-0 z-[100] bg-black" : "bg-black"}`}
-              >
-                <div
-                  className="relative flex max-h-full max-w-full items-center justify-center bg-black"
-                  style={
-                    previewFullscreen && videoUrl
-                      ? {
-                          width: `min(100vw, ${videoAspectRatio * 100}vh)`,
-                          aspectRatio: String(videoAspectRatio),
-                        }
-                      : { width: "100%", height: "100%" }
-                  }
-                >
-                  {videoUrl ? (
-                    <video
-                      key={selectedId}
-                      ref={videoRef}
-                      src={videoUrl}
-                      onLoadedMetadata={(event) => {
-                        const { videoWidth, videoHeight } = event.currentTarget;
-                        setVideoDuration(event.currentTarget.duration || 0);
-                        setVideoCurrentTime(event.currentTarget.currentTime);
-                        setVideoPaused(event.currentTarget.paused);
-                        if (videoWidth > 0 && videoHeight > 0)
-                          setVideoAspectRatio(videoWidth / videoHeight);
-                      }}
-                      className="max-h-full max-w-full object-contain"
-                    />
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => fileInputRef.current?.click()}
-                      className="flex h-full w-full flex-col items-center justify-center gap-2 text-slate-600 hover:text-violet-300 cursor-pointer transition-colors"
-                    >
-                      <FileVideo2 className="h-10 w-10" />
-                      <span className="text-xs">
-                        Chọn video từ danh sách hoặc thêm video mới
-                      </span>
-                    </button>
-                  )}
-                  {videoUrl && displayedText && (
-                    <div className="pointer-events-none absolute inset-x-0 bottom-[12%] flex justify-center px-6">
-                      <span
-                        className={`max-w-[90%] whitespace-pre-line bg-black/70 px-3 py-1.5 text-center font-semibold text-white [text-shadow:0_1px_3px_#000] ${previewFullscreen ? "text-[clamp(1.5rem,3.5vw,3rem)] leading-tight" : "text-sm"}`}
-                      >
-                        {displayedText}
-                      </span>
-                    </div>
-                  )}
-                  {videoUrl && (
-                    <button
-                      type="button"
-                      onClick={() => void togglePreviewFullscreen()}
-                      aria-label={
-                        previewFullscreen
-                          ? "Thoát toàn màn hình"
-                          : "Xem video toàn màn hình"
-                      }
-                      className="absolute right-2 top-2 z-10 border border-white/20 bg-black/60 p-1.5 text-white opacity-60 transition-opacity hover:opacity-100 cursor-pointer"
-                    >
-                      {previewFullscreen ? (
-                        <Minimize2 className="h-3.5 w-3.5" />
-                      ) : (
-                        <Maximize2 className="h-3.5 w-3.5" />
-                      )}
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {/* Video info strip */}
-              {selectedItem && (
-                <div className="h-6 px-2 shrink-0 border-t border-slate-800 bg-slate-900/80 flex items-center gap-2 text-[9px] text-slate-500 overflow-hidden">
-                  <span className="truncate">
-                    {selectedItem.video?.name ||
-                      selectedItem.subtitleFile?.name ||
-                      "—"}
-                  </span>
-                  {activeCue && (
-                    <span className="shrink-0 font-mono text-cyan-400">
-                      {cueTime(activeCue.startTime)} –{" "}
-                      {cueTime(activeCue.endTime)}
-                    </span>
-                  )}
-
-                  <div className="flex flex-row items-center gap-1 ml-auto shrink-0">
-                    <span>Phụ đề</span>
-                    <button
-                      type="button"
-                      onClick={() => setShowTranslation(false)}
-                      title="Phụ đề dịch"
-                      className={`border px-1.5 py-0.5 text-[9px] font-semibold cursor-pointer ${!showTranslation ? "border-violet-500/30 text-violet-200" : "border-slate-700 text-slate-400"}`}
-                    >
-                      Gốc
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setShowTranslation(true)}
-                      title="Phụ đề gốc"
-                      className={`border px-1.5 py-0.5 text-[9px] font-semibold cursor-pointer ${!showTranslation ? "border-slate-700 text-slate-400" : "border-violet-500/30 text-violet-200"}`}
-                    >
-                      Dịch
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
+            <VideoPreview
+              activeCue={activeCue}
+              activeCueIndex={activeCueIndex}
+              selectedItem={selectedItem}
+              fileInputRef={fileInputRef}
+              previewFrameRef={previewFrameRef}
+              previewFullscreen={previewFullscreen}
+              videoUrl={videoUrl}
+              videoRef={videoRef}
+              videoAspectRatio={videoAspectRatio}
+              selectedId={selectedId}
+              setVideoDuration={setVideoDuration}
+              setVideoCurrentTime={setVideoCurrentTime}
+              setVideoPaused={setVideoPaused}
+              setVideoAspectRatio={setVideoAspectRatio}
+              setShowTranslation={setShowTranslation}
+              showTranslation={showTranslation}
+              displayedText={displayedText}
+              toggleVideoPlayback={() => void toggleVideoPlayback()}
+              videoPaused={videoPaused}
+              stopVideo={stopVideo}
+              videoCurrentTime={videoCurrentTime}
+              videoDuration={videoDuration}
+            />
 
             {/* UNIFIED SUBTITLE COLUMN: Combined preview & inline editor with side-by-side inputs */}
             {/* Subtitle cue list with side-by-side inputs on the same row */}
@@ -2204,90 +2007,42 @@ export default function SubtitleEditorPage({
               selectCue={selectCue}
               updateCue={updateCue}
               addSubtitleCue={addSubtitleCue}
+              mergeCueAbove={mergeCueAbove}
+              joinCueAbove={joinCueAbove}
+              deleteCue={deleteCue}
+              onRemoveNonLetterCues={removeNonLetterCues}
+              onQuickMergeSimilar={quickMergeSimilarCues}
               translationInProgress={translationInProgress}
               onRawClick={setRawDialogOpen}
             />
-          </div>
-
+            {/* </div> */}
+          </Stack>
           {/* ── FULL-WIDTH TIMELINE / TRANSPORT ── */}
-          <div className="shrink-0 border-t border-slate-800 bg-slate-950">
-            {/* Transport bar */}
-            <div className="h-9 px-3 flex items-center gap-2.5 border-b border-slate-800 bg-slate-900/80 select-none">
-              <div className="flex divide-x divide-slate-800">
-                <div className="pr-3 flex items-center gap-2.5">
-                  <button
-                    type="button"
-                    onClick={() => void toggleVideoPlayback()}
-                    disabled={!videoUrl}
-                    aria-label={videoPaused ? "Phát video" : "Tạm dừng video"}
-                    className="inline-flex h-6 w-6 shrink-0 items-center justify-center border border-cyan-500/30 bg-cyan-500/10 text-cyan-200 hover:bg-cyan-500/20 disabled:opacity-40 cursor-pointer"
-                  >
-                    {videoPaused ? (
-                      <Play className="h-3 w-3 ml-0.5" />
-                    ) : (
-                      <Pause className="h-3 w-3" />
-                    )}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={stopVideo}
-                    disabled={!videoUrl}
-                    aria-label="Dừng về đầu"
-                    className="inline-flex h-6 w-6 shrink-0 items-center justify-center border border-slate-700 bg-slate-900 text-slate-300 hover:border-slate-500 disabled:opacity-40 cursor-pointer"
-                  >
-                    <Square className="h-3 w-3 fill-current" />
-                  </button>
-                  <span className="font-mono text-[11px] text-slate-300 tabular-nums shrink-0">
-                    {cueTime(videoCurrentTime)}
-                  </span>
-                  <span className="text-slate-600 shrink-0">/</span>
-                  <span className="font-mono text-[11px] text-slate-500 tabular-nums shrink-0">
-                    {cueTime(videoDuration)}
-                  </span>
-                  {activeCue && (
-                    <>
-                      <div className="w-px h-3.5 bg-slate-700 shrink-0" />
-                      <span className="text-[9px] text-violet-300 font-mono shrink-0 hidden md:inline">
-                        câu #{activeCueIndex + 1} ·{" "}
-                        {cueTime(activeCue.startTime)}–
-                        {cueTime(activeCue.endTime)}
-                      </span>
-                    </>
-                  )}
-                </div>
-              </div>
-              <span className="ml-auto text-[9px] text-slate-600 hidden lg:inline shrink-0">
-                Ctrl+scroll: zoom · Shift+scroll: cuộn ngang
-              </span>
-              <button
-                type="button"
-                onClick={addSubtitleCue}
-                disabled={!selectedItem?.video}
-                title="Thêm câu phụ đề tại thời điểm hiện tại"
-                className="shrink-0 inline-flex items-center gap-1 border border-violet-500/30 bg-violet-500/10 px-2 py-0.5 text-[9px] font-semibold text-violet-200 hover:bg-violet-500/20 disabled:opacity-40 cursor-pointer"
-              >
-                <Plus className="h-2.5 w-2.5" />
-                Thêm câu
-              </button>
-            </div>
-            {/* Timeline */}
-            <SubtitleTimeline
-              file={selectedItem?.video || null}
-              duration={videoDuration}
-              currentTime={videoCurrentTime}
-              cues={selectedItem?.cues || []}
-              selectedCueIndex={activeCueIndex}
-              disabled={translationInProgress || !selectedItem?.video}
-              onCueChange={(index, patch) =>
-                selectedItem && updateCue(selectedItem.id, index, patch)
-              }
-              onCueSelect={selectCue}
-              onSeek={seekVideo}
-              onAddCue={addSubtitleCue}
-            />
-          </div>
-        </div>
-      </div>
+          <Stack>
+            <Paper sx={{ display: "flex", flexDirection: "column", flex: 1 }}>
+              {/* Timeline */}
+              <SubtitleTimeline
+                file={selectedItem?.video || null}
+                duration={videoDuration}
+                currentTime={videoCurrentTime}
+                isPlaying={!videoPaused}
+                videoRef={videoRef}
+                fps={timelineFps}
+                onFpsChange={setTimelineFps}
+                cues={selectedItem?.cues || []}
+                selectedCueIndex={activeCueIndex}
+                disabled={translationInProgress || !selectedItem?.video}
+                onCueChange={(index, patch) =>
+                  selectedItem && updateCue(selectedItem.id, index, patch)
+                }
+                onCueSelect={selectCue}
+                onSeek={seekVideo}
+                onAddCue={addSubtitleCue}
+              />
+            </Paper>
+          </Stack>
+        </Stack>
+      </Stack>
     </div>
   );
 }

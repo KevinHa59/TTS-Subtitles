@@ -1,30 +1,52 @@
 import {
+  Box,
+  ButtonGroup,
+  Chip,
   Paper,
   Typography,
   Stack,
-  FormControl,
-  InputLabel,
-  Select,
-  MenuItem,
   Slider,
   TextField,
   Button,
 } from "@mui/material";
+import { UserCheck } from "lucide-react";
 
+/**
+ * @param {{
+ *   disabled?: boolean,
+ *   voices?: Array<{ id: string, name?: string, gender?: string, tag?: string }>,
+ *   selectedVoice?: { id?: string, modelId?: string, speakerId?: number, name?: string, gender?: string, tag?: string },
+ *   speed: number,
+ *   text: string,
+ *   profileId: string,
+ *   audioUrl: string | null,
+ *   elapsed: number | null,
+ *   canSaveReference?: boolean,
+ *   onOpenVoiceModal?: () => void,
+ *   onSpeedChange?: (value: number) => void,
+ *   onTextChange?: (value: string) => void,
+ *   onGenerate?: () => void,
+ *   onGenerateOriginal?: () => void,
+ *   onSaveAsReference?: () => void,
+ * }} props
+ */
 export default function TTSVoice({
   disabled = false,
-  voices,
-  voiceId,
+  voices = [],
+  selectedVoice,
   speed,
   text,
   profileId,
   audioUrl,
   elapsed,
+  canSaveReference = false,
 
-  onVoiceChange,
+  onOpenVoiceModal,
   onSpeedChange,
   onTextChange,
   onGenerate,
+  onGenerateOriginal,
+  onSaveAsReference,
 }) {
   return (
     <Paper sx={{ display: "flex", flexDirection: "column", gap: 1, p: 2 }}>
@@ -35,24 +57,58 @@ export default function TTSVoice({
       <Stack
         direction={{ xs: "column", md: "row" }}
         spacing={3}
+        alignItems={{ xs: "stretch", md: "center" }}
         sx={{ mb: 2, gap: 2 }}
       >
-        <FormControl size="small" fullWidth disabled={disabled}>
-          <InputLabel>Giọng nguồn</InputLabel>
+        <Box
+          sx={(theme) => ({
+            flex: 1,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 2,
+            px: 1.5,
+            py: 1,
+            borderRadius: 1,
+            border: `1px solid ${theme.palette.divider}`,
+            background: theme.palette.background.default,
+          })}
+        >
+          <Stack direction="row" spacing={1.5} alignItems="center" sx={{ minWidth: 0 }}>
+            <Chip
+              size="small"
+              label={selectedVoice?.gender === "female" ? "Nữ" : "Nam"}
+              color={selectedVoice?.gender === "female" ? "secondary" : "info"}
+              variant="outlined"
+            />
+            <Box sx={{ minWidth: 0 }}>
+              <Typography variant="body2" fontWeight={600} noWrap>
+                {selectedVoice?.name || "Chưa chọn giọng đọc"}
+              </Typography>
+              {selectedVoice?.tag && (
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  sx={{ display: "block" }}
+                  noWrap
+                >
+                  {selectedVoice.tag}
+                </Typography>
+              )}
+            </Box>
+          </Stack>
 
-          <Select
-            label="Giọng nguồn"
-            value={voiceId}
-            sx={(theme) => ({ background: theme.palette.background.default })}
-            onChange={(e) => onVoiceChange?.(e.target.value)}
+          <Button
+            variant="outlined"
+            size="small"
+            disabled={disabled}
+            onClick={onOpenVoiceModal}
+            startIcon={<UserCheck size={15} />}
+            sx={{ shrink: 0, whiteSpace: "nowrap" }}
           >
-            {voices.map((v) => (
-              <MenuItem key={v.id} value={v.id}>
-                {v.name}
-              </MenuItem>
-            ))}
-          </Select>
-        </FormControl>
+            Đổi Giọng Đọc{voices.length > 0 ? ` (${voices.length})` : ""}
+          </Button>
+        </Box>
 
         <Stack spacing={1} sx={{ minWidth: 260 }}>
           <Typography variant="body2">Tốc độ: {speed.toFixed(2)}</Typography>
@@ -83,7 +139,14 @@ export default function TTSVoice({
         onChange={(e) => onTextChange?.(e.target.value)}
       />
 
-      <Stack direction="row" spacing={2} alignItems="center" sx={{ mb: 2 }}>
+      <Stack
+        direction="row"
+        spacing={2}
+        alignItems="center"
+        flexWrap="wrap"
+        useFlexGap
+        sx={{ mb: 2 }}
+      >
         <Button
           variant="contained"
           onClick={onGenerate}
@@ -91,6 +154,23 @@ export default function TTSVoice({
         >
           Generate
         </Button>
+
+        <ButtonGroup variant="outlined" disabled={disabled}>
+          <Button
+            onClick={onGenerateOriginal}
+            disabled={disabled || !text?.trim() || !selectedVoice?.modelId}
+          >
+            Generate Original
+          </Button>
+          <Button
+            color="success"
+            variant={canSaveReference ? "contained" : "outlined"}
+            onClick={onSaveAsReference}
+            disabled={disabled || !canSaveReference}
+          >
+            Save as Reference
+          </Button>
+        </ButtonGroup>
 
         {elapsed !== null && (
           <Typography variant="body2" color="success.main">

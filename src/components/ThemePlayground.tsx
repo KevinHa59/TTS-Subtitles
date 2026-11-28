@@ -66,8 +66,10 @@ import {
 import {
   ThemeProvider,
   createTheme,
+  type Theme,
   type ThemeOptions,
 } from "@mui/material/styles";
+import currentTheme from "../theme";
 
 /* -------------------------------------------------------------------------- */
 /*  Config                                                                    */
@@ -124,6 +126,47 @@ const DEFAULT_CONFIG: ThemeConfig = {
   flatSurfaces: true,
   disableButtonElevation: true,
 };
+
+function themeToConfig(t: Theme): ThemeConfig {
+  const mode: ThemeMode = t.palette?.mode === "light" ? "light" : "dark";
+  const rawFont = String(t.typography?.fontFamily ?? "");
+  const primaryFont = rawFont
+    .split(",")[0]
+    ?.trim()
+    .replace(/^['"]|['"]$/g, "");
+  const parsedSpacing = parseFloat(String(t.spacing?.(1) ?? ""));
+
+  return {
+    mode,
+    primary: t.palette?.primary?.main ?? DEFAULT_CONFIG.primary,
+    secondary: t.palette?.secondary?.main ?? DEFAULT_CONFIG.secondary,
+    error: t.palette?.error?.main ?? DEFAULT_CONFIG.error,
+    warning: t.palette?.warning?.main ?? DEFAULT_CONFIG.warning,
+    info: t.palette?.info?.main ?? DEFAULT_CONFIG.info,
+    success: t.palette?.success?.main ?? DEFAULT_CONFIG.success,
+    bgDefault: t.palette?.background?.default ?? DEFAULT_CONFIG.bgDefault,
+    bgPaper: t.palette?.background?.paper ?? DEFAULT_CONFIG.bgPaper,
+    fontFamily: primaryFont || DEFAULT_CONFIG.fontFamily,
+    fontSize: Number(t.typography?.fontSize) || DEFAULT_CONFIG.fontSize,
+    radius:
+      typeof t.shape?.borderRadius === "number"
+        ? t.shape.borderRadius
+        : DEFAULT_CONFIG.radius,
+    spacing: Number.isFinite(parsedSpacing)
+      ? parsedSpacing
+      : DEFAULT_CONFIG.spacing,
+    uppercaseButtons: t.typography?.button?.textTransform === "uppercase",
+    flatSurfaces: Boolean(
+      t.components?.MuiPaper?.defaultProps?.elevation === 0 ||
+        t.components?.MuiPaper?.styleOverrides?.root,
+    ),
+    disableButtonElevation: Boolean(
+      t.components?.MuiButton?.defaultProps?.disableElevation,
+    ),
+  };
+}
+
+const INITIAL_CONFIG: ThemeConfig = themeToConfig(currentTheme);
 
 const FONT_OPTIONS = [
   "IBM Plex Sans",
@@ -747,7 +790,7 @@ function ComponentShowcase() {
 /* -------------------------------------------------------------------------- */
 
 export default function ThemePlayground() {
-  const [config, setConfig] = useState<ThemeConfig>(DEFAULT_CONFIG);
+  const [config, setConfig] = useState<ThemeConfig>(INITIAL_CONFIG);
   const [codeOpen, setCodeOpen] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -819,6 +862,32 @@ export default function ThemePlayground() {
     setTimeout(() => setCopied(false), 1500);
   };
 
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  const saveThemeToFile = async () => {
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const res = await fetch("/api/theme", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: themeCode }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data?.error || `${res.status} ${res.statusText}`);
+      }
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <ThemeProvider theme={chromeTheme}>
       <CssBaseline />
@@ -840,10 +909,19 @@ export default function ThemePlayground() {
             MUI Theme Playground
           </Typography>
 
-          <Button onClick={() => setConfig(DEFAULT_CONFIG)}>Reset</Button>
+          <Button onClick={() => setConfig(INITIAL_CONFIG)}>Reset</Button>
 
-          <Button variant="contained" onClick={() => setCodeOpen(true)}>
+          <Button variant="outlined" onClick={() => setCodeOpen(true)}>
             View theme code
+          </Button>
+
+          <Button
+            variant="contained"
+            color={saved ? "success" : "primary"}
+            disabled={saving}
+            onClick={saveThemeToFile}
+          >
+            {saving ? "Saving..." : saved ? "Saved!" : "Save to theme.js"}
           </Button>
         </Stack>
 
@@ -1055,14 +1133,34 @@ export default function ThemePlayground() {
           <Button onClick={() => setCodeOpen(false)}>Close</Button>
 
           <Button
-            variant="contained"
+            variant="outlined"
             color={copied ? "success" : "primary"}
             onClick={copyTheme}
           >
             {copied ? "Copied!" : "Copy"}
           </Button>
+
+          <Button
+            variant="contained"
+            color={saved ? "success" : "primary"}
+            disabled={saving}
+            onClick={saveThemeToFile}
+          >
+            {saving ? "Saving..." : saved ? "Saved!" : "Save to theme.js"}
+          </Button>
         </DialogActions>
       </Dialog>
+
+      <Snackbar
+        open={Boolean(saveError)}
+        autoHideDuration={4000}
+        onClose={() => setSaveError(null)}
+        anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+      >
+        <Alert severity="error" onClose={() => setSaveError(null)}>
+          {saveError}
+        </Alert>
+      </Snackbar>
     </ThemeProvider>
   );
 }

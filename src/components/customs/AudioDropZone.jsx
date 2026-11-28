@@ -55,12 +55,15 @@ const FileNameTypography = styled(Typography)(({ theme }) => ({
 const AudioDropZone = ({
   onFileSelect,
   onFileClear,
+  onFileTooLarge,
+  externalFile,
   acceptMimeTypes = "audio/*",
   maxFileSize = 50 * 1024 * 1024, // 50MB
   label = "Kéo thả file audio vào đây hoặc click để chọn",
 }) => {
-  const [file, setFile] = useState(null);
+  const [internalFile, setInternalFile] = useState(null);
   const [error, setError] = useState(null);
+  const file = externalFile !== undefined ? externalFile : internalFile;
 
   const { getRootProps, getInputProps, isDragActive, isDragReject } =
     useDropzone({
@@ -68,21 +71,28 @@ const AudioDropZone = ({
         // Xử lý lỗi
         if (fileRejections.length > 0) {
           const rejection = fileRejections[0];
-          if (rejection.code === "file-too-large") {
-            setError("File quá lớn. Tối đa 50MB.");
-          } else if (rejection.code === "file-invalid-type") {
+          const code = rejection.errors?.[0]?.code ?? rejection.code;
+          if (code === "file-too-large") {
+            if (onFileTooLarge && rejection.file) {
+              setError(null);
+              onFileTooLarge(rejection.file);
+              return;
+            }
+            const maxMB = (maxFileSize / (1024 * 1024)).toFixed(0);
+            setError(`File quá lớn. Tối đa ${maxMB}MB.`);
+          } else if (code === "file-invalid-type") {
             setError("Định dạng file không hợp lệ. Vui lòng chọn file audio.");
           } else {
             setError("Không thể xử lý file.");
           }
-          setFile(null);
+          setInternalFile(null);
           return;
         }
 
         // Xử lý file hợp lệ
         const selectedFile = acceptedFiles[0];
         setError(null);
-        setFile(selectedFile);
+        setInternalFile(selectedFile);
 
         if (onFileSelect) {
           onFileSelect(selectedFile);
@@ -94,7 +104,7 @@ const AudioDropZone = ({
     });
 
   const handleClear = () => {
-    setFile(null);
+    setInternalFile(null);
     setError(null);
     if (onFileClear) {
       onFileClear();

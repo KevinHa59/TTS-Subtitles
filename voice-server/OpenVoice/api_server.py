@@ -37,6 +37,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from pydub import AudioSegment
 from starlette.background import BackgroundTask
 
 from app_vi import (  # noqa: E402  (import app_vi không mở giao diện Gradio)
@@ -45,12 +46,13 @@ from app_vi import (  # noqa: E402  (import app_vi không mở giao diện Gradi
     TMP_DIR,
     VOICES,
     edge_to_wav,
+    extract_se,
     get_src_se,
     get_tgt_se,
     run_on_devices,
 )
 
-API_VERSION = "v5-blend-preview"
+API_VERSION = "v6-custom-tts-convert"
 
 PROFILE_DIR = Path("profiles")
 PROFILE_DIR.mkdir(exist_ok=True)
@@ -320,6 +322,76 @@ def tts(req: TTSRequest):
         raise HTTPException(500, f"Lỗi tạo giọng: {e}")
 
     _clean(base_wav)
+    return FileResponse(
+        out_wav,
+        media_type="audio/wav",
+        filename="voice.wav",
+        background=BackgroundTask(_clean, out_wav),
+    )
+
+
+@api.post("/convert")
+async def convert_audio(
+    file: UploadFile = File(...),
+    profile_id: str | None = Form(default=None),
+    blend: str | None = Form(default=None),
+    keep_norm: bool = Form(default=False),
+):
+    """Chuyển âm sắc từ file audio nguồn (do hệ thống TTS ngoài tạo) sang profile_id hoặc blend."""
+    has_profile = bool(profile_id and profile_id.strip())
+    has_blend = bool(blend and blend.strip())
+    if has_profile == has_blend:
+        raise HTTPException(400, "Cần đúng một trong hai: profile_id hoặc blend.")
+
+    if has_blend:
+        try:
+            raw_items = json.loads(blend)
+            items = [BlendItem(**it) for it in raw_items]
+            if not (2 <= len(items) <= 5):
+                raise ValueError("blend phải có từ 2 đến 5 giọng.")
+        except Exception as e:
+            raise HTTPException(400, f"blend không hợp lệ: {e}")
+        tgt_se, _ = _blend_se(items, keep_norm)
+    else:
+        tgt_se = _load_profile_se(profile_id.strip())
+
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(400, "File audio nguồn trống.")
+    if len(raw) > MAX_UPLOAD:
+        raise HTTPException(413, "File quá lớn (tối đa 25 MB).")
+
+    uid = uuid.uuid4().hex[:8]
+    ext = Path(file.filename or "source.wav").suffix.lower()
+    if ext not in ALLOWED_EXT:
+        ext = ".wav"
+    upload_path = str(Path(TMP_DIR) / f"api_src_{uid}{ext}")
+    base_wav = str(Path(TMP_DIR) / f"api_base_{uid}.wav")
+    out_wav = str(Path(OUT_DIR) / f"api_result_{uid}.wav")
+
+    try:
+        Path(upload_path).write_bytes(raw)
+        AudioSegment.from_file(upload_path).set_channels(1).export(base_wav, format="wav")
+
+        def _extract_and_convert(c):
+            src_se = c.extract_se([base_wav]).detach().cpu()
+            c.convert(
+                audio_src_path=base_wav,
+                src_se=src_se.to(c.device),
+                tgt_se=tgt_se.to(c.device),
+                output_path=out_wav,
+            )
+
+        with LOCK:
+            run_on_devices(_extract_and_convert)
+    except gr.Error as e:
+        _clean(upload_path, base_wav, out_wav)
+        raise HTTPException(502, _msg(e))
+    except Exception as e:  # noqa: BLE001
+        _clean(upload_path, base_wav, out_wav)
+        raise HTTPException(500, f"Lỗi chuyển đổi giọng: {e}")
+
+    _clean(upload_path, base_wav)
     return FileResponse(
         out_wav,
         media_type="audio/wav",

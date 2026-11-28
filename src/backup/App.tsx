@@ -1734,7 +1734,7 @@ export default function App() {
   };
 
   return (
-    <div className="h-screen w-screen overflow-hidden bg-slate-950 text-slate-100 flex flex-col font-sans select-none selection:bg-amber-500/30 selection:text-amber-200">
+    <div className="h-screen w-screen overflow-hidden  text-slate-100 flex flex-col font-sans select-none selection:bg-amber-500/30 selection:text-amber-200">
       {/* Hidden Audio Elements */}
       <audio
         ref={masterAudioRef}

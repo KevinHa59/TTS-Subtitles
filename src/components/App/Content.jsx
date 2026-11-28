@@ -321,7 +321,11 @@ export default function Content({
       )}
       {activeTab === "voice-blend" && (
         <div className="flex-1 min-h-0 w-full overflow-hidden flex flex-col">
-          <VoiceBlend />
+          <VoiceBlend
+            selectedVoice={selectedVoice}
+            voices={voices}
+            onOpenVoiceModal={() => setShowVoiceModal(true)}
+          />
         </div>
       )}
       {activeTab === "join-split-video" && (
