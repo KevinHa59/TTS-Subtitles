@@ -207,6 +207,7 @@ function SubtitleList({
   const [maxCharacterCount, setMaxCharacterCount] = useState(5);
   const [specialCharactersOnly, setSpecialCharactersOnly] = useState(false);
   const [nonAlphabetOnly, setNonAlphabetOnly] = useState(false);
+  const [multiLineOnly, setMultiLineOnly] = useState(false);
   const [similarAdjacent, setSimilarAdjacent] = useState(false);
 
   const activeFilterCount =
@@ -214,6 +215,7 @@ function SubtitleList({
     Number(shortFilterEnabled) +
     Number(specialCharactersOnly) +
     Number(nonAlphabetOnly) +
+    Number(multiLineOnly) +
     Number(similarAdjacent);
 
   const hasActiveFilter = activeFilterCount > 0;
@@ -225,6 +227,7 @@ function SubtitleList({
     setMaxCharacterCount(5);
     setSpecialCharactersOnly(false);
     setNonAlphabetOnly(false);
+    setMultiLineOnly(false);
     setSimilarAdjacent(false);
   };
 
@@ -247,6 +250,7 @@ function SubtitleList({
         : {}),
       specialCharactersOnly,
       nonAlphabetOnly,
+      multiLineOnly,
       similarAdjacent,
       similarityThreshold: 0.8,
       searchText,
@@ -260,6 +264,7 @@ function SubtitleList({
     maxCharacterCount,
     specialCharactersOnly,
     nonAlphabetOnly,
+    multiLineOnly,
     similarAdjacent,
     searchText,
     searchCaseSensitive,
@@ -505,6 +510,17 @@ function SubtitleList({
                 />
               }
               label={<Typography variant="body2">Có ký tự ngoài Latin (CJK...)</Typography>}
+            />
+
+            <FormControlLabel
+              control={
+                <Checkbox
+                  size="small"
+                  checked={multiLineOnly}
+                  onChange={(e) => setMultiLineOnly(e.target.checked)}
+                />
+              }
+              label={<Typography variant="body2">Nhiều dòng (≥ 2 dòng)</Typography>}
             />
 
             <FormControlLabel

@@ -404,11 +404,36 @@ export default function SubtitleEditorPage({
   const [promptDefault, setPromptDefault] = useState("");
   const [customPrompt, setCustomPrompt] = useState<string | null>(null);
   const [promptDraft, setPromptDraft] = useState("");
+  const [savedPrompts, setSavedPrompts] = useState<
+    Array<{
+      id: string;
+      name: string;
+      description: string;
+      prompt: string;
+      updatedAt: number;
+    }>
+  >(() => {
+    try {
+      const raw = localStorage.getItem("subtitle_editor_saved_prompts_v1");
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  });
+  const [savedPromptName, setSavedPromptName] = useState("");
+  const [savedPromptDesc, setSavedPromptDesc] = useState("");
+  const [selectedSavedPromptId, setSelectedSavedPromptId] = useState<
+    string | null
+  >(null);
   const [batchMessage, setBatchMessage] = useState("");
 
   // Translation provider state
   const [translationProvider, setTranslationProvider] =
     useState<TranslationProvider>("local");
+  const [translationChunkSize, setTranslationChunkSize] = useState<number>(-1);
+  const [translateFromCue, setTranslateFromCue] = useState<string>("");
+  const [translateToCue, setTranslateToCue] = useState<string>("");
   const [geminiStatus, setGeminiStatus] = useState<
     GeminiStatusResponse["status"] | null
   >(null);
@@ -519,6 +544,42 @@ export default function SubtitleEditorPage({
     };
     fetchConfig();
   }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        "subtitle_editor_saved_prompts_v1",
+        JSON.stringify(savedPrompts),
+      );
+    } catch {
+      /* ignore */
+    }
+  }, [savedPrompts]);
+
+  const handleSavePromptPreset = () => {
+    const name = savedPromptName.trim();
+    const prompt = promptDraft.trim();
+    if (!name || !prompt) return;
+    const id = `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    const nextItem = {
+      id,
+      name,
+      description: savedPromptDesc.trim(),
+      prompt,
+      updatedAt: Date.now(),
+    };
+    setSavedPrompts((prev) => [nextItem, ...prev]);
+    setSelectedSavedPromptId(id);
+    setSavedPromptName("");
+    setSavedPromptDesc("");
+  };
+
+  const handleDeleteSavedPrompt = (id: string) => {
+    setSavedPrompts((prev) => prev.filter((item) => item.id !== id));
+    if (selectedSavedPromptId === id) {
+      setSelectedSavedPromptId(null);
+    }
+  };
 
   useEffect(() => {
     if (!selectedItem?.video) {
@@ -1069,9 +1130,7 @@ export default function SubtitleEditorPage({
     }));
   };
 
-  // Chunked translation helper - processes cues in batches of 50
-  const CHUNK_SIZE = 50;
-
+  // Chunked translation helper - uses translationChunkSize (-1 = all cues in 1 request)
   const translateChunks = async (
     item: VideoSubtitleItem,
     onProgress: (completed: number, message: string) => void,
@@ -1090,11 +1149,42 @@ export default function SubtitleEditorPage({
     const srcLang = sourceLanguage;
     const tgtLang = targetLanguage;
     const totalCues = item.cues.length;
+    const parsedFrom = translateFromCue.trim()
+      ? Math.floor(Number(translateFromCue))
+      : null;
+    const parsedTo = translateToCue.trim()
+      ? Math.floor(Number(translateToCue))
+      : null;
+    if (
+      parsedFrom !== null &&
+      parsedTo !== null &&
+      parsedFrom > parsedTo
+    ) {
+      throw new Error("Câu bắt đầu không được lớn hơn câu kết thúc.");
+    }
+    const rangeStartIdx =
+      parsedFrom !== null
+        ? Math.max(0, Math.min(totalCues - 1, parsedFrom - 1))
+        : 0;
+    const rangeEndIdx =
+      parsedTo !== null
+        ? Math.max(0, Math.min(totalCues - 1, parsedTo - 1))
+        : totalCues - 1;
+    if (rangeStartIdx > rangeEndIdx) {
+      throw new Error("Khoảng câu cần dịch không hợp lệ.");
+    }
+
+    const targetCues = item.cues.slice(rangeStartIdx, rangeEndIdx + 1);
+    const targetCount = targetCues.length;
+    const effectiveChunkSize =
+      translationChunkSize === -1
+        ? targetCount
+        : Math.max(1, translationChunkSize);
     const chunks: EditableSubtitleCue[][] = [];
 
-    // Split cues into chunks
-    for (let i = 0; i < totalCues; i += CHUNK_SIZE) {
-      chunks.push(item.cues.slice(i, i + CHUNK_SIZE));
+    // Split target cues into chunks
+    for (let i = 0; i < targetCount; i += effectiveChunkSize) {
+      chunks.push(targetCues.slice(i, i + effectiveChunkSize));
     }
 
     let completedCount = 0;
@@ -1102,19 +1192,19 @@ export default function SubtitleEditorPage({
 
     onProgress(
       0,
-      `Đang dịch ${totalCues} câu (${chunks.length} batch × ${CHUNK_SIZE} câu) với ${translationProvider === "gemini" ? "Gemini" : "FreeLLM"} (${sourceLanguage}→${targetLanguage})…`,
+      `Đang dịch ${targetCount} câu (từ #${rangeStartIdx + 1} đến #${rangeEndIdx + 1}, ${chunks.length} batch) với ${translationProvider === "gemini" ? "Gemini" : "FreeLLM"} (${sourceLanguage}→${targetLanguage})…`,
     );
 
     for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
       signal?.throwIfAborted();
 
       const chunk = chunks[chunkIndex];
-      const startIdx = chunkIndex * CHUNK_SIZE;
+      const startIdx = rangeStartIdx + chunkIndex * effectiveChunkSize;
       const chunkProgressBase = startIdx;
 
       onProgress(
         completedCount,
-        `Batch ${chunkIndex + 1}/${chunks.length} · đang dịch ${chunk.length} câu (${chunkProgressBase + 1}–${Math.min(startIdx + chunk.length, totalCues)})…`,
+        `Batch ${chunkIndex + 1}/${chunks.length} · đang dịch ${chunk.length} câu (#${chunkProgressBase + 1}–#${Math.min(startIdx + chunk.length, rangeEndIdx + 1)})…`,
       );
 
       let chunkTranslations: Array<{ id: string; translation: string }> = [];
@@ -1190,7 +1280,7 @@ export default function SubtitleEditorPage({
 
       onProgress(
         completedCount,
-        `Đã hoàn tất batch ${chunkIndex + 1}/${chunks.length} (${completedCount}/${totalCues} câu)`,
+        `Đã hoàn tất batch ${chunkIndex + 1}/${chunks.length} (${completedCount}/${targetCount} câu)`,
       );
 
       // Small delay between chunks to avoid rate limits
@@ -1207,8 +1297,8 @@ export default function SubtitleEditorPage({
     }));
 
     onProgress(
-      totalCues,
-      `Hoàn tất dịch ${totalCues} câu với ${translationProvider === "gemini" ? "Gemini" : "FreeLLM"}`,
+      targetCount,
+      `Hoàn tất dịch ${targetCount} câu với ${translationProvider === "gemini" ? "Gemini" : "FreeLLM"}`,
     );
     return allTranslations;
   };
@@ -1680,7 +1770,7 @@ export default function SubtitleEditorPage({
             role="dialog"
             aria-modal="true"
             aria-labelledby="subtitle-prompt-title"
-            className="flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden border border-slate-700 bg-slate-900 shadow-2xl"
+            className="flex max-h-[88vh] w-full max-w-5xl flex-col overflow-hidden border border-slate-700 bg-slate-900 shadow-2xl"
           >
             <header className="flex items-center justify-between gap-3 border-b border-slate-800 px-5 py-4">
               <div>
@@ -1704,35 +1794,144 @@ export default function SubtitleEditorPage({
                 <X className="h-4 w-4" />
               </button>
             </header>
-            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-5">
-              {promptError && (
-                <p
-                  role="alert"
-                  className="border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-200"
-                >
-                  {promptError}
-                </p>
-              )}
-              <textarea
-                value={promptDraft}
-                onChange={(event) => setPromptDraft(event.target.value)}
-                disabled={promptLoading}
-                maxLength={12_000}
-                rows={18}
-                placeholder={
-                  promptLoading
-                    ? "Đang tải prompt từ Setup…"
-                    : "Nhập prompt dịch…"
-                }
-                className="w-full resize-y border border-slate-700 bg-slate-950 p-3 font-mono text-xs leading-relaxed text-slate-100 outline-none placeholder:text-slate-600 focus:border-violet-400 disabled:opacity-50"
-              />
-              <div className="flex flex-wrap items-center justify-between gap-2 text-[10px] text-slate-500">
-                <span>
-                  Giữ yêu cầu trả JSON `translations` với `id` và `translation`
-                  để hệ thống ghép đúng câu.
-                </span>
-                <span>{promptDraft.length.toLocaleString()}/12.000</span>
+            <div className="min-h-0 flex-1 flex flex-col md:flex-row overflow-hidden">
+              {/* Cột trái: Input prompt + Form lưu prompt */}
+              <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-5">
+                {promptError && (
+                  <p
+                    role="alert"
+                    className="border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-200"
+                  >
+                    {promptError}
+                  </p>
+                )}
+                <textarea
+                  value={promptDraft}
+                  onChange={(event) => {
+                    setPromptDraft(event.target.value);
+                    setSelectedSavedPromptId(null);
+                  }}
+                  disabled={promptLoading}
+                  maxLength={12_000}
+                  rows={14}
+                  placeholder={
+                    promptLoading
+                      ? "Đang tải prompt từ Setup…"
+                      : "Nhập prompt dịch…"
+                  }
+                  className="w-full resize-y border border-slate-700 bg-slate-950 p-3 font-mono text-xs leading-relaxed text-slate-100 outline-none placeholder:text-slate-600 focus:border-violet-400 disabled:opacity-50"
+                />
+                <div className="flex flex-wrap items-center justify-between gap-2 text-[10px] text-slate-500">
+                  <span>
+                    Giữ yêu cầu trả JSON `translations` với `id` và `translation`
+                    để hệ thống ghép đúng câu.
+                  </span>
+                  <span>{promptDraft.length.toLocaleString()}/12.000</span>
+                </div>
+
+                {/* Form lưu prompt */}
+                <div className="border border-slate-800 bg-slate-950/60 p-3 space-y-2">
+                  <div className="text-[11px] font-semibold text-slate-300">
+                    Lưu prompt mới
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-[1fr_1.4fr_auto] gap-2 items-center">
+                    <input
+                      type="text"
+                      value={savedPromptName}
+                      onChange={(e) => setSavedPromptName(e.target.value)}
+                      placeholder="Tên prompt..."
+                      className="border border-slate-700 bg-slate-950 px-2.5 py-1.5 text-xs text-slate-100 placeholder:text-slate-600 outline-none focus:border-violet-400"
+                    />
+                    <input
+                      type="text"
+                      value={savedPromptDesc}
+                      onChange={(e) => setSavedPromptDesc(e.target.value)}
+                      placeholder="Mô tả ngắn (tuỳ chọn)..."
+                      className="border border-slate-700 bg-slate-950 px-2.5 py-1.5 text-xs text-slate-100 placeholder:text-slate-600 outline-none focus:border-violet-400"
+                    />
+                    <button
+                      type="button"
+                      disabled={
+                        promptLoading ||
+                        !promptDraft.trim() ||
+                        !savedPromptName.trim()
+                      }
+                      onClick={handleSavePromptPreset}
+                      className="bg-cyan-600 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-cyan-500 disabled:opacity-40 cursor-pointer whitespace-nowrap"
+                    >
+                      Lưu
+                    </button>
+                  </div>
+                </div>
               </div>
+
+              {/* Cột phải: Danh sách prompts đã lưu */}
+              <aside className="w-full md:w-72 shrink-0 border-t md:border-t-0 md:border-l border-slate-800 bg-slate-950/40 flex flex-col min-h-0">
+                <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
+                  <span className="text-xs font-semibold text-slate-200">
+                    Prompts đã lưu
+                  </span>
+                  <span className="text-[10px] font-mono text-cyan-300 border border-slate-700 px-1.5 py-0.5">
+                    {savedPrompts.length}
+                  </span>
+                </div>
+                <div className="flex-1 min-h-0 overflow-y-auto divide-y divide-slate-800/70">
+                  {savedPrompts.length === 0 ? (
+                    <div className="p-4 text-center text-[11px] text-slate-500">
+                      Chưa có prompt nào được lưu.
+                    </div>
+                  ) : (
+                    savedPrompts.map((item) => {
+                      const isSelected = selectedSavedPromptId === item.id;
+                      return (
+                        <div
+                          key={item.id}
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => {
+                            setPromptDraft(item.prompt);
+                            setSelectedSavedPromptId(item.id);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              setPromptDraft(item.prompt);
+                              setSelectedSavedPromptId(item.id);
+                            }
+                          }}
+                          className={`group flex items-start justify-between gap-2 px-3.5 py-2.5 cursor-pointer transition-colors ${
+                            isSelected
+                              ? "bg-violet-500/15 border-l-2 border-violet-400"
+                              : "hover:bg-slate-800/50"
+                          }`}
+                        >
+                          <div className="min-w-0 flex-1">
+                            <div className="text-xs font-semibold text-slate-100 truncate">
+                              {item.name}
+                            </div>
+                            {item.description && (
+                              <div className="mt-0.5 text-[10px] text-slate-400 line-clamp-2">
+                                {item.description}
+                              </div>
+                            )}
+                          </div>
+                          <button
+                            type="button"
+                            aria-label={`Xóa prompt ${item.name}`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDeleteSavedPrompt(item.id);
+                            }}
+                            className="opacity-60 hover:opacity-100 p-1 text-slate-400 hover:text-rose-400 cursor-pointer shrink-0"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </aside>
             </div>
             <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-800 px-5 py-3">
               <button
@@ -1936,6 +2135,12 @@ export default function SubtitleEditorPage({
             setSourceLanguage={setSourceLanguage}
             targetLanguage={targetLanguage}
             setTargetLanguage={setTargetLanguage}
+            chunkSize={translationChunkSize}
+            setChunkSize={setTranslationChunkSize}
+            fromCue={translateFromCue}
+            setFromCue={setTranslateFromCue}
+            toCue={translateToCue}
+            setToCue={setTranslateToCue}
             translationMode={translationMode}
             selectedItem={selectedItem}
             SUPPORTED_LANGUAGES={SUPPORTED_LANGUAGES}

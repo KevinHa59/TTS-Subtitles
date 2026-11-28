@@ -2,6 +2,7 @@ export interface SubtitleAudioFilterOptions {
   maxCharacterCount?: number;
   specialCharactersOnly?: boolean;
   nonAlphabetOnly?: boolean;
+  multiLineOnly?: boolean;
   similarAdjacent?: boolean;
   similarityThreshold?: number;
   searchText?: string;
@@ -64,6 +65,7 @@ export function filterSubtitleAudioItems<
     options.maxCharacterCount !== undefined ||
     options.specialCharactersOnly === true ||
     options.nonAlphabetOnly === true ||
+    options.multiLineOnly === true ||
     options.similarAdjacent === true;
 
   let filtered = [...items];
@@ -97,6 +99,13 @@ export function filterSubtitleAudioItems<
         return true;
       }
       if (options.nonAlphabetOnly && containsNonAlphabet(item.text)) {
+        return true;
+      }
+      if (
+        options.multiLineOnly &&
+        item.text.split(/\r?\n/).filter((line) => line.trim().length > 0)
+          .length >= 2
+      ) {
         return true;
       }
       return options.similarAdjacent === true && similarIds.has(item.id);

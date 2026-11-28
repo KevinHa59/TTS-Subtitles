@@ -1,4 +1,12 @@
-import { Button, Divider, Stack } from "@mui/material";
+import {
+  Button,
+  Divider,
+  IconButton,
+  InputAdornment,
+  Stack,
+  TextField,
+  Typography,
+} from "@mui/material";
 import {
   Check,
   Globe,
@@ -8,6 +16,7 @@ import {
   Settings,
   Subtitles,
   Trash2,
+  X,
 } from "lucide-react";
 import React from "react";
 import DropMenu from "../customs/DropMenu";
@@ -34,6 +43,12 @@ export default function SubtitleController(props) {
     setSourceLanguage,
     targetLanguage,
     setTargetLanguage,
+    chunkSize = -1,
+    setChunkSize,
+    fromCue = "",
+    setFromCue,
+    toCue = "",
+    setToCue,
     translationMode,
     selectedItem,
     SUPPORTED_LANGUAGES,
@@ -44,6 +59,16 @@ export default function SubtitleController(props) {
     translateSelected,
     translateAll,
   } = props;
+
+  const fromNum = fromCue.trim() ? Number(fromCue) : null;
+  const toNum = toCue.trim() ? Number(toCue) : null;
+  const isRangeInvalid =
+    fromNum !== null &&
+    toNum !== null &&
+    Number.isFinite(fromNum) &&
+    Number.isFinite(toNum) &&
+    fromNum > toNum;
+
   return (
     <Stack
       sx={{ flexDirection: "column", overflowY: "auto", padding: 1, gap: 1 }}
@@ -187,33 +212,6 @@ export default function SubtitleController(props) {
               }
             }}
           />
-          {/* <select
-            value={sourceLanguage}
-            onChange={(e) => {
-              const lang = e.target.value;
-              if (lang === "auto") {
-                const selected = items.find((item) => item.id === selectedId);
-                if (selected?.cues?.length) {
-                  const allText = selected.cues.map((c) => c.text).join(" ");
-                  const detected = detectLanguage(allText);
-                  setSourceLanguage(detected);
-                  saveTranslationConfig(detected, targetLanguage);
-                }
-              } else {
-                setSourceLanguage(lang);
-                saveTranslationConfig(lang, targetLanguage);
-              }
-            }}
-            disabled={translationInProgress || langConfigLoading}
-            className="bg-slate-800 border border-slate-700 px-2 py-1 text-[10px] font-semibold text-slate-200 focus:border-cyan-400 focus:outline-none disabled:opacity-40 cursor-pointer appearance-none w-[100px]"
-            title="Ngôn ngữ nguồn (chọn 'Tự động phát hiện' để AI tự nhận diện)"
-          >
-            {SUPPORTED_LANGUAGES.map((l) => (
-              <option key={l.code} value={l.code}>
-                {l.name}
-              </option>
-            ))}
-          </select> */}
 
           <span className="text-cyan-400 mx-1 hidden sm:inline">→</span>
 
@@ -236,25 +234,137 @@ export default function SubtitleController(props) {
               saveTranslationConfig(sourceLanguage, lang);
             }}
           />
-          {/* <select
-            value={targetLanguage}
-            onChange={(e) => {
-              setTargetLanguage(e.target.value);
-              saveTranslationConfig(sourceLanguage, e.target.value);
-            }}
-            disabled={translationInProgress || langConfigLoading}
-            className="bg-slate-800 border border-slate-700 px-2 py-1 text-[10px] font-semibold text-slate-200 focus:border-emerald-400 focus:outline-none disabled:opacity-40 cursor-pointer appearance-none w-[100px]"
-            title="Ngôn ngữ đích"
-          >
-            {SUPPORTED_LANGUAGES.filter((l) => l.code !== "auto").map((l) => (
-              <option key={l.code} value={l.code}>
-                {l.name}
-              </option>
-            ))}
-          </select> */}
         </Stack>
       </LabelComponent>
       <Divider />
+      <LabelComponent label={"Số câu / request"} sx={{ gap: 1 }}>
+        <DropMenu
+          color="secondary"
+          value={chunkSize}
+          onSelect={(val) => setChunkSize?.(Number(val))}
+          data={[
+            { icon: null, text: "All", value: -1, default: true },
+            { icon: null, text: "50", value: 50 },
+            { icon: null, text: "100", value: 100 },
+            { icon: null, text: "200", value: 200 },
+            { icon: null, text: "400", value: 400 },
+            { icon: null, text: "800", value: 800 },
+          ]}
+        />
+      </LabelComponent>
+      <LabelComponent label={"Dịch Câu"}>
+        <TextField
+          size="small"
+          type="number"
+          placeholder="Đầu"
+          value={fromCue}
+          error={isRangeInvalid}
+          disabled={translationInProgress}
+          onChange={(e) => setFromCue?.(e.target.value)}
+          slotProps={{
+            htmlInput: { min: 1 },
+            input: {
+              endAdornment: (
+                <InputAdornment
+                  position="end"
+                  sx={{
+                    marginLeft: 0,
+                    marginRight: 0,
+                  }}
+                >
+                  <IconButton
+                    size="small"
+                    disabled={!fromCue || translationInProgress}
+                    onClick={() => setFromCue?.("")}
+                    aria-label="Xóa câu bắt đầu"
+                    sx={{
+                      p: 0,
+                      minWidth: 0,
+                    }}
+                  >
+                    <X className="size-4" />
+                  </IconButton>
+                </InputAdornment>
+              ),
+            },
+          }}
+          sx={{
+            width: "100px",
+            "& .MuiOutlinedInput-input": {
+              padding: "6px 8px",
+              fontSize: "14px",
+              textAlign: "center",
+            },
+            "& input[type=number]": {
+              MozAppearance: "textfield",
+            },
+            "& input[type=number]::-webkit-outer-spin-button": {
+              WebkitAppearance: "none",
+              margin: 0,
+            },
+            "& input[type=number]::-webkit-inner-spin-button": {
+              WebkitAppearance: "none",
+              margin: 0,
+            },
+          }}
+        />
+        <span className="text-cyan-400 mx-1 hidden sm:inline">→</span>
+        <TextField
+          size="small"
+          type="number"
+          placeholder="Cuối"
+          value={toCue}
+          error={isRangeInvalid}
+          disabled={translationInProgress}
+          onChange={(e) => setToCue?.(e.target.value)}
+          slotProps={{
+            htmlInput: { min: 1 },
+            input: {
+              endAdornment: (
+                <InputAdornment
+                  position="end"
+                  sx={{
+                    marginLeft: 0,
+                    marginRight: 0,
+                  }}
+                >
+                  <IconButton
+                    size="small"
+                    disabled={!toCue || translationInProgress}
+                    onClick={() => setToCue?.("")}
+                    aria-label="Xóa câu kết thúc"
+                    sx={{
+                      p: 0,
+                      minWidth: 0,
+                    }}
+                  >
+                    <X className="size-4" />
+                  </IconButton>
+                </InputAdornment>
+              ),
+            },
+          }}
+          sx={{
+            width: "100px",
+            "& .MuiOutlinedInput-input": {
+              padding: "6px 8px",
+              fontSize: "14px",
+              textAlign: "center",
+            },
+            "& input[type=number]": {
+              MozAppearance: "textfield",
+            },
+            "& input[type=number]::-webkit-outer-spin-button": {
+              WebkitAppearance: "none",
+              margin: 0,
+            },
+            "& input[type=number]::-webkit-inner-spin-button": {
+              WebkitAppearance: "none",
+              margin: 0,
+            },
+          }}
+        />
+      </LabelComponent>
       {/* ACTIONS */}
       <Stack direction="row" sx={{ gap: 1 }}>
         <Button
@@ -263,7 +373,8 @@ export default function SubtitleController(props) {
           disabled={
             !selectedItem?.video ||
             !selectedItem.cues.length ||
-            translationInProgress
+            translationInProgress ||
+            isRangeInvalid
           }
           onClick={() => void translateSelected()}
           sx={{ flex: 1 }}

@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useEffect } from "react";
 import Button from "@mui/material/Button";
 import Menu from "@mui/material/Menu";
 import MenuItem from "@mui/material/MenuItem";
@@ -18,6 +19,13 @@ export default function DropMenu({ color = "primary", data, value, onSelect }) {
     setAnchorEl(null);
   };
 
+  useEffect(() => {
+    if (value == null && data?.length) {
+      const selected = data.find((item) => item.default) ?? data[0];
+
+      onSelect && onSelect(selected.value);
+    }
+  }, [data]);
   return (
     <div>
       <Button
@@ -32,7 +40,9 @@ export default function DropMenu({ color = "primary", data, value, onSelect }) {
         startIcon={data?.find((item) => item.value === value)?.icon}
         endIcon={<ChevronDown />}
       >
-        {data?.find((item) => item.value === value)?.text}
+        {value
+          ? data?.find((item) => item.value === value)?.text
+          : data?.find((item) => item.default === true)?.text}
       </Button>
       <Menu
         id={menuId}
