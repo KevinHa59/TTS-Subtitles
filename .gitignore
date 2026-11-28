@@ -27,10 +27,10 @@ join_audio_storage/
 join_split_video_storage/
 video_dubbing_storage/
 piper_workspace/
-voice-server/checkpoints_v2/
-voice-server/profiles/
-voice-server/outputs/
-voice-server/tmp/
+voice-server/OpenVoice/checkpoints_v2/
+voice-server/OpenVoice/profiles/
+voice-server/OpenVoice/outputs/
+voice-server/OpenVoice/tmp/
 
 # Model checkpoints & heavy binaries
 models/
